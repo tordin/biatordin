@@ -1,0 +1,1314 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bia Log Viewer — Visualização de Agentes e Decisões</title>
+    <style>
+        /* ============================================================
+           CSS VARIÁVEIS — Tema Dark Melhorado
+           ============================================================ */
+        :root {
+            --bg: #0a0e14;
+            --bg-surface: #11161e;
+            --bg-panel: #181e28;
+            --bg-hover: #1f2937;
+            --border: #1f2937;
+            --border-active: #374151;
+            --text: #e2e8f0;
+            --text-muted: #94a3b8;
+            --text-dim: #64748b;
+
+            /* Cores por agente */
+            --color-supervisor: #a78bfa;
+            --color-chitchat: #38bdf8;
+            --color-memoryAgent: #34d399;
+            --color-searchAgent: #fb923c;
+            --color-calendarAgent: #fbbf24;
+            --color-gmailAgent: #f87171;
+            --color-sheetsAgent: #22d3ee;
+            --color-docsAgent: #818cf8;
+            --color-routineAgent: #f472b6;
+            --color-securityAgent: #e879f9;
+            --color-shoppingAgent: #2dd4bf;
+            --color-whatsappAgent: #a3e635;
+            --color-topic_broker: #94a3b8;
+
+            /* Cores por tipo de evento */
+            --color-info: #64748b;
+            --color-debug: #8b5cf6;
+            --color-error: #ef4444;
+            --color-warn: #f59e0b;
+            --color-llm: #10b981;
+            --color-tool: #ec4899;
+            --color-agent: #06b6d4;
+
+            /* Outros */
+            --color-loop: #ef4444;
+            --color-finish: #6ee7b7;
+            --color-decision: #fbbf24;
+            --radius: 8px;
+            --transition: 0.15s ease;
+        }
+
+        /* ============================================================
+           RESET E BASE
+           ============================================================ */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; overflow: hidden; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ============================================================
+           BARRA SUPERIOR — Stats
+           ============================================================ */
+        #stats-bar {
+            display: flex; gap: 16px; flex-wrap: wrap;
+            padding: 10px 20px;
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+            font-size: 0.82rem;
+        }
+        .stat {
+            padding: 6px 14px; border-radius: 6px;
+            background: var(--bg-panel); border: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        .stat-label { color: var(--text-dim); margin-right: 4px; }
+        .stat-value { font-weight: 600; color: var(--text); }
+
+        /* ============================================================
+           LAYOUT PRINCIPAL — Sidebar + Conteúdo
+           ============================================================ */
+        #main-layout {
+            display: flex; flex: 1; overflow: hidden;
+        }
+
+        /* ============================================================
+           SIDEBAR ESQUERDA — Filtros
+           ============================================================ */
+        #sidebar {
+            width: 280px; flex-shrink: 0;
+            background: var(--bg-surface);
+            border-right: 1px solid var(--border);
+            display: flex; flex-direction: column;
+            overflow-y: auto;
+            padding: 16px;
+            gap: 16px;
+            font-size: 0.82rem;
+        }
+        #sidebar h3 {
+            font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em;
+            color: var(--text-dim); margin-bottom: 4px;
+        }
+        .filter-group { display: flex; flex-direction: column; gap: 6px; }
+        .filter-row {
+            display: flex; align-items: center; gap: 8px;
+            padding: 4px 0; cursor: pointer; user-select: none;
+        }
+        .filter-row input[type="checkbox"] { accent-color: var(--color-supervisor); }
+        .filter-agent-dot {
+            width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+        }
+        #search-input {
+            width: 100%; padding: 8px 12px; border-radius: 6px;
+            border: 1px solid var(--border); background: var(--bg-panel);
+            color: var(--text); font-size: 0.82rem; outline: none;
+        }
+        #search-input:focus { border-color: var(--color-supervisor); }
+        #search-input::placeholder { color: var(--text-dim); }
+        .toggle-row {
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .toggle-row label { cursor: pointer; }
+        .toggle-switch {
+            position: relative; width: 40px; height: 22px;
+            background: var(--border); border-radius: 11px; cursor: pointer;
+            transition: background var(--transition);
+        }
+        .toggle-switch.on { background: var(--color-supervisor); }
+        .toggle-switch::after {
+            content: ''; position: absolute; top: 3px; left: 3px;
+            width: 16px; height: 16px; border-radius: 50%; background: var(--text);
+            transition: transform var(--transition);
+        }
+        .toggle-switch.on::after { transform: translateX(18px); }
+        .sidebar-divider {
+            border: none; border-top: 1px solid var(--border); margin: 4px 0;
+        }
+        .metric-card {
+            background: var(--bg-panel); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 10px; font-size: 0.78rem;
+        }
+        .metric-card .metric-title { color: var(--text-dim); margin-bottom: 4px; }
+        .metric-card .metric-val { font-size: 1.1rem; font-weight: 600; }
+
+        /* ============================================================
+           ÁREA PRINCIPAL — Árvore de Decisão (Timeline Tree)
+           ============================================================ */
+        #main-content {
+            flex: 1; overflow-y: auto; padding: 20px;
+        }
+        .tree-node {
+            margin-left: 20px; border-left: 2px solid var(--border);
+            padding-left: 16px; position: relative;
+        }
+        .tree-node.root { margin-left: 0; border-left: none; padding-left: 0; }
+
+        /* Item de evento na árvore */
+        .event-card {
+            margin-bottom: 6px; position: relative;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            background: var(--bg-surface);
+            transition: border-color var(--transition);
+            cursor: pointer;
+        }
+        .event-card:hover { border-color: var(--border-active); }
+        .event-card.selected { border-color: var(--color-supervisor); box-shadow: 0 0 0 1px var(--color-supervisor); }
+        .event-card.loop { border-left: 3px solid var(--color-loop); }
+
+        /* Linha horizontal antes do card */
+        .tree-node > .event-card::before {
+            content: ''; position: absolute; top: 14px; left: -18px;
+            width: 16px; height: 2px; background: var(--border);
+        }
+        .tree-node.root > .event-card::before { display: none; }
+
+        /* Cabeçalho do card */
+        .event-card-header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 8px 12px; flex-wrap: wrap;
+        }
+        .event-type-badge {
+            padding: 2px 8px; border-radius: 12px; font-size: 0.7rem;
+            font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+            flex-shrink: 0;
+        }
+        .event-agent {
+            font-size: 0.8rem; font-weight: 600;
+        }
+        .event-time {
+            font-size: 0.75rem; color: var(--text-dim); margin-left: auto;
+            font-variant-numeric: tabular-nums;
+        }
+        .event-reason {
+            font-size: 0.8rem; color: var(--text-muted);
+            margin-left: 8px; font-style: italic;
+        }
+        .loop-badge {
+            padding: 2px 8px; border-radius: 12px; font-size: 0.7rem;
+            font-weight: 700; background: rgba(239,68,68,0.2); color: var(--color-loop);
+        }
+
+        /* Corpo expansível para LLM_START / LLM_END */
+        .event-card-body {
+            display: none; padding: 0 12px 12px 12px;
+        }
+        .event-card.expanded > .event-card-body { display: block; }
+
+        /* Side-by-side LLM */
+        .llm-side-by-side {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+        }
+        @media (max-width: 800px) {
+            .llm-side-by-side { grid-template-columns: 1fr; }
+        }
+        .llm-panel {
+            background: var(--bg); border: 1px solid var(--border);
+            border-radius: 6px; overflow: hidden;
+        }
+        .llm-panel-title {
+            padding: 6px 10px; font-size: 0.72rem; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.05em;
+            background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--border);
+        }
+        .llm-panel-content {
+            padding: 10px; font-size: 0.78rem; font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            max-height: 400px; overflow-y: auto;
+            white-space: pre-wrap; word-break: break-word;
+            color: var(--text-muted); line-height: 1.5;
+        }
+        .llm-msg-role {
+            font-size: 0.7rem; font-weight: 700; color: var(--color-supervisor);
+            margin-top: 8px; margin-bottom: 2px;
+        }
+        .llm-msg-role:first-child { margin-top: 0; }
+        .llm-msg-content {
+            color: var(--text); font-size: 0.76rem; max-height: 150px; overflow-y: auto;
+            white-space: pre-wrap; word-break: break-word;
+        }
+        .llm-msg-truncated {
+            color: var(--color-warn); font-size: 0.7rem; font-style: italic; margin-top: 4px;
+        }
+
+        /* AGENT_DECISION destacado */
+        .event-card.decision { border-color: rgba(251,191,36,0.4); background: rgba(251,191,36,0.04); }
+        .decision-detail { padding: 8px 0; font-size: 0.82rem; }
+        .decision-label { color: var(--text-dim); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        .decision-nextAgent { font-weight: 700; color: var(--color-finish); }
+        .decision-response { color: var(--text-muted); margin-top: 4px; font-style: italic; }
+
+        /* ============================================================
+           PAINEL INFERIOR — Detalhes do evento
+           ============================================================ */
+        #detail-panel {
+            height: 280px; flex-shrink: 0;
+            background: var(--bg-surface);
+            border-top: 1px solid var(--border);
+            display: flex; flex-direction: column;
+        }
+        #detail-panel.hidden { height: 0; border-top: none; overflow: hidden; }
+        #detail-tabs {
+            display: flex; gap: 0; border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .detail-tab {
+            padding: 10px 20px; font-size: 0.78rem; font-weight: 600;
+            cursor: pointer; border-bottom: 2px solid transparent;
+            color: var(--text-dim); transition: all var(--transition);
+            user-select: none;
+        }
+        .detail-tab:hover { color: var(--text); }
+        .detail-tab.active { color: var(--color-supervisor); border-bottom-color: var(--color-supervisor); }
+        #detail-content {
+            flex: 1; overflow-y: auto; padding: 16px;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.78rem; white-space: pre-wrap; word-break: break-word;
+            color: var(--text-muted);
+        }
+
+        /* ============================================================
+           DROPZONE (tela inicial)
+           ============================================================ */
+        #dropzone-overlay {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--bg); z-index: 10;
+        }
+        #dropzone-overlay.hidden { display: none; }
+        .dropzone-box {
+            border: 2px dashed var(--border);
+            border-radius: 16px; padding: 60px 80px;
+            text-align: center; cursor: pointer;
+            transition: all 0.2s ease;
+            background: rgba(17,22,30,0.6);
+        }
+        .dropzone-box:hover { border-color: var(--color-supervisor); background: rgba(167,139,250,0.03); }
+        .dropzone-box h2 { font-size: 1.3rem; font-weight: 600; margin-bottom: 8px; }
+        .dropzone-box p { color: var(--text-dim); font-size: 0.9rem; }
+        #dropzone-file-input { display: none; }
+
+        /* ============================================================
+           EMPTY STATE
+           ============================================================ */
+        .empty-state {
+            text-align: center; padding: 60px 20px; color: var(--text-dim);
+        }
+        .empty-state h3 { font-size: 1.1rem; margin-bottom: 8px; color: var(--text-muted); }
+
+        /* ============================================================
+           SCROLLBARS
+           ============================================================ */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--border-active); }
+    </style>
+</head>
+<body>
+
+    <!-- Tela inicial: Dropzone -->
+    <div id="dropzone-overlay">
+        <div class="dropzone-box" id="dropzone-box">
+            <h2>📊 Bia Log Viewer</h2>
+            <p>Clique ou arraste o arquivo <strong>bia_detailed.jsonl</strong> para analisar</p>
+            <input type="file" id="dropzone-file-input" accept=".jsonl,.log">
+        </div>
+    </div>
+
+    <!-- Barra de Stats (escondida até carregar) -->
+    <div id="stats-bar" style="display:none;">
+        <div class="stat"><span class="stat-label">Eventos:</span><span class="stat-value" id="stat-events">0</span></div>
+        <div class="stat"><span class="stat-label">Agentes:</span><span class="stat-value" id="stat-agents">0</span></div>
+        <div class="stat"><span class="stat-label">LLM Calls:</span><span class="stat-value" id="stat-llm">0</span></div>
+        <div class="stat"><span class="stat-label">Tok. Entrada Est.:</span><span class="stat-value" id="stat-tok-in">0</span></div>
+        <div class="stat"><span class="stat-label">Tok. Saída Est.:</span><span class="stat-value" id="stat-tok-out">0</span></div>
+        <div class="stat"><span class="stat-label">Custo Est.:</span><span class="stat-value" id="stat-cost">$0.00</span></div>
+        <div class="stat"><span class="stat-label">Loops:</span><span class="stat-value" id="stat-loops">0</span></div>
+    </div>
+
+    <!-- Layout Principal -->
+    <div id="main-layout" style="display:none;">
+
+        <!-- Sidebar de Filtros -->
+        <div id="sidebar">
+            <h3>🔍 Busca</h3>
+            <input type="text" id="search-input" placeholder="Buscar no conteúdo...">
+
+            <hr class="sidebar-divider">
+
+            <h3>🤖 Agentes</h3>
+            <div class="filter-group" id="agent-filters"></div>
+
+            <hr class="sidebar-divider">
+
+            <h3>⚙️ Modo de Exibição</h3>
+            <div class="toggle-row">
+                <label for="toggle-decisions">🎯 Apenas Decisões</label>
+                <div class="toggle-switch" id="toggle-decisions" onclick="toggleDecisionsOnly()"></div>
+            </div>
+            <div class="toggle-row" style="margin-top:6px;">
+                <label for="toggle-expand">📖 Expandir LLM Input/Output</label>
+                <div class="toggle-switch" id="toggle-expand" onclick="toggleExpandAll()"></div>
+            </div>
+
+            <hr class="sidebar-divider">
+
+            <h3>📈 Métricas</h3>
+            <div class="metric-card">
+                <div class="metric-title">LLM Calls por Agente</div>
+                <div class="metric-val" id="metric-llm-per-agent" style="font-size:0.78rem;"></div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Agentes Mais Chamados</div>
+                <div class="metric-val" id="metric-top-agents" style="font-size:0.78rem;"></div>
+            </div>
+        </div>
+
+        <!-- Área Principal — Árvore -->
+        <div id="main-content">
+            <div class="empty-state" id="empty-state">
+                <h3>Carregue um arquivo JSONL para começar</h3>
+                <p>Use o dropzone no centro da tela</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Painel de Detalhes (inferior) -->
+    <div id="detail-panel" class="hidden">
+        <div id="detail-tabs">
+            <div class="detail-tab active" data-tab="json" onclick="switchDetailTab('json')">📋 JSON</div>
+            <div class="detail-tab" data-tab="tree" onclick="switchDetailTab('tree')">🌳 Tree View</div>
+            <div class="detail-tab" data-tab="cost" onclick="switchDetailTab('cost')">💰 Custo</div>
+        </div>
+        <div id="detail-content"></div>
+    </div>
+
+    <script>
+        /* ============================================================
+           DADOS GLOBAIS
+           ============================================================ */
+        /** @type {Array<Object>} todos os eventos carregados do JSONL */
+        let allLogs = [];
+
+        /** Evento atualmente selecionado (para painel de detalhes) */
+        let selectedEvent = null;
+
+        /** Modo "apenas decisões" ativo? */
+        let decisionsOnly = false;
+
+        /** Expandir todos os LLM cards? */
+        let expandAll = false;
+
+        /** Filtro de agentes: Set com nomes de agentes visíveis */
+        let visibleAgents = new Set();
+
+        /** Texto de busca atual */
+        let searchText = '';
+
+        /** Preços DeepSeek V4 (por 1M tokens) */
+        const PRICE_INPUT_PER_1M = 0.15;
+        const PRICE_OUTPUT_PER_1M = 0.60;
+
+        /* ============================================================
+           MAPA DE CORES POR AGENTE
+           ============================================================ */
+        const agentColors = {
+            supervisor: 'var(--color-supervisor)',
+            chitchat: 'var(--color-chitchat)',
+            memoryAgent: 'var(--color-memoryAgent)',
+            searchAgent: 'var(--color-searchAgent)',
+            calendarAgent: 'var(--color-calendarAgent)',
+            gmailAgent: 'var(--color-gmailAgent)',
+            sheetsAgent: 'var(--color-sheetsAgent)',
+            docsAgent: 'var(--color-docsAgent)',
+            routineAgent: 'var(--color-routineAgent)',
+            securityAgent: 'var(--color-securityAgent)',
+            shoppingAgent: 'var(--color-shoppingAgent)',
+            whatsappAgent: 'var(--color-whatsappAgent)',
+            topic_broker: 'var(--color-topic_broker)',
+        };
+
+        /* Cores hex sem CSS vars para uso inline */
+        const agentColorsHex = {
+            supervisor: '#a78bfa', chitchat: '#38bdf8', memoryAgent: '#34d399',
+            searchAgent: '#fb923c', calendarAgent: '#fbbf24', gmailAgent: '#f87171',
+            sheetsAgent: '#22d3ee', docsAgent: '#818cf8', routineAgent: '#f472b6',
+            securityAgent: '#e879f9', shoppingAgent: '#2dd4bf', whatsappAgent: '#a3e635',
+            topic_broker: '#94a3b8',
+        };
+
+        /* ============================================================
+           INICIALIZAÇÃO — Configurar dropzone
+           ============================================================ */
+        const dropzoneBox = document.getElementById('dropzone-box');
+        const dropzoneFileInput = document.getElementById('dropzone-file-input');
+        const dropzoneOverlay = document.getElementById('dropzone-overlay');
+
+        dropzoneBox.addEventListener('click', () => dropzoneFileInput.click());
+        dropzoneBox.addEventListener('dragover', (e) => { e.preventDefault(); dropzoneBox.style.borderColor = 'var(--color-supervisor)'; });
+        dropzoneBox.addEventListener('dragleave', () => { dropzoneBox.style.borderColor = ''; });
+        dropzoneBox.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzoneBox.style.borderColor = '';
+            if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+        });
+        dropzoneFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) loadFile(e.target.files[0]);
+        });
+
+        /* Evento global de drop no body para capturar drags fora do dropzone */
+        document.body.addEventListener('dragover', (e) => { e.preventDefault(); });
+        document.body.addEventListener('drop', (e) => {
+            e.preventDefault();
+            if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+        });
+
+        /* ============================================================
+           CARREGAMENTO DO ARQUIVO
+           ============================================================ */
+        function loadFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                parseLogs(e.target.result);
+                dropzoneOverlay.classList.add('hidden');
+                document.getElementById('stats-bar').style.display = 'flex';
+                document.getElementById('main-layout').style.display = 'flex';
+            };
+            reader.readAsText(file);
+        }
+
+        /**
+         * Faz o parse do JSONL, uma linha por evento.
+         * Cada linha é um JSON com { timestamp, event, threadId?, agentName?, data }
+         */
+        function parseLogs(text) {
+            const lines = text.split('\n').filter(l => l.trim());
+            allLogs = [];
+            for (const line of lines) {
+                try {
+                    const obj = JSON.parse(line);
+                    // Normaliza: garante que threadId e agentName existam (extrai de data.contextData se necessário)
+                    if (!obj.threadId && obj.data && obj.data.contextData && obj.data.contextData.chatJid) {
+                        obj.threadId = obj.data.contextData.chatJid;
+                    }
+                    if (!obj.agentName && obj.data && obj.data.contextData && obj.data.contextData.agentName) {
+                        obj.agentName = obj.data.contextData.agentName;
+                    }
+                    allLogs.push(obj);
+                } catch (_) { /* ignora linhas inválidas */ }
+            }
+            buildAgentFilter();
+            renderAll();
+        }
+
+        /* ============================================================
+           FILTRO DE AGENTES — Checkboxes na sidebar
+           ============================================================ */
+        function buildAgentFilter() {
+            // Coleta agentes únicos dos eventos
+            const agents = new Map();
+            for (const log of allLogs) {
+                const name = log.agentName;
+                if (name && !agents.has(name)) {
+                    agents.set(name, (agents.get(name) || 0) + 1);
+                }
+            }
+            // Também conta agentes que aparecem no AGENT_START / AGENT_DECISION
+            for (const log of allLogs) {
+                const name = log.agentName;
+                if (name) agents.set(name, (agents.get(name) || 0) + 1);
+            }
+            // Inicializa visibleAgents com todos
+            visibleAgents = new Set(agents.keys());
+
+            const container = document.getElementById('agent-filters');
+            container.innerHTML = '';
+            // Ordena por nome
+            const sorted = [...agents.keys()].sort();
+            for (const agent of sorted) {
+                const color = agentColorsHex[agent] || '#94a3b8';
+                const row = document.createElement('div');
+                row.className = 'filter-row';
+                row.innerHTML = `
+                    <input type="checkbox" checked id="filter-agent-${agent}" onchange="onAgentFilterChange('${agent}', this.checked)">
+                    <span class="filter-agent-dot" style="background:${color};"></span>
+                    <label for="filter-agent-${agent}" style="cursor:pointer;">${agent}</label>
+                `;
+                container.appendChild(row);
+            }
+        }
+
+        function onAgentFilterChange(agent, checked) {
+            if (checked) visibleAgents.add(agent);
+            else visibleAgents.delete(agent);
+            renderTree();
+        }
+
+        /* ============================================================
+           BUSCA TEXTUAL
+           ============================================================ */
+        document.getElementById('search-input').addEventListener('input', (e) => {
+            searchText = e.target.value.toLowerCase().trim();
+            renderTree();
+        });
+
+        /* ============================================================
+           TOGGLES
+           ============================================================ */
+        function toggleDecisionsOnly() {
+            decisionsOnly = !decisionsOnly;
+            document.getElementById('toggle-decisions').classList.toggle('on', decisionsOnly);
+            renderTree();
+        }
+
+        function toggleExpandAll() {
+            expandAll = !expandAll;
+            document.getElementById('toggle-expand').classList.toggle('on', expandAll);
+            // Aplica/remove classe expanded nos cards
+            document.querySelectorAll('.event-card').forEach(card => {
+                if (expandAll) card.classList.add('expanded');
+                else card.classList.remove('expanded');
+            });
+        }
+
+        /* ============================================================
+           RENDERIZAÇÃO PRINCIPAL
+           ============================================================ */
+        function renderAll() {
+            updateStats();
+            renderTree();
+            updateMetrics();
+        }
+
+        /* ============================================================
+           ATUALIZAÇÃO DAS ESTATÍSTICAS NA BARRA SUPERIOR
+           ============================================================ */
+        function updateStats() {
+            const totalEvents = allLogs.length;
+            const uniqueAgents = new Set();
+            let llmCalls = 0;
+            let estimatedInputTokens = 0;
+            let estimatedOutputTokens = 0;
+            let loops = 0;
+
+            // Para detectar loops: rastreia agentes por thread
+            const threadAgents = new Map(); // threadId -> [agentName, ...]
+
+            for (const log of allLogs) {
+                if (log.agentName) uniqueAgents.add(log.agentName);
+                if (log.event === 'LLM_START') {
+                    llmCalls++;
+                    // Estima tokens de entrada: soma o length de todas as messages
+                    if (log.data && log.data.messages) {
+                        for (const msg of log.data.messages) {
+                            estimatedInputTokens += Math.ceil((msg.content || '').length / 4);
+                        }
+                    }
+                }
+                if (log.event === 'LLM_END') {
+                    // Estima tokens de saída
+                    if (log.data && log.data.generations) {
+                        for (const gen of log.data.generations) {
+                            for (const entry of gen) {
+                                if (entry.type === 'message' && entry.content) {
+                                    estimatedOutputTokens += Math.ceil(entry.content.length / 4);
+                                }
+                                if (entry.type === 'tool_calls' && entry.toolCalls) {
+                                    for (const tc of entry.toolCalls) {
+                                        const argsStr = JSON.stringify(tc.args || {});
+                                        estimatedOutputTokens += Math.ceil(argsStr.length / 4);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Detecta loops: mesmo agente chamado 2x+ na mesma thread
+                if (log.event === 'AGENT_START' && log.agentName) {
+                    const tid = log.threadId || '__global';
+                    if (!threadAgents.has(tid)) threadAgents.set(tid, []);
+                    const agents = threadAgents.get(tid);
+                    if (agents.includes(log.agentName)) loops++;
+                    agents.push(log.agentName);
+                }
+            }
+
+            const costInput = (estimatedInputTokens / 1_000_000) * PRICE_INPUT_PER_1M;
+            const costOutput = (estimatedOutputTokens / 1_000_000) * PRICE_OUTPUT_PER_1M;
+            const totalCost = costInput + costOutput;
+
+            document.getElementById('stat-events').textContent = totalEvents;
+            document.getElementById('stat-agents').textContent = uniqueAgents.size;
+            document.getElementById('stat-llm').textContent = llmCalls;
+            document.getElementById('stat-tok-in').textContent = estimatedInputTokens.toLocaleString();
+            document.getElementById('stat-tok-out').textContent = estimatedOutputTokens.toLocaleString();
+            document.getElementById('stat-cost').textContent = '$' + totalCost.toFixed(4);
+            document.getElementById('stat-loops').textContent = loops;
+        }
+
+        /* ============================================================
+           ATUALIZAÇÃO DAS MÉTRICAS NA SIDEBAR
+           ============================================================ */
+        function updateMetrics() {
+            // LLM Calls por agente
+            const llmPerAgent = new Map();
+            const agentCalls = new Map();
+            for (const log of allLogs) {
+                if (log.event === 'LLM_START' && log.agentName) {
+                    llmPerAgent.set(log.agentName, (llmPerAgent.get(log.agentName) || 0) + 1);
+                }
+                if (log.event === 'AGENT_START' && log.agentName) {
+                    agentCalls.set(log.agentName, (agentCalls.get(log.agentName) || 0) + 1);
+                }
+            }
+
+            // Exibe top LLM calls por agente
+            const llmSorted = [...llmPerAgent.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+            document.getElementById('metric-llm-per-agent').innerHTML = llmSorted
+                .map(([ag, n]) => `<span style="color:${agentColorsHex[ag] || '#94a3b8'};">${ag}</span>: ${n}`)
+                .join('<br>') || '—';
+
+            // Exibe agentes mais chamados
+            const topAgents = [...agentCalls.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+            document.getElementById('metric-top-agents').innerHTML = topAgents
+                .map(([ag, n]) => `<span style="color:${agentColorsHex[ag] || '#94a3b8'};">${ag}</span>: ${n}x`)
+                .join('<br>') || '—';
+        }
+
+        /* ============================================================
+           CONSTRUÇÃO DA ÁRVORE DE DECISÃO
+           Usa os eventos AGENT_START, AGENT_DECISION, LLM_START, LLM_END
+           para construir uma hierarquia baseada no threadId e ordem temporal.
+           ============================================================ */
+
+        /**
+         * Agrupa eventos em "turns" por threadId + fluxo contíguo de AGENT_START.
+         * Um turn começa com AGENT_START (ou qualquer evento se não houver AGENT_START)
+         * e termina quando outro AGENT_START aparece com mesmo threadId.
+         *
+         * Para simplificar, usamos o AGENT_START como "pai" dos eventos seguintes
+         * até o próximo AGENT_START na mesma thread.
+         */
+        function buildTree(events) {
+            // Estrutura: raiz contendo turns (sequências de eventos agrupados por thread)
+            const turns = []; // { threadId, title?, events: [...] }
+
+            // Agrupa eventos por threadId (ou thread global se ausente)
+            const threadMap = new Map(); // threadId -> eventos[]
+
+            for (const ev of events) {
+                const tid = ev.threadId || '__no_thread';
+                if (!threadMap.has(tid)) threadMap.set(tid, []);
+                threadMap.get(tid).push(ev);
+            }
+
+            // Para cada thread, constrói sub-árvore
+            const threadEntries = [...threadMap.entries()];
+
+            // Tenta extrair título do tópico a partir de eventos INFO com [TOPIC BROKER] ou [TOPICS DB]
+            const threadTitles = new Map();
+            for (const ev of events) {
+                if (ev.event === 'INFO' && ev.data && ev.data.message) {
+                    // "Direcionando mensagens para o assunto: \"Título\""
+                    const match = ev.data.message.match(/Direcionando mensagens para o assunto:\s*"([^"]+)"/);
+                    if (match) {
+                        const tid = ev.threadId || '__no_thread';
+                        if (!threadTitles.has(tid)) threadTitles.set(tid, match[1]);
+                    }
+                }
+            }
+
+            return { threadMap, threadTitles, events };
+        }
+
+        /**
+         * Renderiza a árvore no #main-content.
+         * Cada thread vira uma seção raiz.
+         */
+        function renderTree() {
+            const container = document.getElementById('main-content');
+            const emptyState = document.getElementById('empty-state');
+
+            if (allLogs.length === 0) {
+                container.innerHTML = '';
+                container.appendChild(emptyState);
+                emptyState.style.display = '';
+                return;
+            }
+            emptyState.style.display = 'none';
+
+            // Aplica busca textual e filtro de agentes
+            let filtered = allLogs;
+
+            if (searchText) {
+                filtered = filtered.filter(log => {
+                    return JSON.stringify(log).toLowerCase().includes(searchText);
+                });
+            }
+
+            if (decisionsOnly) {
+                // Mostra apenas AGENT_DECISION, LLM_START, LLM_END
+                filtered = filtered.filter(log =>
+                    log.event === 'AGENT_DECISION' || log.event === 'LLM_START' || log.event === 'LLM_END' || log.event === 'AGENT_START'
+                );
+            }
+
+            // Filtro por agente: se o evento tem agentName e não está no visibleAgents, esconde
+            if (visibleAgents.size > 0) {
+                filtered = filtered.filter(log => {
+                    if (!log.agentName) return true; // eventos sem agente sempre visíveis
+                    return visibleAgents.has(log.agentName);
+                });
+            }
+
+            // Constrói árvore
+            const { threadMap, threadTitles } = buildTree(filtered);
+
+            // Detecta loops (agente repetido na mesma thread)
+            const threadLoopAgents = new Map(); // threadId -> Set de agentes que já apareceram
+            for (const [tid, evs] of threadMap) {
+                const seen = new Set();
+                const loopAgents = new Set();
+                for (const ev of evs) {
+                    if (ev.agentName) {
+                        if (seen.has(ev.agentName)) loopAgents.add(ev.agentName);
+                        seen.add(ev.agentName);
+                    }
+                }
+                if (loopAgents.size > 0) threadLoopAgents.set(tid, loopAgents);
+            }
+
+            // Renderiza
+            container.innerHTML = '';
+            if ([...threadMap.keys()].length === 0) {
+                container.innerHTML = '<div class="empty-state"><h3>Nenhum evento encontrado</h3><p>Ajuste os filtros para ver eventos.</p></div>';
+                return;
+            }
+
+            // Ordena threads pelo timestamp do primeiro evento
+            const sortedThreads = [...threadMap.entries()].sort((a, b) => {
+                const tA = a[1][0]?.timestamp || '';
+                const tB = b[1][0]?.timestamp || '';
+                return tA.localeCompare(tB);
+            });
+
+            for (const [tid, evs] of sortedThreads) {
+                const title = threadTitles.get(tid) || tid.replace('__no_thread', 'Global');
+                const loopAgents = threadLoopAgents.get(tid);
+
+                // Container da thread
+                const threadDiv = document.createElement('div');
+                threadDiv.className = 'tree-node root';
+                threadDiv.style.marginBottom = '20px';
+
+                // Título da thread
+                const threadTitle = document.createElement('div');
+                threadTitle.style.cssText = 'font-weight:600;font-size:0.85rem;color:var(--text-muted);margin-bottom:10px;padding:6px 12px;background:var(--bg-panel);border-radius:6px;border:1px solid var(--border);';
+                threadTitle.textContent = `🧵 ${title}`;
+                threadDiv.appendChild(threadTitle);
+
+                // Container para os eventos da thread
+                const eventsContainer = document.createElement('div');
+                eventsContainer.className = 'tree-node';
+
+                for (const ev of evs) {
+                    const card = buildEventCard(ev, loopAgents);
+                    eventsContainer.appendChild(card);
+                }
+
+                threadDiv.appendChild(eventsContainer);
+                container.appendChild(threadDiv);
+            }
+
+            // Reaplica expandAll
+            if (expandAll) {
+                document.querySelectorAll('.event-card').forEach(c => c.classList.add('expanded'));
+            }
+        }
+
+        /**
+         * Constrói o card HTML para um evento específico.
+         */
+        function buildEventCard(ev, loopAgents) {
+            const card = document.createElement('div');
+            card.className = 'event-card';
+            card.dataset.index = allLogs.indexOf(ev);
+
+            const isLoop = loopAgents && ev.agentName && loopAgents.has(ev.agentName);
+            if (isLoop) card.classList.add('loop');
+
+            // Destaca AGENT_DECISION
+            if (ev.event === 'AGENT_DECISION') card.classList.add('decision');
+
+            // Cabeçalho
+            const header = document.createElement('div');
+            header.className = 'event-card-header';
+
+            // Badge do tipo
+            const badge = document.createElement('span');
+            badge.className = 'event-type-badge';
+            badge.style.cssText = getBadgeStyle(ev.event);
+            badge.textContent = ev.event;
+            header.appendChild(badge);
+
+            // Nome do agente (se houver)
+            if (ev.agentName) {
+                const agentSpan = document.createElement('span');
+                agentSpan.className = 'event-agent';
+                agentSpan.style.color = agentColorsHex[ev.agentName] || '#94a3b8';
+                agentSpan.textContent = ev.agentName;
+                header.appendChild(agentSpan);
+            }
+
+            // Razão (para AGENT_DECISION)
+            if (ev.event === 'AGENT_DECISION' && ev.data && ev.data.reason) {
+                const reasonSpan = document.createElement('span');
+                reasonSpan.className = 'event-reason';
+                reasonSpan.textContent = '— ' + truncate(ev.data.reason, 120);
+                header.appendChild(reasonSpan);
+            }
+
+            // Mensagem INFO/DEBUG curta
+            if ((ev.event === 'INFO' || ev.event === 'DEBUG') && ev.data && ev.data.message) {
+                const msgSpan = document.createElement('span');
+                msgSpan.className = 'event-reason';
+                msgSpan.textContent = '— ' + truncate(ev.data.message, 100);
+                header.appendChild(msgSpan);
+            }
+
+            // Loop badge
+            if (isLoop) {
+                const loopBadge = document.createElement('span');
+                loopBadge.className = 'loop-badge';
+                loopBadge.textContent = 'LOOP';
+                header.appendChild(loopBadge);
+            }
+
+            // Timestamp
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'event-time';
+            timeSpan.textContent = formatTime(ev.timestamp);
+            header.appendChild(timeSpan);
+
+            card.appendChild(header);
+
+            // Corpo expansível
+            // Para AGENT_DECISION: mostra detalhes da decisão
+            if (ev.event === 'AGENT_DECISION') {
+                const body = document.createElement('div');
+                body.className = 'event-card-body';
+                body.innerHTML = buildDecisionBody(ev);
+                card.appendChild(body);
+            }
+
+            // Para LLM_START: mostra o prompt (input)
+            if (ev.event === 'LLM_START') {
+                const body = document.createElement('div');
+                body.className = 'event-card-body';
+
+                // Busca o LLM_END correspondente (próximo LLM_END após este na mesma thread)
+                const llmEnd = findMatchingLLMEnd(ev);
+                body.innerHTML = buildLLMBody(ev, llmEnd);
+                card.appendChild(body);
+            }
+
+            // Para LLM_END sem LLM_START correspondente (ex: topic_broker)
+            if (ev.event === 'LLM_END' && !hasMatchingLLMStart(ev)) {
+                const body = document.createElement('div');
+                body.className = 'event-card-body';
+                body.innerHTML = buildLLMEndOnlyBody(ev);
+                card.appendChild(body);
+            }
+
+            // Clique: expandir/recolher + selecionar para painel de detalhes
+            card.addEventListener('click', (e) => {
+                // Não expande/recolhe se clicou em um elemento interativo dentro
+                if (e.target.closest('.llm-panel-content') || e.target.closest('.detail-tab')) return;
+
+                // Toggle expand
+                if (ev.event === 'LLM_START' || ev.event === 'AGENT_DECISION' || ev.event === 'LLM_END') {
+                    card.classList.toggle('expanded');
+                }
+
+                // Seleciona para painel de detalhes
+                selectEvent(ev, card);
+            });
+
+            return card;
+        }
+
+        /**
+         * Encontra o LLM_END correspondente ao LLM_START.
+         * Estratégia: próximo LLM_END na mesma thread, depois deste evento.
+         */
+        function findMatchingLLMEnd(llmStart) {
+            const tid = llmStart.threadId;
+            const startIdx = allLogs.indexOf(llmStart);
+            for (let i = startIdx + 1; i < allLogs.length; i++) {
+                const ev = allLogs[i];
+                if (ev.event === 'LLM_END') {
+                    // Verifica se pertence à mesma thread ou se não tem threadId
+                    if (!tid || ev.threadId === tid || !ev.threadId) return ev;
+                }
+                // Se encontrar outro LLM_START na mesma thread, para (não cruzar calls)
+                if (ev.event === 'LLM_START' && ev.threadId === tid) return null;
+            }
+            return null;
+        }
+
+        /**
+         * Verifica se este LLM_END tem um LLM_START correspondente antes dele.
+         */
+        function hasMatchingLLMStart(llmEnd) {
+            const tid = llmEnd.threadId;
+            const endIdx = allLogs.indexOf(llmEnd);
+            for (let i = endIdx - 1; i >= 0; i--) {
+                const ev = allLogs[i];
+                if (ev.event === 'LLM_START') {
+                    if (!tid || ev.threadId === tid || !ev.threadId) return true;
+                }
+                if (ev.event === 'LLM_END' && ev.threadId === tid) return false;
+            }
+            return false;
+        }
+
+        /**
+         * Constrói HTML do corpo de um AGENT_DECISION.
+         */
+        function buildDecisionBody(ev) {
+            const d = ev.data || {};
+            const nextAgent = d.nextAgent || '?';
+            const reason = d.reason || '';
+            const response = d.response || '';
+            const intermediateMsg = d.intermediateMessage || '';
+
+            let html = '<div class="decision-detail">';
+            html += `<div><span class="decision-label">Próximo Agente:</span> <span class="decision-nextAgent">${escapeHtml(nextAgent)}</span></div>`;
+            if (reason) html += `<div style="margin-top:4px;"><span class="decision-label">Razão:</span> ${escapeHtml(reason)}</div>`;
+            if (intermediateMsg) html += `<div style="margin-top:4px;"><span class="decision-label">Msg Intermediária:</span> "${escapeHtml(intermediateMsg)}"</div>`;
+            if (response && response !== '[SILENT]') html += `<div style="margin-top:4px;"><span class="decision-label">Resposta:</span> <span class="decision-response">${escapeHtml(truncate(response, 200))}</span></div>`;
+            if (response === '[SILENT]') html += `<div style="margin-top:4px;"><span class="decision-label">Resposta:</span> <span style="color:var(--text-dim);">[SILENT] — resposta suprimida</span></div>`;
+            html += '</div>';
+            return html;
+        }
+
+        /**
+         * Constrói HTML side-by-side para LLM_START (input) + LLM_END (output).
+         */
+        function buildLLMBody(llmStart, llmEnd) {
+            let html = '<div class="llm-side-by-side">';
+
+            // Painel esquerdo: Input (prompt)
+            html += '<div class="llm-panel"><div class="llm-panel-title">📥 Prompt (Input)</div><div class="llm-panel-content">';
+            if (llmStart.data && llmStart.data.messages) {
+                for (const msg of llmStart.data.messages) {
+                    const role = msg.role || '?';
+                    const content = msg.content || '';
+                    const maxLen = 800;
+                    const truncated = content.length > maxLen;
+                    html += `<div class="llm-msg-role">${escapeHtml(role.toUpperCase())}</div>`;
+                    html += `<div class="llm-msg-content">${escapeHtml(truncated ? content.substring(0, maxLen) : content)}</div>`;
+                    if (truncated) html += `<div class="llm-msg-truncated">... (${content.length - maxLen} caracteres ocultos — clique no evento para ver tudo no painel inferior)</div>`;
+                }
+            } else {
+                html += '<span style="color:var(--text-dim);">(sem dados de mensagens)</span>';
+            }
+            html += '</div></div>';
+
+            // Painel direito: Output (resposta)
+            html += '<div class="llm-panel"><div class="llm-panel-title">📤 Resposta (Output)</div><div class="llm-panel-content">';
+            if (llmEnd && llmEnd.data && llmEnd.data.generations) {
+                const parts = [];
+                for (const gen of llmEnd.data.generations) {
+                    for (const entry of gen) {
+                        if (entry.type === 'message' && entry.content) {
+                            parts.push(escapeHtml(entry.content));
+                        }
+                        if (entry.type === 'tool_calls' && entry.toolCalls) {
+                            for (const tc of entry.toolCalls) {
+                                parts.push(`🔧 ${escapeHtml(tc.name)}(${escapeHtml(JSON.stringify(tc.args, null, 2))})`);
+                            }
+                        }
+                    }
+                }
+                html += parts.join('\n\n') || '<span style="color:var(--text-dim);">(sem conteúdo)</span>';
+            } else {
+                html += '<span style="color:var(--text-dim);">(LLM_END não encontrado)</span>';
+            }
+            html += '</div></div>';
+
+            html += '</div>';
+            return html;
+        }
+
+        /**
+         * Constrói HTML para LLM_END órfão (ex: topic_broker).
+         */
+        function buildLLMEndOnlyBody(ev) {
+            let html = '<div style="padding:8px 0;">';
+            html += '<div style="font-weight:600;font-size:0.8rem;color:var(--color-llm);margin-bottom:6px;">📤 Resposta (Output)</div>';
+            if (ev.data && ev.data.generations) {
+                for (const gen of ev.data.generations) {
+                    for (const entry of gen) {
+                        if (entry.type === 'message' && entry.content) {
+                            html += `<div style="color:var(--text-muted);">${escapeHtml(entry.content)}</div>`;
+                        }
+                        if (entry.type === 'tool_calls' && entry.toolCalls) {
+                            for (const tc of entry.toolCalls) {
+                                html += `<div style="color:var(--text-muted);">🔧 ${escapeHtml(tc.name)}(${escapeHtml(JSON.stringify(tc.args, null, 2))})</div>`;
+                            }
+                        }
+                    }
+                }
+            }
+            html += '</div>';
+            return html;
+        }
+
+        /* ============================================================
+           PAINEL DE DETALHES (INFERIOR)
+           ============================================================ */
+        let detailTab = 'json';
+
+        function selectEvent(ev, card) {
+            // Remove seleção anterior
+            document.querySelectorAll('.event-card.selected').forEach(c => c.classList.remove('selected'));
+            if (card) card.classList.add('selected');
+            selectedEvent = ev;
+            document.getElementById('detail-panel').classList.remove('hidden');
+            renderDetailContent();
+        }
+
+        function switchDetailTab(tab) {
+            detailTab = tab;
+            document.querySelectorAll('.detail-tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.detail-tab[data-tab="${tab}"]`).classList.add('active');
+            renderDetailContent();
+        }
+
+        function renderDetailContent() {
+            const content = document.getElementById('detail-content');
+            if (!selectedEvent) {
+                content.textContent = 'Selecione um evento para ver detalhes.';
+                return;
+            }
+
+            switch (detailTab) {
+                case 'json':
+                    content.textContent = JSON.stringify(selectedEvent, null, 2);
+                    break;
+                case 'tree':
+                    content.innerHTML = buildTreeView(selectedEvent);
+                    break;
+                case 'cost':
+                    content.innerHTML = buildCostView(selectedEvent);
+                    break;
+            }
+        }
+
+        /**
+         * Constrói uma visualização hierárquica do evento selecionado.
+         */
+        function buildTreeView(ev) {
+            let html = '<div style="font-family:monospace;font-size:0.78rem;">';
+            html += `<div style="color:var(--color-supervisor);margin-bottom:6px;">📌 ${escapeHtml(ev.event)}</div>`;
+            html += `<div>timestamp: <span style="color:var(--color-chitchat);">${escapeHtml(ev.timestamp || '')}</span></div>`;
+            if (ev.threadId) html += `<div>threadId: <span style="color:var(--color-chitchat);">${escapeHtml(ev.threadId)}</span></div>`;
+            if (ev.agentName) html += `<div>agentName: <span style="color:var(--color-chitchat);">${escapeHtml(ev.agentName)}</span></div>`;
+            if (ev.data) {
+                html += '<div style="margin-top:8px;color:var(--text-dim);">data:</div>';
+                html += buildTreeObject(ev.data, 1);
+            }
+            html += '</div>';
+            return html;
+        }
+
+        function buildTreeObject(obj, depth) {
+            if (obj === null) return ' <span style="color:var(--text-dim);">null</span>';
+            if (typeof obj !== 'object') {
+                const s = String(obj);
+                if (s.length > 100) return ` <span style="color:var(--color-chitchat);">"${escapeHtml(s.substring(0, 100))}..."</span>`;
+                return ` <span style="color:var(--color-chitchat);">"${escapeHtml(s)}"</span>`;
+            }
+            const indent = '&nbsp;&nbsp;'.repeat(depth);
+            let html = '';
+            if (Array.isArray(obj)) {
+                html += ` <span style="color:var(--text-dim);">[${obj.length}]</span>`;
+                for (let i = 0; i < Math.min(obj.length, 5); i++) {
+                    html += `<br>${indent}[${i}]:${buildTreeObject(obj[i], depth + 1)}`;
+                }
+                if (obj.length > 5) html += `<br>${indent}<span style="color:var(--text-dim);">... +${obj.length - 5} itens</span>`;
+            } else {
+                const keys = Object.keys(obj);
+                for (const key of keys.slice(0, 10)) {
+                    const val = obj[key];
+                    if (typeof val === 'object' && val !== null) {
+                        html += `<br>${indent}<span style="color:var(--color-supervisor);">${escapeHtml(key)}:</span>`;
+                        html += buildTreeObject(val, depth + 1);
+                    } else {
+                        const s = String(val);
+                        const display = s.length > 80 ? escapeHtml(s.substring(0, 80)) + '...' : escapeHtml(s);
+                        html += `<br>${indent}<span style="color:var(--color-supervisor);">${escapeHtml(key)}:</span> <span style="color:var(--color-chitchat);">${display}</span>`;
+                    }
+                }
+                if (keys.length > 10) html += `<br>${indent}<span style="color:var(--text-dim);">... +${keys.length - 10} campos</span>`;
+            }
+            return html;
+        }
+
+        /**
+         * Constrói estimativa de custo para um evento LLM.
+         */
+        function buildCostView(ev) {
+            let html = '<div style="font-size:0.82rem;">';
+            html += '<div style="margin-bottom:12px;color:var(--text-dim);">Estimativas baseadas em DeepSeek V4: <b>$0.15/M</b> input tokens, <b>$0.60/M</b> output tokens</div>';
+
+            if (ev.event === 'LLM_START') {
+                let totalChars = 0;
+                if (ev.data && ev.data.messages) {
+                    for (const msg of ev.data.messages) {
+                        totalChars += (msg.content || '').length;
+                    }
+                }
+                const estTokens = Math.ceil(totalChars / 4);
+                const estCost = (estTokens / 1_000_000) * PRICE_INPUT_PER_1M;
+                html += `<div><span class="decision-label">Caracteres de input:</span> ${totalChars.toLocaleString()}</div>`;
+                html += `<div><span class="decision-label">Tokens estimados (input):</span> ${estTokens.toLocaleString()}</div>`;
+                html += `<div><span class="decision-label">Custo estimado (input):</span> <b>$${estCost.toFixed(6)}</b></div>`;
+
+                // Se tem LLM_END correspondente, estima output também
+                const llmEnd = findMatchingLLMEnd(ev);
+                if (llmEnd) {
+                    let outputChars = 0;
+                    if (llmEnd.data && llmEnd.data.generations) {
+                        for (const gen of llmEnd.data.generations) {
+                            for (const entry of gen) {
+                                if (entry.type === 'message' && entry.content) outputChars += entry.content.length;
+                                if (entry.type === 'tool_calls' && entry.toolCalls) {
+                                    for (const tc of entry.toolCalls) {
+                                        outputChars += JSON.stringify(tc.args || {}).length;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    const outTokens = Math.ceil(outputChars / 4);
+                    const outCost = (outTokens / 1_000_000) * PRICE_OUTPUT_PER_1M;
+                    const totalCost = estCost + outCost;
+                    html += `<hr style="border-color:var(--border);margin:8px 0;">`;
+                    html += `<div><span class="decision-label">Caracteres de output:</span> ${outputChars.toLocaleString()}</div>`;
+                    html += `<div><span class="decision-label">Tokens estimados (output):</span> ${outTokens.toLocaleString()}</div>`;
+                    html += `<div><span class="decision-label">Custo estimado (output):</span> <b>$${outCost.toFixed(6)}</b></div>`;
+                    html += `<hr style="border-color:var(--border);margin:8px 0;">`;
+                    html += `<div style="font-size:0.9rem;"><span class="decision-label">Custo total desta call:</span> <b style="color:var(--color-finish);">$${totalCost.toFixed(6)}</b></div>`;
+                }
+            } else if (ev.event === 'LLM_END') {
+                let outputChars = 0;
+                if (ev.data && ev.data.generations) {
+                    for (const gen of ev.data.generations) {
+                        for (const entry of gen) {
+                            if (entry.type === 'message' && entry.content) outputChars += entry.content.length;
+                            if (entry.type === 'tool_calls' && entry.toolCalls) {
+                                for (const tc of entry.toolCalls) {
+                                    outputChars += JSON.stringify(tc.args || {}).length;
+                                }
+                            }
+                        }
+                    }
+                }
+                const outTokens = Math.ceil(outputChars / 4);
+                const outCost = (outTokens / 1_000_000) * PRICE_OUTPUT_PER_1M;
+                html += `<div><span class="decision-label">Caracteres de output:</span> ${outputChars.toLocaleString()}</div>`;
+                html += `<div><span class="decision-label">Tokens estimados (output):</span> ${outTokens.toLocaleString()}</div>`;
+                html += `<div><span class="decision-label">Custo estimado (output):</span> <b>$${outCost.toFixed(6)}</b></div>`;
+            } else {
+                html += '<div style="color:var(--text-dim);">Selecione um evento LLM_START ou LLM_END para ver estimativas de custo.</div>';
+            }
+
+            html += '</div>';
+            return html;
+        }
+
+        /* ============================================================
+           UTILITÁRIOS
+           ============================================================ */
+
+        function getBadgeStyle(eventType) {
+            const colors = {
+                'INFO': 'background:rgba(100,116,139,0.2);color:#94a3b8;',
+                'DEBUG': 'background:rgba(139,92,246,0.2);color:#a78bfa;',
+                'ERROR': 'background:rgba(239,68,68,0.2);color:#f87171;',
+                'WARN': 'background:rgba(245,158,11,0.2);color:#fbbf24;',
+                'LLM_START': 'background:rgba(16,185,129,0.2);color:#34d399;',
+                'LLM_END': 'background:rgba(16,185,129,0.15);color:#6ee7b7;',
+                'AGENT_START': 'background:rgba(6,182,212,0.2);color:#22d3ee;',
+                'AGENT_DECISION': 'background:rgba(251,191,36,0.2);color:#fbbf24;',
+                'AGENT_END': 'background:rgba(6,182,212,0.15);color:#67e8f9;',
+                'TOOL_START': 'background:rgba(236,72,153,0.2);color:#f472b6;',
+                'TOOL_END': 'background:rgba(236,72,153,0.15);color:#f9a8d4;',
+            };
+            return colors[eventType] || 'background:rgba(148,163,184,0.15);color:#94a3b8;';
+        }
+
+        function formatTime(isoString) {
+            if (!isoString) return '';
+            try {
+                const d = new Date(isoString);
+                return d.toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
+            } catch (_) {
+                return String(isoString).substring(11, 23) || isoString;
+            }
+        }
+
+        function truncate(str, maxLen) {
+            if (!str) return '';
+            if (str.length <= maxLen) return str;
+            return str.substring(0, maxLen) + '…';
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        /* ============================================================
+           ATALHOS DE TECLADO
+           ============================================================ */
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                // Fecha o painel de detalhes
+                document.getElementById('detail-panel').classList.add('hidden');
+                selectedEvent = null;
+                document.querySelectorAll('.event-card.selected').forEach(c => c.classList.remove('selected'));
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+                e.preventDefault();
+                document.getElementById('search-input').focus();
+            }
+        });
+    </script>
+</body>
+</html>

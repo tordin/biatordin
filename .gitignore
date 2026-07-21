@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+database.sqlite*
+auth_info_baileys/
+auth_info_baileys_personal/
+data/
+coverage/
+.DS_Store
