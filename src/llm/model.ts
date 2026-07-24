@@ -10,6 +10,7 @@ if (!process.env.DEEPSEEK_API_KEY) {
 }
 
 // Flash: Rápido e custo-eficiente para volume
+// SEMPRE sem thinking — thinking é exclusivo do reasoningAgent (modelPro)
 export const modelFlash = new ChatDeepSeek({
   apiKey: deepseekApiKey,
   model: "deepseek-v4-flash",
@@ -17,22 +18,49 @@ export const modelFlash = new ChatDeepSeek({
   callbacks: [loggerCallbackHandler],
   modelKwargs: {
     thinking: {
-      type: "enabled",
-      budget_tokens: 4096
+      type: "disabled"
     }
   }
 });
 
-// Pro: Alta precisão para planejamento, tool-calling e memória
+// Flash Structured: Mesmo modelo, com thinking mode EXPLICITAMENTE desabilitado
+// porque a API do DeepSeek ativa thinking por padrão em alguns modelos,
+// e thinking mode é incompatível com tool_choice (usado pelo withStructuredOutput).
+export const modelFlashStructured = new ChatDeepSeek({
+  apiKey: deepseekApiKey,
+  model: "deepseek-v4-flash",
+  temperature: 0.7,
+  callbacks: [loggerCallbackHandler],
+  modelKwargs: {
+    thinking: {
+      type: "disabled"
+    }
+  }
+});
+
+// Pro: Mantido para compatibilidade, agora usando deepseek-v4-flash
 export const modelPro = new ChatDeepSeek({
   apiKey: deepseekApiKey,
-  model: "deepseek-v4-pro",
+  model: "deepseek-v4-flash",
   temperature: 0.2, // Temperatura mais baixa para respostas mais determinísticas (melhor para JSON/ferramentas)
   callbacks: [loggerCallbackHandler],
   modelKwargs: {
     thinking: {
       type: "enabled",
       budget_tokens: 8192
+    }
+  }
+});
+
+// Pro Structured: Mantido para compatibilidade, agora usando deepseek-v4-flash
+export const modelProStructured = new ChatDeepSeek({
+  apiKey: deepseekApiKey,
+  model: "deepseek-v4-flash",
+  temperature: 0.2,
+  callbacks: [loggerCallbackHandler],
+  modelKwargs: {
+    thinking: {
+      type: "disabled"
     }
   }
 });

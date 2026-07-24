@@ -2,7 +2,7 @@ import { SystemMessage, HumanMessage, RemoveMessage, AIMessage, ToolMessage } fr
 import { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { AgentState } from "./state.js";
-import { modelPro as model } from "../llm/model.js";
+import { modelFlashStructured as model } from "../llm/model.js";
 import { sanitizeMessagesForModel } from "../utils/sanitize.js";
 import { sendIntermediateMessage } from "../transport/whatsapp.js";
 import { logger } from "../utils/logger.js";
@@ -62,9 +62,9 @@ const SUPERVISOR_PROMPT =
   "FORMATO OBRIGATÓRIO DE RESPOSTA:\n" +
   "Responda APENAS com um objeto JSON estrito com o formato abaixo. Não adicione nenhuma explicação ou formatação markdown (sem ```json) fora dele:\n" +
   "{\n" +
-  "  \"plan\": [\"searchAgent\", \"calendarAgent\"], // Seu plano de agentes. Opcional.\n" +
-  "  \"nextAgent\": \"searchAgent\" | \"chitchat\" | \"calendarAgent\" | \"gmailAgent\" | \"sheetsAgent\" | \"docsAgent\" | \"routineAgent\" | \"memoryAgent\" | \"securityAgent\" | \"shoppingAgent\" | \"whatsappAgent\" | \"FINISH\",\n" +
-  "  \"reason\": \"Breve explicação do porquê desta decisão\",\n" +
+  "  \\\"plan\\\": [\\\"searchAgent\\\", \\\"calendarAgent\\\"], // Seu plano de agentes. Opcional.\\n" +
+  "  \\\"nextAgent\\\": \\\"searchAgent\\\" | \\\"chitchat\\\" | \\\"calendarAgent\\\" | \\\"gmailAgent\\\" | \\\"sheetsAgent\\\" | \\\"docsAgent\\\" | \\\"routineAgent\\\" | \\\"memoryAgent\\\" | \\\"taskAgent\\\" | \\\"securityAgent\\\" | \\\"shoppingAgent\\\" | \\\"whatsappAgent\\\" | \\\"reasoningAgent\\\" | \\\"weatherAgent\\\" | \\\"FINISH\\\",\\n" +
+  "  \\\"reason\\\": \\\"Breve explicação do porquê desta decisão\\\",\\n" +
   "  \"response\": \"Sua resposta final compilada para o usuário caso decida por FINISH, ou vazia se for delegar\",\n" +
   "  \"intermediateMessage\": \"Mensagem proativa caso você decida avisar o que está fazendo antes de delegar (ex: 'Buscando as datas...')\",\n" +
   "  \"contextDataUpdate\": { ...dados adicionais opcionais para compartilhar com outros agentes... }\n" +
@@ -184,7 +184,7 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
   // Invoke the model expecting a structured output
   const supervisorModel = model.withStructuredOutput(z.object({
     plan: z.array(z.string()).optional().describe("Array com os agentes planejados para serem executados, em ordem"),
-    nextAgent: z.enum(["searchAgent", "chitchat", "calendarAgent", "gmailAgent", "sheetsAgent", "docsAgent", "routineAgent", "memoryAgent", "securityAgent", "shoppingAgent", "whatsappAgent", "FINISH"]),
+    nextAgent: z.enum(["searchAgent", "chitchat", "calendarAgent", "gmailAgent", "sheetsAgent", "docsAgent", "routineAgent", "memoryAgent", "taskAgent", "securityAgent", "shoppingAgent", "whatsappAgent", "reasoningAgent", "weatherAgent", "FINISH"]),
     reason: z.string().optional(),
     response: z.string().optional(),
     intermediateMessage: z.string().optional(),
@@ -193,7 +193,7 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
 
   let parsed: {
     plan?: string[];
-    nextAgent: "searchAgent" | "chitchat" | "calendarAgent" | "gmailAgent" | "sheetsAgent" | "docsAgent" | "routineAgent" | "memoryAgent" | "securityAgent" | "shoppingAgent" | "whatsappAgent" | "FINISH";
+    nextAgent: "searchAgent" | "chitchat" | "calendarAgent" | "gmailAgent" | "sheetsAgent" | "docsAgent" | "routineAgent" | "memoryAgent" | "taskAgent" | "securityAgent" | "shoppingAgent" | "whatsappAgent" | "reasoningAgent" | "weatherAgent" | "FINISH";
     reason?: string;
     response?: string;
     intermediateMessage?: string;
