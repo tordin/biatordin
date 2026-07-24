@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bia — Conversas</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --pink: #ff7b72;
+    --radius: 10px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* Header */
+  .header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(12px);
+  }
+  .header h1 { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+  .header h1 .badge {
+    font-size: 10px; background: var(--accent); color: #000;
+    padding: 2px 8px; border-radius: 10px; font-weight: 600;
+  }
+  .header-right { display: flex; gap: 14px; align-items: center; }
+  .status-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; }
+  .status-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.off { background: var(--red); }
+
+  /* Summary */
+  .summary {
+    display: flex; gap: 12px; padding: 16px 28px;
+    overflow-x: auto;
+  }
+  .summary .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px 18px;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .card .num { font-size: 22px; font-weight: 700; }
+  .card .label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .4px; }
+  .card.error .num { color: var(--red); }
+  .card.conv .num { color: var(--accent); }
+  .card.ok .num { color: var(--green); }
+  .card.warn .num { color: var(--orange); }
+
+  /* Controls */
+  .controls {
+    display: flex; gap: 10px; padding: 0 28px 14px;
+    flex-wrap: wrap; align-items: center;
+  }
+  .controls input, .controls select {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 12px;
+    color: var(--text); font-size: 13px;
+  }
+  .controls input::placeholder { color: var(--dim); }
+  .controls input:focus, .controls select:focus { outline: none; border-color: var(--accent); }
+  .controls input { flex: 1; min-width: 160px; }
+  .controls .btn {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 14px; color: var(--text);
+    font-size: 13px; cursor: pointer; transition: all .15s;
+  }
+  .controls .btn:hover { background: var(--border); }
+  .controls .btn.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+
+  /* Timeline / Turns */
+  .timeline { padding: 0 28px 28px; }
+  .turn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+    overflow: hidden;
+    transition: border-color .2s;
+  }
+  .turn:hover { border-color: rgba(88,166,255,.3); }
+  .turn.has-error { border-color: rgba(248,81,73,.4); }
+
+  /* Turn Header */
+  .turn-header {
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .turn-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; flex-wrap: wrap; }
+  .turn-meta .type-badge {
+    font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .type-badge.grupo { background: rgba(88,166,255,.12); color: var(--accent); }
+  .type-badge.privado, .type-badge.lid { background: rgba(188,140,255,.12); color: var(--purple); }
+  .turn-meta .time { color: var(--dim); }
+  .turn-meta .topic {
+    background: rgba(139,148,158,.1); padding: 2px 8px; border-radius: 4px; color: var(--dim);
+  }
+  .turn-decision {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .decision-finish { background: rgba(63,185,80,.12); color: var(--green); }
+  .decision-agent { background: rgba(188,140,255,.12); color: var(--purple); }
+  .decision-error { background: rgba(248,81,73,.12); color: var(--red); }
+
+  /* User Message Bubble */
+  .user-bubble {
+    margin: 14px 18px 10px;
+    padding: 12px 16px;
+    background: rgba(88,166,255,.08);
+    border: 1px solid rgba(88,166,255,.2);
+    border-radius: 12px 12px 12px 4px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    max-width: 85%;
+  }
+  .user-bubble .label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .4px;
+    color: var(--accent); font-weight: 600; margin-bottom: 4px;
+  }
+
+  /* Executive Timeline Steps */
+  .exec-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 18px 14px;
+  }
+  .exec-step {
+    display: flex;
+    gap: 10px;
+    position: relative;
+  }
+  .exec-step-icon {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    flex-shrink: 0;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    z-index: 1;
+    margin-top: 2px;
+  }
+  .exec-step-content {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .exec-step-title {
+    font-weight: 600;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+  .exec-step-reason {
+    color: var(--dim);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  /* Specific step variants */
+  .exec-step.supervisor .exec-step-icon { background: rgba(188,140,255,0.15); border-color: var(--purple); color: var(--purple); }
+  .exec-step.supervisor .exec-step-title { color: var(--purple); }
+
+  .exec-step.agent .exec-step-icon { background: rgba(88,166,255,0.15); border-color: var(--accent); color: var(--accent); }
+  .exec-step.agent .exec-step-title { color: var(--accent); }
+
+  .exec-step.tool .exec-step-icon { background: rgba(210,153,34,0.15); border-color: var(--orange); color: var(--orange); }
+  .exec-step.tool .exec-step-title { color: var(--orange); }
+
+  .exec-step.response .exec-step-icon { background: rgba(63,185,80,0.15); border-color: var(--green); color: var(--green); }
+  .exec-step.response .exec-step-content { background: rgba(63,185,80,0.06); border-color: rgba(63,185,80,0.25); }
+  .exec-step.response .exec-step-title { color: var(--green); font-size: 12px; font-weight: 700; }
+  .exec-step.response .exec-response-body { color: var(--text); font-size: 13px; font-weight: 400; margin-top: 6px; white-space: pre-wrap; line-height: 1.5; word-break: break-word; }
+
+  .exec-step.silent .exec-step-icon { background: rgba(139,148,158,0.15); border-color: var(--dim); color: var(--dim); }
+  .exec-step.silent .exec-step-content { background: rgba(139,148,158,0.05); border-color: rgba(139,148,158,0.2); }
+  .exec-step.silent .exec-step-title { color: var(--dim); }
+
+  .exec-step.error .exec-step-icon { background: rgba(248,81,73,0.15); border-color: var(--red); color: var(--red); }
+  .exec-step.error .exec-step-content { background: rgba(248,81,73,0.06); border-color: rgba(248,81,73,0.25); }
+  .exec-step.error .exec-step-title { color: var(--red); }
+
+  /* Expanded details */
+  .turn-details {
+    border-top: 1px solid var(--border);
+    background: rgba(0,0,0,.15);
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height .3s ease;
+  }
+  .turn-details.open { max-height: none; }
+  .turn-details-inner { padding: 14px 18px; }
+  .detail-section { margin-bottom: 14px; }
+  .detail-section .section-title {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--dim); font-weight: 600; margin-bottom: 6px;
+  }
+  .detail-section .json-box {
+    background: rgba(0,0,0,.4); border-radius: 6px; padding: 12px;
+    white-space: pre-wrap; word-break: break-word;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 11px; line-height: 1.5;
+    max-height: 500px; overflow-y: auto;
+    border: 1px solid var(--border);
+    color: #c9d1d9;
+    margin-top: 8px;
+  }
+  .detail-section .evt-row {
+    border-left: 3px solid var(--border); margin-bottom: 6px;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 11px; background: var(--surface2);
+    border-radius: 6px; overflow: hidden;
+  }
+  .detail-section .evt-row.llm { border-left-color: var(--green); }
+  .detail-section .evt-row.decision { border-left-color: var(--purple); }
+  .detail-section .evt-row.tool { border-left-color: var(--accent); }
+  .detail-section .evt-row.error { border-left-color: var(--red); }
+  
+  .evt-header {
+    padding: 8px 12px; cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; user-select: none; transition: background 0.15s;
+  }
+  .evt-header:hover { background: rgba(255,255,255,0.04); }
+  .evt-header-left { display: flex; align-items: center; gap: 8px; flex: 1; flex-wrap: wrap; }
+  .evt-expand-icon { font-size: 10px; color: var(--dim); width: 12px; display: inline-block; text-align: center; }
+  .evt-time { color: var(--dim); font-size: 10px; }
+  .evt-name { color: var(--accent); font-weight: 600; }
+  .evt-summary { color: var(--dim); font-size: 11px; margin-left: 4px; }
+  .evt-hint { font-size: 10px; color: var(--accent); opacity: 0.7; white-space: nowrap; }
+  .evt-header:hover .evt-hint { opacity: 1; text-decoration: underline; }
+  
+  .evt-body {
+    padding: 12px 14px;
+    border-top: 1px solid var(--border);
+    background: rgba(0,0,0,0.3);
+  }
+  
+  .evt-detail-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px; font-size: 11px; padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  
+  /* Message Cards */
+  .role-badge {
+    font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .role-badge.system { background: rgba(188,140,255,0.2); color: var(--purple); border: 1px solid rgba(188,140,255,0.4); }
+  .role-badge.human, .role-badge.user { background: rgba(88,166,255,0.2); color: var(--accent); border: 1px solid rgba(88,166,255,0.4); }
+  .role-badge.ai, .role-badge.assistant { background: rgba(63,185,80,0.2); color: var(--green); border: 1px solid rgba(63,185,80,0.4); }
+  .role-badge.tool { background: rgba(210,153,34,0.2); color: var(--orange); border: 1px solid rgba(210,153,34,0.4); }
+  .role-badge.unknown { background: rgba(139,148,158,0.2); color: var(--dim); border: 1px solid rgba(139,148,158,0.4); }
+
+  .msg-card {
+    background: rgba(13, 17, 23, 0.7);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  .msg-card:last-child { margin-bottom: 0; }
+  .msg-card-header {
+    padding: 6px 10px; background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex; align-items: center; justify-content: space-between; font-size: 11px;
+  }
+  .msg-card-body {
+    padding: 10px 12px; font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+    max-height: 400px; overflow-y: auto; color: #c9d1d9;
+  }
+
+  .btn-copy {
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--dim); font-size: 11px; padding: 3px 8px; border-radius: 4px;
+    cursor: pointer; transition: all 0.15s ease;
+  }
+  .btn-copy:hover { background: var(--border); color: var(--text); }
+  .btn-copy-sm {
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    color: var(--dim); font-size: 10px; padding: 2px 6px; border-radius: 3px; cursor: pointer;
+  }
+  .btn-copy-sm:hover { background: rgba(255,255,255,0.15); color: var(--text); }
+
+  .turn-json-details summary {
+    cursor: pointer; user-select: none; padding: 6px 0;
+    font-size: 11px; font-weight: 600; color: var(--dim);
+    text-transform: uppercase; letter-spacing: .5px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .turn-json-details summary:hover { color: var(--text); }
+
+  /* Expand toggle */
+  .expand-toggle {
+    padding: 8px 18px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--dim);
+    cursor: pointer;
+    transition: all .15s;
+    user-select: none;
+    border-top: 1px solid rgba(255,255,255,0.04);
+  }
+  .expand-toggle:hover { color: var(--accent); background: rgba(88,166,255,.04); }
+
+  /* Loading / empty */
+  .empty-state {
+    padding: 60px 20px; text-align: center; color: var(--dim);
+  }
+  .empty-state .icon { font-size: 40px; margin-bottom: 10px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  @media (max-width: 600px) {
+    .header { padding: 10px 16px; flex-wrap: wrap; gap: 8px; }
+    .summary { padding: 10px 16px; }
+    .timeline { padding: 0 12px 20px; }
+    .user-bubble { max-width: 100%; }
+    .exec-timeline { padding: 4px 12px 10px; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>
+    💬 Bia — Conversas
+    <span class="badge" id="liveBadge">AO VIVO</span>
+  </h1>
+  <div class="header-right">
+    <div class="status-row">
+      <span class="status-dot on" id="statusDot"></span>
+      <span id="statusLabel">Conectado</span>
+    </div>
+  </div>
+</div>
+
+<div class="summary" id="summaryCards">
+  <div class="card conv"><div class="num" id="totalTurns">—</div><div class="label">Conversas</div></div>
+  <div class="card ok"><div class="num" id="okCount">—</div><div class="label">Processadas</div></div>
+  <div class="card error"><div class="num" id="errCount">—</div><div class="label">Com Erro</div></div>
+  <div class="card"><div class="num" id="totalEvts">—</div><div class="label">Eventos</div></div>
+  <div class="card"><div class="num" id="agentCount">—</div><div class="label">Agentes</div></div>
+</div>
+
+<div class="controls">
+  <input type="text" id="searchInput" placeholder="Buscar mensagens..." />
+  <select id="chatFilter">
+    <option value="">Todos chats</option>
+    <option value="Grupo">Grupos</option>
+    <option value="Privado">Privados</option>
+    <option value="LID">LID (Privado)</option>
+  </select>
+  <button class="btn active" id="autoRefreshBtn">Auto-atualizar</button>
+</div>
+
+<div class="timeline" id="timeline">
+  <div class="empty-state">
+    <div class="icon">⏳</div>
+    Carregando conversas...
+  </div>
+</div>
+
+<script>
+// ─── State ─────────────────────────────────────────────────
+let turns = [];
+let autoRefresh = true;
+let expandedTurnIdx = null;
+const expandedEvts = new Set();
+window._payloadStore = {};
+
+function storePayload(data) {
+  const id = 'p_' + Math.random().toString(36).substr(2, 9);
+  window._payloadStore[id] = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  return id;
+}
+
+window.copyPayload = function(payloadId, btnElement) {
+  const text = window._payloadStore[payloadId] || '';
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btnElement.textContent;
+    btnElement.textContent = '✓ Copiado!';
+    setTimeout(() => { btnElement.textContent = orig; }, 1500);
+  }).catch(() => {
+    alert('Erro ao copiar payload.');
+  });
+};
+
+function formatMessageContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map(item => typeof item === 'string' ? item : JSON.stringify(item, null, 2)).join('\n');
+  }
+  if (typeof content === 'object' && content !== null) {
+    return JSON.stringify(content, null, 2);
+  }
+  return String(content || '');
+}
+
+window.toggleEvtDetail = function(evtKey) {
+  if (expandedEvts.has(evtKey)) {
+    expandedEvts.delete(evtKey);
+  } else {
+    expandedEvts.add(evtKey);
+  }
+  renderTurns();
+};
+
+const searchInput = document.getElementById('searchInput');
+const chatFilter = document.getElementById('chatFilter');
+const autoRefreshBtn = document.getElementById('autoRefreshBtn');
+const timeline = document.getElementById('timeline');
+
+// ─── Helpers ───────────────────────────────────────────────
+function escapeHtml(s) {
+  if (typeof s !== 'string') return String(s || '');
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+}
+
+function formatWhatsAppText(str) {
+  if (!str) return '';
+  let html = escapeHtml(str);
+  html = html.replace(/\*(.*?)\*/g, '<strong>$1</strong>');
+  html = html.replace(/_(.*?)_/g, '<em>$1</em>');
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleString('pt-BR', { hour12: false });
+}
+
+function timeAgo(ts) {
+  const diff = Date.now() - new Date(ts).getTime();
+  if (diff < 60000) return 'agora';
+  if (diff < 3600000) return `${Math.floor(diff/60000)}min`;
+  if (diff < 86400000) return `${Math.floor(diff/3600000)}h`;
+  return `${Math.floor(diff/86400000)}d`;
+}
+
+// ─── Data Loading ──────────────────────────────────────────
+async function loadSummary() {
+  try {
+    const r = await fetch('/api/summary');
+    const d = await r.json();
+    document.getElementById('totalTurns').textContent = d.totalTurns || 0;
+    document.getElementById('okCount').textContent = (d.totalTurns || 0) - (d.turnsWithErrors || 0);
+    document.getElementById('errCount').textContent = d.turnsWithErrors || 0;
+    document.getElementById('totalEvts').textContent = d.totalLines?.toLocaleString() || '—';
+    document.getElementById('agentCount').textContent = d.agents?.length || '—';
+  } catch {}
+}
+
+async function loadTurns() {
+  const params = new URLSearchParams();
+  const q = searchInput.value.trim();
+  if (q) params.set('search', q);
+  if (chatFilter.value) params.set('chat', chatFilter.value);
+  params.set('limit', '50');
+
+  try {
+    const r = await fetch(`/api/turns?${params}`);
+    const d = await r.json();
+    turns = d.turns || [];
+    renderTurns();
+  } catch {}
+}
+
+// ─── Render ────────────────────────────────────────────────
+function renderTurns() {
+  if (turns.length === 0) {
+    timeline.innerHTML = `<div class="empty-state"><div class="icon">💬</div>Nenhuma conversa encontrada</div>`;
+    return;
+  }
+
+  let html = '';
+  for (let i = 0; i < turns.length; i++) {
+    const t = turns[i];
+    const isExpanded = expandedTurnIdx === i;
+    const decisionClass = t.hasError ? 'decision-error' :
+      t.finalDecision === 'FINISH' ? (t.finalResponse ? 'decision-finish' : 'decision-agent') : 'decision-agent';
+    
+    let decisionLabel = t.hasError ? '⚠️ Erro' :
+      t.finalDecision === 'FINISH' ? (t.finalResponse ? '✅ Respondeu' : '🔇 Silêncio') :
+      `➡️ ${t.finalDecision}`;
+      
+    if (t.summary && !t.hasError) {
+      const shortReason = t.summary.slice(0, 50);
+      decisionLabel += ` · ${shortReason}${t.summary.length > 50 ? '…' : ''}`;
+    }
+    const chatTypeClass = (t.chatType || '').toLowerCase();
+
+    html += `<div class="turn ${t.hasError ? 'has-error' : ''}">
+      <div class="turn-header">
+        <div class="turn-meta">
+          <span class="type-badge ${chatTypeClass}">${escapeHtml(t.chatType || '—')}</span>
+          <span class="time">${fmtTime(t.timestamp)} (${timeAgo(t.timestamp)})</span>
+          ${t.senderName ? `<span class="topic">👤 ${escapeHtml(t.senderName)}</span>` : ''}
+          ${t.accountName ? `<span class="topic">💼 ${escapeHtml(t.accountName)}</span>` : ''}
+          ${t.topic ? `<span class="topic">📁 ${escapeHtml(t.topic)}</span>` : ''}
+        </div>
+        <div class="turn-decision ${decisionClass}">${decisionLabel}</div>
+      </div>`;
+
+    // User message (Mensagem Recebida / Gatilho)
+    const rawMsg = (t.userMessage || '').trim();
+    const msgs = rawMsg.includes('\n---\n') 
+      ? rawMsg.split('\n---\n') 
+      : (rawMsg.includes('\n') ? rawMsg.split('\n') : [rawMsg]);
+
+    if (msgs.length > 1) {
+      html += `<div class="user-bubble">
+        <div class="label">✉️ ${msgs.length} mensagens recebidas (agrupadas no WhatsApp)</div>`;
+      for (let idx = 0; idx < msgs.length; idx++) {
+        const m = msgs[idx];
+        html += `<div style="padding:4px 0;${idx > 0 ? 'border-top:1px solid rgba(88,166,255,.15);margin-top:4px' : ''}">${escapeHtml(m.trim())}</div>`;
+      }
+      html += `</div>`;
+    } else {
+      html += `<div class="user-bubble">
+        <div class="label">✉️ Mensagem recebida</div>
+        ${escapeHtml(rawMsg || '(vazio)')}
+      </div>`;
+    }
+
+    // Linha do tempo resumida (Executive Timeline)
+    html += buildExecutiveTimeline(t);
+
+    // Expand toggle button
+    html += `<div class="expand-toggle" onclick="toggleDetails(${i})">
+      ${isExpanded ? '▲ Recolher detalhes técnicos' : '▼ Ver detalhes técnicos'}
+    </div>`;
+
+    // Technical details panel (hidden by default)
+    html += `<div class="turn-details ${isExpanded ? 'open' : ''}">
+      <div class="turn-details-inner">`;
+    html += buildEventDetails(t, i);
+    html += `</div></div></div>`;
+  }
+
+  timeline.innerHTML = html;
+}
+
+function buildExecutiveTimeline(turn) {
+  let html = '<div class="exec-timeline">';
+
+  // 1. Supervisor Decisions & Delegations
+  const decisions = turn.decisions || [];
+  if (decisions.length > 0) {
+    for (const d of decisions) {
+      const nextAg = d.nextAgent || 'FINISH';
+      const isFinish = nextAg === 'FINISH';
+      const title = isFinish ? '🧠 Supervisor → Concluiu tarefa' : `🧠 Supervisor → Roteou para <strong style="color:var(--accent)">${escapeHtml(nextAg)}</strong>`;
+      
+      html += `<div class="exec-step supervisor">
+        <div class="exec-step-icon">🧠</div>
+        <div class="exec-step-content">
+          <div class="exec-step-title">
+            <span>${title}</span>
+          </div>
+          ${d.reason ? `<div class="exec-step-reason">${escapeHtml(d.reason)}</div>` : ''}
+        </div>
+      </div>`;
+
+      if (d.intermediateMessage) {
+        html += `<div class="exec-step agent">
+          <div class="exec-step-icon">💬</div>
+          <div class="exec-step-content">
+            <div class="exec-step-title" style="color:var(--orange)">
+              <span>💬 Mensagem intermediária enviada ao usuário:</span>
+            </div>
+            <div class="exec-step-reason" style="color:var(--text);font-style:italic">"${escapeHtml(d.intermediateMessage)}"</div>
+          </div>
+        </div>`;
+      }
+    }
+  } else if (turn.summary) {
+    html += `<div class="exec-step supervisor">
+      <div class="exec-step-icon">🧠</div>
+      <div class="exec-step-content">
+        <div class="exec-step-title"><span>🧠 Supervisor</span></div>
+        <div class="exec-step-reason">${escapeHtml(turn.summary)}</div>
+      </div>
+    </div>`;
+  }
+
+  // 2. Tools executed by Specialist Agents
+  const toolsRan = turn.toolsRan || [];
+  if (toolsRan.length > 0) {
+    for (const t of toolsRan) {
+      const argsStr = Object.keys(t.args || {}).length > 0 ? JSON.stringify(t.args) : '';
+      html += `<div class="exec-step tool">
+        <div class="exec-step-icon">🔧</div>
+        <div class="exec-step-content">
+          <div class="exec-step-title">
+            <span>🔧 Ferramenta executada: <strong>${escapeHtml(t.tool)}</strong> ${t.agent ? `<span style="color:var(--dim);font-weight:400">(${escapeHtml(t.agent)})</span>` : ''}</span>
+          </div>
+          ${argsStr ? `<div class="exec-step-reason" style="font-family:monospace;font-size:11px">${escapeHtml(argsStr)}</div>` : ''}
+        </div>
+      </div>`;
+    }
+  }
+
+  // 3. Final Outcome / Resposta da Bia / Silêncio / Erro
+  if (turn.hasError) {
+    html += `<div class="exec-step error">
+      <div class="exec-step-icon">❌</div>
+      <div class="exec-step-content">
+        <div class="exec-step-title">❌ Erro no processamento</div>
+        <div class="exec-step-reason">Ocorreu uma falha durante a execução desta solicitação.</div>
+      </div>
+    </div>`;
+  } else if (turn.finalResponse) {
+    html += `<div class="exec-step response">
+      <div class="exec-step-icon">🤖</div>
+      <div class="exec-step-content">
+        <div class="exec-step-title">🤖 Resposta da Bia:</div>
+        <div class="exec-response-body">${formatWhatsAppText(turn.finalResponse)}</div>
+      </div>
+    </div>`;
+  } else if (turn.action === 'silent' || (turn.finalDecision === 'FINISH' && !turn.finalResponse)) {
+    html += `<div class="exec-step silent">
+      <div class="exec-step-icon">🔇</div>
+      <div class="exec-step-content">
+        <div class="exec-step-title">🔇 Bia permaneceu em silêncio</div>
+        <div class="exec-step-reason">Não foi emitida resposta no WhatsApp (mensagem não dirigida à Bia ou sem ação requerida).</div>
+      </div>
+    </div>`;
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function buildEventDetails(turn, turnIdx) {
+  let html = '';
+
+  // All events listing
+  html += `<div class="detail-section">
+    <div class="section-title">📋 Eventos (${turn.events.length})</div>`;
+
+  for (let evtIdx = 0; evtIdx < turn.events.length; evtIdx++) {
+    const evt = turn.events[evtIdx];
+    const evtKey = `${turn.triggerId || turnIdx}_${evtIdx}`;
+    const isEvtExpanded = expandedEvts.has(evtKey);
+
+    const evtClass = evt.event === 'ERROR' ? 'error' :
+      evt.event === 'AGENT_DECISION' ? 'decision' :
+      evt.event.startsWith('LLM') ? 'llm' :
+      evt.event.startsWith('TOOL') ? 'tool' : '';
+    const time = new Date(evt.timestamp).toLocaleTimeString('pt-BR', { hour12: false });
+    const agent = evt.agentName || '';
+
+    let summaryText = '';
+    if (evt.event === 'LLM_START') {
+      const count = evt.data?.messages?.length || evt.data?.prompts?.length || 0;
+      summaryText = `${count} ${count === 1 ? 'mensagem enviada' : 'mensagens enviadas'}`;
+    } else if (evt.event === 'LLM_END') {
+      const gens = evt.data?.generations || [];
+      const texts = gens.flat().map(g => {
+        if (g.type === 'tool_calls') return `🔧 ${(g.toolCalls||[]).map(t=>t.name).join(', ')}`;
+        return typeof g.content === 'string' ? g.content.slice(0, 80) : '';
+      }).filter(Boolean);
+      summaryText = texts.join(' | ').slice(0, 100);
+    } else if (evt.event === 'AGENT_DECISION') {
+      summaryText = `→ ${evt.data?.nextAgent || '?'}` + (evt.data?.reason ? `: ${evt.data.reason.slice(0, 80)}` : '');
+    } else if (evt.event === 'TOOL_START') {
+      summaryText = `🔧 ${evt.data?.toolName || 'tool'}`;
+    } else if (evt.event === 'TOOL_END') {
+      summaryText = `✅ Output retornado`;
+    } else if (evt.event === 'ERROR') {
+      summaryText = evt.data?.message || evt.data?.args?.[0]?.message || 'Erro';
+    } else {
+      summaryText = evt.data?.message || '';
+    }
+
+    html += `<div class="evt-row ${evtClass}">
+      <div class="evt-header" onclick="toggleEvtDetail('${evtKey}')">
+        <div class="evt-header-left">
+          <span class="evt-expand-icon">${isEvtExpanded ? '▼' : '▶'}</span>
+          <span class="evt-time">${time}</span>
+          <span class="evt-name">${escapeHtml(evt.event)}</span>
+          ${agent ? `<span style="color:var(--pink)"> [${escapeHtml(agent)}]</span>` : ''}
+          ${summaryText ? `<span class="evt-summary">${escapeHtml(summaryText)}</span>` : ''}
+        </div>
+        <span class="evt-hint">${isEvtExpanded ? 'Recolher' : '🔍 Ver mensagens / detalhes'}</span>
+      </div>`;
+
+    if (isEvtExpanded) {
+      html += `<div class="evt-body">`;
+      html += renderExpandedEventBody(evt);
+      html += `</div>`;
+    }
+
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+
+  // Complete turn raw JSON (untruncated!)
+  const turnPayloadId = storePayload(turn);
+  html += `<div class="detail-section">
+    <details class="turn-json-details">
+      <summary style="cursor:pointer;">
+        <span>📄 Dados completos do turno (JSON integral)</span>
+        <button class="btn-copy" onclick="event.preventDefault(); copyPayload('${turnPayloadId}', this)">📋 Copiar JSON do Turno</button>
+      </summary>
+      <div class="json-box">${escapeHtml(JSON.stringify(turn, null, 2))}</div>
+    </details>
+  </div>`;
+
+  return html;
+}
+
+function renderExpandedEventBody(evt) {
+  let html = '';
+  const data = evt.data || {};
+
+  if (evt.event === 'LLM_START') {
+    const messages = data.messages || [];
+    const prompts = data.prompts || [];
+    const payloadId = storePayload(messages.length ? messages : prompts);
+
+    html += `<div class="evt-detail-header">
+      <span style="font-weight:600; color:var(--green)">📥 Contexto & Mensagens Enviadas para a LLM (${messages.length || prompts.length})</span>
+      <button class="btn-copy" onclick="copyPayload('${payloadId}', this)">📋 Copiar Prompt Completo</button>
+    </div>`;
+
+    if (messages.length > 0) {
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        const role = (msg.role || 'UNKNOWN').toUpperCase();
+        const roleClass = role.toLowerCase();
+        const contentStr = formatMessageContent(msg.content);
+        const msgPayloadId = storePayload(contentStr);
+
+        html += `<div class="msg-card">
+          <div class="msg-card-header">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="role-badge ${roleClass}">${escapeHtml(role)}</span>
+              <span style="color:var(--dim)">#${i + 1}</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span style="color:var(--dim); font-size:10px;">${contentStr.length} chars</span>
+              <button class="btn-copy-sm" onclick="copyPayload('${msgPayloadId}', this)">Copiar</button>
+            </div>
+          </div>
+          <div class="msg-card-body">${escapeHtml(contentStr)}</div>
+        </div>`;
+      }
+    } else if (prompts.length > 0) {
+      for (let i = 0; i < prompts.length; i++) {
+        const promptStr = prompts[i];
+        const msgPayloadId = storePayload(promptStr);
+        html += `<div class="msg-card">
+          <div class="msg-card-header">
+            <span class="role-badge system">PROMPT #${i + 1}</span>
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span style="color:var(--dim); font-size:10px;">${promptStr.length} chars</span>
+              <button class="btn-copy-sm" onclick="copyPayload('${msgPayloadId}', this)">Copiar</button>
+            </div>
+          </div>
+          <div class="msg-card-body">${escapeHtml(promptStr)}</div>
+        </div>`;
+      }
+    } else {
+      html += `<div style="color:var(--dim); font-style:italic">Nenhuma mensagem registrada no payload.</div>`;
+    }
+  } else if (evt.event === 'LLM_END') {
+    const gens = data.generations || [];
+    const payloadId = storePayload(gens);
+    html += `<div class="evt-detail-header">
+      <span style="font-weight:600; color:var(--green)">📤 Resposta do Modelo (Generations)</span>
+      <button class="btn-copy" onclick="copyPayload('${payloadId}', this)">📋 Copiar Resposta</button>
+    </div>`;
+
+    for (const genList of gens) {
+      for (const item of genList) {
+        if (item.type === 'message' || item.type === 'text') {
+          const content = item.content || item.text || '';
+          html += `<div class="msg-card">
+            <div class="msg-card-header">
+              <span class="role-badge ai">AI RESPONSE</span>
+            </div>
+            <div class="msg-card-body">${escapeHtml(content)}</div>
+          </div>`;
+        } else if (item.type === 'tool_calls') {
+          html += `<div class="msg-card">
+            <div class="msg-card-header">
+              <span class="role-badge tool">TOOL CALLS (${(item.toolCalls || []).length})</span>
+            </div>
+            <div class="msg-card-body">${escapeHtml(JSON.stringify(item.toolCalls, null, 2))}</div>
+          </div>`;
+        }
+      }
+    }
+  } else if (evt.event === 'AGENT_DECISION') {
+    const payloadId = storePayload(data);
+    html += `<div class="evt-detail-header">
+      <span style="font-weight:600; color:var(--purple)">🧠 Decisão do Agente [${escapeHtml(evt.agentName || 'supervisor')}]</span>
+      <button class="btn-copy" onclick="copyPayload('${payloadId}', this)">📋 Copiar Decisão</button>
+    </div>`;
+
+    html += `<div style="display:flex; flex-direction:column; gap:8px;">`;
+    if (data.nextAgent) {
+      html += `<div><strong>Próximo Agente:</strong> <span style="color:var(--accent)">${escapeHtml(data.nextAgent)}</span></div>`;
+    }
+    if (data.reason) {
+      html += `<div><strong>Razão / Raciocínio:</strong></div>
+      <div class="msg-card-body" style="background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:6px;">${escapeHtml(data.reason)}</div>`;
+    }
+    if (data.response) {
+      html += `<div><strong>Resposta Final Emitida:</strong></div>
+      <div class="msg-card-body" style="background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:6px;">${escapeHtml(data.response)}</div>`;
+    }
+    if (data.intermediateMessage) {
+      html += `<div><strong>Mensagem Intermediária:</strong></div>
+      <div class="msg-card-body" style="background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:6px;">${escapeHtml(data.intermediateMessage)}</div>`;
+    }
+    html += `</div>`;
+  } else if (evt.event === 'TOOL_START') {
+    const payloadId = storePayload(data.input);
+    html += `<div class="evt-detail-header">
+      <span style="font-weight:600; color:var(--orange)">🔧 Executando Ferramenta: ${escapeHtml(data.toolName || '')}</span>
+      <button class="btn-copy" onclick="copyPayload('${payloadId}', this)">📋 Copiar Parâmetros</button>
+    </div>
+    <div class="msg-card-body" style="background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:6px;">${escapeHtml(typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2))}</div>`;
+  } else if (evt.event === 'TOOL_END') {
+    const payloadId = storePayload(data.output);
+    html += `<div class="evt-detail-header">
+      <span style="font-weight:600; color:var(--orange)">✅ Resultado da Ferramenta</span>
+      <button class="btn-copy" onclick="copyPayload('${payloadId}', this)">📋 Copiar Resultado</button>
+    </div>
+    <div class="msg-card-body" style="background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:6px;">${escapeHtml(typeof data.output === 'string' ? data.output : JSON.stringify(data.output, null, 2))}</div>`;
+  } else if (evt.event === 'ERROR') {
+    const payloadId = storePayload(data);
+    html += `<div class="evt-detail-header">
+      <span style="font-weight:600; color:var(--red)">❌ Erro</span>
+      <button class="btn-copy" onclick="copyPayload('${payloadId}', this)">📋 Copiar Erro</button>
+    </div>
+    <div class="msg-card-body" style="background:rgba(248,81,73,0.1); border:1px solid var(--red); color:var(--red); border-radius:6px;">${escapeHtml(JSON.stringify(data, null, 2))}</div>`;
+  } else {
+    const payloadId = storePayload(data);
+    html += `<div class="evt-detail-header">
+      <span style="font-weight:600; color:var(--dim)">Payload do Evento (${escapeHtml(evt.event)})</span>
+      <button class="btn-copy" onclick="copyPayload('${payloadId}', this)">📋 Copiar JSON</button>
+    </div>
+    <div class="msg-card-body" style="background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:6px;">${escapeHtml(JSON.stringify(data, null, 2))}</div>`;
+  }
+
+  return html;
+}
+
+// ─── Interactive ───────────────────────────────────────────
+window.toggleDetails = function(idx) {
+  expandedTurnIdx = expandedTurnIdx === idx ? null : idx;
+  renderTurns();
+};
+
+// ─── Event Listeners ──────────────────────────────────────
+searchInput.addEventListener('input', loadTurns);
+chatFilter.addEventListener('change', loadTurns);
+autoRefreshBtn.addEventListener('click', () => {
+  autoRefresh = !autoRefresh;
+  autoRefreshBtn.classList.toggle('active');
+});
+
+// ─── SSE for Live Updates ─────────────────────────────────
+function connectSSE() {
+  const es = new EventSource('/api/events');
+  es.onopen = () => {
+    document.getElementById('statusDot').className = 'status-dot on';
+    document.getElementById('statusLabel').textContent = 'Conectado';
+  };
+  es.onmessage = (e) => {
+    if (e.data === '{"event":"connected"}') return;
+    if (autoRefresh) {
+      loadTurns();
+      loadSummary();
+    }
+  };
+  es.onerror = () => {
+    document.getElementById('statusDot').className = 'status-dot off';
+    document.getElementById('statusLabel').textContent = 'Reconectando…';
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+// ─── Init ──────────────────────────────────────────────────
+loadSummary();
+loadTurns();
+connectSSE();
+setInterval(loadSummary, 15000);
+</script>
+</body>
+</html>

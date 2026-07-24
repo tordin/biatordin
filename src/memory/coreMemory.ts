@@ -35,7 +35,7 @@ function getSandboxFile(chatJid: string): string {
 
 /**
  * Retrieves the current contents of Bia's memory.
- * Trusted chats get the global memory + a read-only view of all sandboxes.
+ * Trusted chats get global memory + strictly their own chat's sandbox (if any).
  * Untrusted chats get ONLY their sandbox memory.
  */
 export function getMemory(chatJid: string, isTrustedChat: boolean): string {
@@ -48,31 +48,51 @@ export function getMemory(chatJid: string, isTrustedChat: boolean): string {
     // For trusted chats, read global memory
     let globalMemory = fs.readFileSync(MEMORY_FILE, 'utf-8');
     
-    // Append sandboxes as read-only context
-    let sandboxesContext = "\n\n--- INÍCIO DOS SANDBOXES (SOMENTE LEITURA) ---\n";
-    let hasSandboxes = false;
-    
-    if (fs.existsSync(SANDBOX_DIR)) {
-      const dirs = fs.readdirSync(SANDBOX_DIR);
-      for (const dir of dirs) {
-        const memFile = path.join(SANDBOX_DIR, dir, 'bia_memory.md');
-        if (fs.existsSync(memFile)) {
-          hasSandboxes = true;
-          const content = fs.readFileSync(memFile, 'utf-8');
-          sandboxesContext += `\n[SANDBOX DO CHAT: ${dir}]\n${content}\n-----------------------------------\n`;
+    // Include ONLY this specific chat's sandbox if it exists
+    if (chatJid && chatJid !== 'unknown') {
+      const safeJid = chatJid.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const chatMemFile = path.join(SANDBOX_DIR, safeJid, 'bia_memory.md');
+      if (fs.existsSync(chatMemFile)) {
+        const sandboxContent = fs.readFileSync(chatMemFile, 'utf-8').trim();
+        if (sandboxContent) {
+          globalMemory += `\n\n--- ANOTAÇÕES DESTE CHAT (${chatJid}) ---\n${sandboxContent}`;
         }
       }
     }
-    
-    if (!hasSandboxes) {
-      sandboxesContext += "Nenhum sandbox criado ainda.\n-----------------------------------\n";
-    }
 
-    return globalMemory + sandboxesContext;
+    return globalMemory;
   } catch (error) {
     logger.error('Failed to read memory file:', error);
     return 'Erro ao ler a memória.';
   }
+}
+
+/**
+ * Helper to retrieve all sandboxes if explicitly requested by memory management tasks.
+ */
+export function getAllSandboxesMemory(): string {
+  let sandboxesContext = "\n\n--- TODOS OS SANDBOXES ---\n";
+  if (fs.existsSync(SANDBOX_DIR)) {
+    const dirs = fs.readdirSync(SANDBOX_DIR);
+    for (const dir of dirs) {
+      const memFile = path.join(SANDBOX_DIR, dir, 'bia_memory.md');
+      if (fs.existsSync(memFile)) {
+        const content = fs.readFileSync(memFile, 'utf-8');
+        sandboxesContext += `\n[SANDBOX DO CHAT: ${dir}]\n${content}\n-----------------------------------\n`;
+      }
+    }
+  }
+  return sandboxesContext;
+}
+
+import { syncCoreMemoryToVector, addVectorMemory } from './vectorMemory.js';
+
+if (process.env.NODE_ENV !== 'test') {
+  setTimeout(() => {
+    syncCoreMemoryToVector().catch(err => {
+      logger.error('[MEMORY] Erro na sincronização inicial com vetor:', err);
+    });
+  }, 1000);
 }
 
 /**
@@ -89,8 +109,14 @@ export function updateMemory(chatJid: string, isTrustedChat: boolean, newContent
       fs.writeFileSync(MEMORY_FILE, newContent, 'utf-8');
       logger.info('[MEMORY] Global memory updated successfully.');
     }
+
+    // Sincroniza em segundo plano no banco vetorial RAG
+    syncCoreMemoryToVector().catch(err => {
+      logger.error('[MEMORY] Falha ao sincronizar atualização da memória para o vetor RAG:', err);
+    });
   } catch (error) {
     logger.error('Failed to update memory file:', error);
     throw new Error('Não foi possível salvar a memória.');
   }
 }
+

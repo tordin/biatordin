@@ -2,40 +2,28 @@ import { SystemMessage, AIMessage, HumanMessage, RemoveMessage, ToolMessage } fr
 import { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { AgentState } from "./state.js";
-import { modelPro as model } from "../llm/model.js";
-import { sanitizeMessagesForModel } from "../utils/sanitize.js";
+import { modelFlash as model, modelFlashStructured } from "../llm/model.js";
+import { sanitizeMessagesForModel, buildRecencyAnchoredHistory } from "../utils/sanitize.js";
 import { cleanMarkdownForWhatsApp } from "../transport/formatters.js";
 import { logger } from "../utils/logger.js";
 import { getMemory, updateMemory } from "../memory/coreMemory.js";
+import { searchVectorMemory, addVectorMemory, listVectorMemories, searchEntityMemory } from "../memory/vectorMemory.js";
+import { getTasksForChat } from "../memory/tasks.js";
 
-const MEMORY_PROMPT = 
-  "Você é a Bia, uma assistente virtual, atuando agora como a Especialista em Memória Interna.\n" +
-  "Sua função é ler a sua memória atual, entender a solicitação do usuário e decidir qual deve ser o novo conteúdo da sua memória.\n" +
-  "Sua memória é um arquivo Markdown privado, onde você anota fatos sobre o usuário, preferências, listas de compras, ideias, tarefas e qualquer outra coisa que ele peça para você lembrar.\n\n" +
-  "PERSONA E IDENTIDADE FEMININA (Crucial):\n" +
-  "- Você é a Bia, uma mulher e assistente virtual. Nunca se refira a si mesma no masculino.\n" +
-  "- Use SEMPRE adjetivos, particípios e flexões de gênero no feminino ao falar de si mesma ou de suas ações (ex: diga 'sincera', 'obrigada', 'atenta', 'pronta', 'preocupada', 'cansada', 'ocupada', 'confiante').\n" +
-  "- NUNCA use palavras masculinas para si mesma como 'sincero', 'obrigado', 'atento', 'pronto', 'preocupado', 'cansado', 'ocupado'.\n\n" +
-  "REGRAS PARA A MEMÓRIA:\n" +
-  "- Mantenha a memória bem organizada com títulos Markdown (ex: # Preferências, # Lista de Compras, # Gerenciamento de Tarefas).\n" +
-  "- Adicione, modifique ou remova itens conforme solicitado pelo usuário.\n" +
-  "- GERENCIAMENTO DE TAREFAS: Ao anotar tarefas, utilize listas com checkboxes de markdown (- [ ] pendente, - [x] concluído). Inclua contexto sobre urgência (ex: Urgência: Alta/Média/Baixa) e datas/prazos (ex: Data: 20/07). Sempre atualize o status (marcando com 'x' ou apagando) quando o usuário informar que concluiu.\n" +
-  "- Tente manter as informações concisas mas úteis para o futuro.\n\n" +
-  "Lembre-se de ser natural e amigável na sua mensagem para o usuário, seguindo o estilo do WhatsApp (sem formatação complexa).";
+import { getSkill } from "../skills/registry.js";
+
+const MEMORY_PROMPT = getSkill("memoryAgent")?.detailedPrompt || "";
 
 const MAX_MEMORY_AGENT_CALLS = 5;
 
 /**
- * Tool definition for readMemory.
- * The LLM calls this when it wants to READ the current memory content
- * (e.g. the user asks "what's in your memory?", "list my tasks", etc.).
- * When NOT called, the LLM proceeds to structured output for WRITE operations.
+ * Ferramentas de Memória da Bia (Estática + RAG Vetorial em SQLite)
  */
 const readMemoryTool = {
   type: "function" as const,
   function: {
     name: "readMemory",
-    description: "Lê o conteúdo completo da memória da Bia. Use quando o usuário perguntar o que está anotado, quais informações você tem sobre ele, ou quiser consultar algum dado específico da memória.",
+    description: "Lê o conteúdo principal/estruturado do arquivo de memória da Bia.",
     parameters: {
       type: "object",
       properties: {},
@@ -44,14 +32,74 @@ const readMemoryTool = {
   }
 };
 
+const searchSemanticMemoryTool = {
+  type: "function" as const,
+  function: {
+    name: "searchSemanticMemory",
+    description: "Realiza uma busca semântica RAG por similaridade vetorial (sqlite-vec) em todas as memórias passadas, anotações, combinados e preferências anotadas.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "A pergunta ou os termos-chave contextuais para a busca semântica (ex: 'presente aniversario irmao maio', 'marca racao cachorro', 'combinado viagem')"
+        }
+      },
+      required: ["query"]
+    }
+  }
+};
+
+const storeSemanticMemoryTool = {
+  type: "function" as const,
+  function: {
+    name: "storeSemanticMemory",
+    description: "Armazena um fato específico, combinado, anotação ou preferência na memória semântica de longo prazo em SQLite (vetorizado via sqlite-vec).",
+    parameters: {
+      type: "object",
+      properties: {
+        content: {
+          type: "string",
+          description: "O texto da memória a ser salva com contexto completo (ex: 'Combinei de comprar um relógio smartwatch de presente de aniversário para o meu irmão em maio')"
+        },
+        category: {
+          type: "string",
+          description: "Categoria da memória: 'fato', 'preferencia', 'combinado', 'anotacao', 'compra'"
+        }
+      },
+      required: ["content"]
+    }
+  }
+};
+
+const searchEventSummaryTool = {
+  type: "function" as const,
+  function: {
+    name: "searchEventSummary",
+    description: "Busca AMPLA por entidade/evento/projeto. Use quando o usuário pedir 'tudo sobre X', 'me fala tudo da festa', 'lista tudo que sabe sobre o aniversário'. Combina busca textual com tarefas pendentes para montar um painel completo.",
+    parameters: {
+      type: "object",
+      properties: {
+        keywords: {
+          type: "array",
+          items: { type: "string" },
+          description: "Lista de palavras-chave do evento/projeto (ex: ['festa', 'cecilia', 'aniversario'])"
+        }
+      },
+      required: ["keywords"]
+    }
+  }
+};
+
 export async function memoryAgentNode(state: typeof AgentState.State, config?: RunnableConfig) {
   const threadId = config?.configurable?.thread_id || "";
   const chatJid = state.contextData.chatJid || "unknown";
   const isTrustedChat = !!state.contextData.isTrustedChat;
+  const activeTopicTitle = state.contextData.active_topic_title || "";
   
   logger.logAgentStart("memoryAgent", threadId, state.contextData);
 
-  // Enforce call limit: skip LLM invocation if memoryAgent already called 5+ times
+  // Limite de segurança de chamadas
   const executionLog = state.contextData.executionLog || [];
   const memoryAgentCallCount = executionLog.filter(e => e === "memoryAgent").length;
   if (memoryAgentCallCount >= MAX_MEMORY_AGENT_CALLS) {
@@ -70,55 +118,171 @@ export async function memoryAgentNode(state: typeof AgentState.State, config?: R
   try {
     const currentMemory = getMemory(chatJid, isTrustedChat);
 
-    // Build system prompt with current memory content
+    const topicContextHint = activeTopicTitle
+      ? `\n\n[ASSUNTO ATIVO DA CONVERSA]: "${activeTopicTitle}"\n` +
+        `REGRA CRÍTICA DE CONTEXTUALIZAÇÃO: Ao salvar qualquer memória com storeSemanticMemory, SEMPRE inclua o assunto/evento ativo como contexto no texto da memória. ` +
+        `Por exemplo, se o assunto ativo é "Festa da Cecilia" e o usuário diz "anote que João confirmou", grave: "Festa da Cecilia: João confirmou presença". ` +
+        `NUNCA grave fatos isolados como "João confirmou" sem referência ao assunto.`
+      : "";
+
     const systemPrompt = new SystemMessage(
-      `${MEMORY_PROMPT}\n\n[MEMÓRIA ATUAL DA BIA]:\n${currentMemory}`
+      `${MEMORY_PROMPT}\n\n[MEMÓRIA DE PERFIL DA BIA]:\n${currentMemory}${topicContextHint}`
     );
 
     const cleanHistory = state.messages.filter(msg => !(msg instanceof SystemMessage) && !(msg instanceof RemoveMessage));
     const sanitizedHistory = sanitizeMessagesForModel(cleanHistory);
-    const messagesForModel = [systemPrompt, ...sanitizedHistory.slice(-5)];
+    const messagesForModel = [systemPrompt, ...buildRecencyAnchoredHistory(sanitizedHistory, 12)];
 
-    // Step 1: Invoke model with bindTools — LLM decides: call readMemory or structured output
-    const memoryModel = model.bindTools([readMemoryTool]);
+    // Modelo com ferramentas RAG vetoriais e leitura estática
+    const memoryModel = model.bindTools([storeSemanticMemoryTool, readMemoryTool, searchSemanticMemoryTool, searchEventSummaryTool]);
 
     const response = await memoryModel.invoke(messagesForModel, {
       metadata: { agentName: "memoryAgent", threadId }
     });
 
-    // Step 2: If LLM called readMemory tool → feed result back and get natural response
+    // Se o modelo acionou uma ou mais ferramentas
     if (response.tool_calls && response.tool_calls.length > 0) {
-      const toolCall = response.tool_calls[0];
-      if (toolCall.name === "readMemory") {
-        logger.info("[MEMORY_AGENT] Tool readMemory chamada. Retornando conteúdo da memória para o LLM.");
+      const toolResultMsgs: ToolMessage[] = [];
+      let isStoreMemory = false;
+      let primarySearchSummary = "";
 
-        // Feed the tool result back to the model so it can formulate a natural response
-        const toolResultMsg = new ToolMessage({
-          content: currentMemory,
-          name: "readMemory",
-          tool_call_id: toolCall.id || "read"
-        });
+      for (const toolCall of response.tool_calls) {
+        if (toolCall.name === "searchSemanticMemory") {
+          const query = (toolCall.args as any)?.query || "";
+          logger.info(`[MEMORY_AGENT] Executando busca semântica RAG para a query: "${query}"`);
 
-        const followUpMessages = [...messagesForModel, response, toolResultMsg];
-        const followUpResponse = await memoryModel.invoke(followUpMessages, {
-          metadata: { agentName: "memoryAgent", threadId, step: "read-followup" }
-        });
+          const results = await searchVectorMemory(query, 5, chatJid, isTrustedChat);
+          const searchSummary = results.length > 0
+            ? results.map((r, i) => `${i + 1}. [${r.category.toUpperCase()}] (${r.createdAt}): ${r.content}`).join("\n")
+            : "Nenhuma memória semântica correspondente foi encontrada no banco.";
 
-        const finalResponse = typeof followUpResponse.content === "string"
-          ? cleanMarkdownForWhatsApp(followUpResponse.content)
-          : "Aqui está o que tenho na memória.";
+          primarySearchSummary = searchSummary;
 
+          toolResultMsgs.push(new ToolMessage({
+            content: `Resultados da busca semântica RAG:\n\n${searchSummary}`,
+            name: "searchSemanticMemory",
+            tool_call_id: toolCall.id || "search_semantic"
+          }));
+        } else if (toolCall.name === "storeSemanticMemory") {
+          isStoreMemory = true;
+          let { content, category = "anotacao" } = (toolCall.args as any) || {};
+
+          // Auto-enrich: se o assunto ativo é sobre um evento/projeto e o conteúdo não o menciona,
+          // prefixa automaticamente com o contexto do assunto para evitar memórias órfãs.
+          if (activeTopicTitle && content) {
+            const topicWords = activeTopicTitle.toLowerCase().split(/\s+/).filter((w: string) => w.length > 2);
+            const contentLower = content.toLowerCase();
+            const hasTopicReference = topicWords.some((word: string) => contentLower.includes(word));
+            if (!hasTopicReference) {
+              content = `${activeTopicTitle}: ${content}`;
+              logger.info(`[MEMORY_AGENT] Auto-enrich: memória prefixada com assunto ativo "${activeTopicTitle}"`);
+            }
+          }
+
+          logger.info(`[MEMORY_AGENT] Salvando nova memória semântica RAG: "${content}"`);
+
+          const memId = await addVectorMemory(content, category, chatJid);
+
+          toolResultMsgs.push(new ToolMessage({
+            content: `Memória semântica gravada com sucesso no SQLite (ID: ${memId}).`,
+            name: "storeSemanticMemory",
+            tool_call_id: toolCall.id || "store_semantic"
+          }));
+        } else if (toolCall.name === "searchEventSummary") {
+          const keywords: string[] = (toolCall.args as any)?.keywords || [];
+          logger.info(`[MEMORY_AGENT] Executando busca ampla por entidade: [${keywords.join(', ')}]`);
+
+          // 1. Busca ampla por texto nas memórias vetoriais
+          const entityResults = await searchEntityMemory(keywords, chatJid, 20, isTrustedChat);
+          const memorySummary = entityResults.length > 0
+            ? entityResults.map((r, i) => `${i + 1}. [${r.category.toUpperCase()}] (${r.createdAt}): ${r.content}`).join("\n")
+            : "Nenhuma memória encontrada para essas palavras-chave.";
+
+          // 2. Busca tarefas pendentes com keywords no título
+          let tasksSummary = "";
+          try {
+            const allTasks = await getTasksForChat(chatJid, 'pending');
+            const relevantTasks = allTasks.filter(t => 
+              keywords.some(kw => t.title.toLowerCase().includes(kw.toLowerCase()) || t.category.toLowerCase().includes(kw.toLowerCase()))
+            );
+            if (relevantTasks.length > 0) {
+              tasksSummary = "\n\nTAREFAS PENDENTES RELACIONADAS:\n" + relevantTasks.map((t, i) => 
+                `${i + 1}. [${t.urgency}] ${t.title} (Categoria: ${t.category}${t.dueDate ? `, Prazo: ${t.dueDate}` : ''})`
+              ).join("\n");
+            } else {
+              tasksSummary = "\n\nTAREFAS PENDENTES RELACIONADAS: Nenhuma tarefa pendente encontrada para esse evento.";
+            }
+          } catch (taskErr) {
+            logger.warn('[MEMORY_AGENT] Erro ao buscar tarefas relacionadas:', taskErr);
+            tasksSummary = "\n\nTAREFAS: Não foi possível consultar as tarefas.";
+          }
+
+          // 3. Busca semântica complementar com as keywords em frase
+          let semanticExtra = "";
+          try {
+            const semanticResults = await searchVectorMemory(keywords.join(' '), 10, chatJid, isTrustedChat);
+            // Filter out duplicates already in entityResults
+            const entityIds = new Set(entityResults.map(r => r.id));
+            const newResults = semanticResults.filter(r => !entityIds.has(r.id));
+            if (newResults.length > 0) {
+              semanticExtra = "\n\nMEMÓRIAS ADICIONAIS (busca semântica):\n" + newResults.map((r, i) => 
+                `${i + 1}. [${r.category.toUpperCase()}] (${r.createdAt}): ${r.content}`
+              ).join("\n");
+            }
+          } catch (semErr) {
+            logger.warn('[MEMORY_AGENT] Erro na busca semântica complementar:', semErr);
+          }
+
+          const fullSummary = `MEMÓRIAS ENCONTRADAS:\n\n${memorySummary}${semanticExtra}${tasksSummary}`;
+          primarySearchSummary = fullSummary;
+
+          toolResultMsgs.push(new ToolMessage({
+            content: fullSummary,
+            name: "searchEventSummary",
+            tool_call_id: toolCall.id || "search_entity"
+          }));
+        } else if (toolCall.name === "readMemory") {
+          logger.info("[MEMORY_AGENT] Tool readMemory chamada.");
+
+          toolResultMsgs.push(new ToolMessage({
+            content: currentMemory,
+            name: "readMemory",
+            tool_call_id: toolCall.id || "read"
+          }));
+        }
+      }
+
+      const followUpMessages = [...messagesForModel, response, ...toolResultMsgs];
+      const followUpResponse = await memoryModel.invoke(followUpMessages, {
+        metadata: { agentName: "memoryAgent", threadId, step: "tool-followup" }
+      });
+
+      const finalResponse = typeof followUpResponse.content === "string"
+        ? cleanMarkdownForWhatsApp(followUpResponse.content)
+        : primarySearchSummary || "Operação de memória concluída.";
+
+      if (isStoreMemory) {
         return {
-          messages: [new AIMessage(finalResponse)],
+          messages: [new ToolMessage({
+            content: `Memória salva com sucesso no banco RAG. Mensagem de confirmação:\n\n${finalResponse}`,
+            name: "memoryAgent",
+            tool_call_id: response.tool_calls[0].id || "store_semantic"
+          })],
           nextAgent: "supervisor",
           contextData: { newExecution: "memoryAgent" }
         };
       }
+
+      return {
+        messages: [new AIMessage(finalResponse)],
+        nextAgent: "supervisor",
+        contextData: { newExecution: "memoryAgent" }
+      };
     }
 
-    // Step 3: No tool call → WRITE operation via structured output
-    const structuredModel = model.withStructuredOutput(z.object({
-      newMemoryContent: z.string().describe("O conteúdo atualizado completo da memória em markdown"),
+    // Se nenhuma ferramenta foi chamada, procede para a atualização estruturada de perfil (escreve no Markdown e sincroniza no RAG)
+    const structuredModel = modelFlashStructured.withStructuredOutput(z.object({
+      newMemoryContent: z.string().describe("O conteúdo atualizado completo da memória de perfil em markdown"),
       responseToUser: z.string().describe("Mensagem de confirmação para o usuário")
     }), { name: "MemoryAgentDecision" });
 
@@ -126,15 +290,20 @@ export async function memoryAgentNode(state: typeof AgentState.State, config?: R
       metadata: { agentName: "memoryAgent", threadId, step: "write" }
     });
 
-    // Save the new memory only if it actually changed
+    let memoryChanged = false;
+
     if (parsed.newMemoryContent.trim() !== currentMemory.trim()) {
       updateMemory(chatJid, isTrustedChat, parsed.newMemoryContent);
       logger.info("[MEMORY_AGENT] Memória alterada. Gravando no disco.");
+      memoryChanged = true;
+    } else if (parsed.responseToUser && parsed.responseToUser.trim()) {
+      // Fallback: conteúdo inalterado mas LLM gerou resposta — salva no RAG como anotação
+      await addVectorMemory(parsed.responseToUser, "anotacao", chatJid);
+      logger.info("[MEMORY_AGENT] Memória inalterada, mas resposta do usuário salva como anotação RAG.");
     } else {
       logger.info("[MEMORY_AGENT] Memória inalterada. Pulando gravação.");
     }
 
-    // Format the response for WhatsApp
     const finalResponse = cleanMarkdownForWhatsApp(parsed.responseToUser);
 
     return {

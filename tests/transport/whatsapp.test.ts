@@ -1,7 +1,9 @@
 import { 
   getSilenceDelayForMessage, 
   BASE_SILENCE_THRESHOLD_MS, 
-  INCOMPLETE_SILENCE_THRESHOLD_MS 
+  INCOMPLETE_SILENCE_THRESHOLD_MS,
+  isMessageFromBia,
+  normalizeJid
 } from '../../src/transport/whatsapp.js';
 
 describe('WhatsApp Debounce Timing', () => {
@@ -41,3 +43,17 @@ describe('WhatsApp Debounce Timing', () => {
     expect(getSilenceDelayForMessage('quais são as corridas de f1')).toBe(5000);
   });
 });
+
+describe('WhatsApp Message Filtering & Account Isolation', () => {
+  it('should correctly normalize JIDs removing device suffixes', () => {
+    expect(normalizeJid('5511999999999:12@s.whatsapp.net')).toBe('5511999999999@s.whatsapp.net');
+    expect(normalizeJid('123456789:0@lid')).toBe('123456789@lid');
+    expect(normalizeJid('120363425678591898@g.us')).toBe('120363425678591898@g.us');
+  });
+
+  it('should return false for isMessageFromBia when botJids is empty or user is external', () => {
+    expect(isMessageFromBia('5511888888888@s.whatsapp.net')).toBe(false);
+    expect(isMessageFromBia('120363425678591898@g.us')).toBe(false);
+  });
+});
+

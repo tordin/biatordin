@@ -76,3 +76,39 @@ export function cleanJsonString(str: string): string {
   cleaned = cleaned.replace(/\\n/g, ' ').replace(/\s+/g, ' ');
   return cleaned;
 }
+
+/**
+ * Builds a recency-anchored history window for agent prompts.
+ * Inserts a SystemMessage demarcation between older context and the LAST message,
+ * so the LLM clearly knows which message is the current request and which messages
+ * are just historical context (preventing re-execution of old commands).
+ * 
+ * @param sanitizedHistory - Already sanitized message array
+ * @param windowSize - Number of recent messages to include (default 12)
+ * @returns Array of messages with a recency anchor marker
+ */
+export function buildRecencyAnchoredHistory(
+  sanitizedHistory: BaseMessage[],
+  windowSize: number = 12
+): BaseMessage[] {
+  const sliced = sanitizedHistory.slice(-windowSize);
+  
+  if (sliced.length <= 1) {
+    // Only one message or empty — no need for a demarcation
+    return sliced;
+  }
+
+  // Split into context (older) and current (last message)
+  const contextMessages = sliced.slice(0, -1);
+  const currentMessage = sliced[sliced.length - 1];
+
+  const anchorMarker = new SystemMessage(
+    "─── ATENÇÃO: FOCO NA MENSAGEM ATUAL ───\n" +
+    "As mensagens ACIMA são CONTEXTO HISTÓRICO da conversa. Use-as APENAS para dar sentido à mensagem abaixo.\n" +
+    "NÃO re-execute comandos, buscas ou ações de mensagens anteriores. Concentre-se EXCLUSIVAMENTE na mensagem a seguir.\n" +
+    "Se a mensagem a seguir for uma saudação simples ('oi', 'boa noite', 'bom dia'), responda naturalmente SEM referenciar tarefas antigas.\n" +
+    "─── MENSAGEM ATUAL DO USUÁRIO ───"
+  );
+
+  return [...contextMessages, anchorMarker, currentMessage];
+}

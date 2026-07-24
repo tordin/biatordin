@@ -30,7 +30,11 @@ export function scheduleRoutine(routine: Routine) {
             logger.info(`[ROUTINE MANAGER] Disparando rotina ID ${routine.id} para o chat ${routine.chatJid}`);
             // Injeta a mensagem formatada para a Bia saber que é uma rotina automática
             const formattedPrompt = `[Rotina Agendada] ${routine.prompt}`;
-            injectSystemMessage(routine.chatJid, formattedPrompt);
+            injectSystemMessage(routine.chatJid, formattedPrompt, 'main', {
+                triggerType: 'cron_routine',
+                routineId: routine.id,
+                routinePrompt: routine.prompt,
+            });
         });
 
         activeJobs.set(routine.id, job);

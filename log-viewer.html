@@ -3,23 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bia Log Viewer — Visualização de Agentes e Decisões</title>
+    <title>Bia Debug Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         /* ============================================================
-           CSS VARIÁVEIS — Tema Dark Melhorado
+           CSS VARIÁVEIS
            ============================================================ */
         :root {
-            --bg: #0a0e14;
-            --bg-surface: #11161e;
-            --bg-panel: #181e28;
-            --bg-hover: #1f2937;
-            --border: #1f2937;
-            --border-active: #374151;
+            --bg: #090d12;
+            --bg-surface: #0f1520;
+            --bg-panel: #141b27;
+            --bg-card: #18202e;
+            --bg-hover: #1e2840;
+            --bg-selected: #1a2640;
+            --border: #1e2a3a;
+            --border-active: #2a3f5e;
             --text: #e2e8f0;
-            --text-muted: #94a3b8;
-            --text-dim: #64748b;
+            --text-muted: #8fa3be;
+            --text-dim: #4a6080;
+            --radius: 10px;
+            --radius-sm: 6px;
+            --transition: 0.15s ease;
 
-            /* Cores por agente */
+            /* Trigger types */
+            --color-whatsapp: #25d366;
+            --color-cron: #f59e0b;
+            --color-system: #6366f1;
+            --color-startup: #94a3b8;
+            --color-connection: #38bdf8;
+
+            /* Outcomes */
+            --color-silent: #475569;
+            --color-responded: #22c55e;
+            --color-error: #ef4444;
+
+            /* Agents */
             --color-supervisor: #a78bfa;
             --color-chitchat: #38bdf8;
             --color-memoryAgent: #34d399;
@@ -32,1283 +51,1543 @@
             --color-securityAgent: #e879f9;
             --color-shoppingAgent: #2dd4bf;
             --color-whatsappAgent: #a3e635;
-            --color-topic_broker: #94a3b8;
 
-            /* Cores por tipo de evento */
-            --color-info: #64748b;
-            --color-debug: #8b5cf6;
-            --color-error: #ef4444;
-            --color-warn: #f59e0b;
+            /* Event types */
             --color-llm: #10b981;
             --color-tool: #ec4899;
             --color-agent: #06b6d4;
-
-            /* Outros */
-            --color-loop: #ef4444;
-            --color-finish: #6ee7b7;
             --color-decision: #fbbf24;
-            --radius: 8px;
-            --transition: 0.15s ease;
+            --color-info: #475569;
+            --color-warn: #f59e0b;
+            --color-err: #ef4444;
         }
 
         /* ============================================================
-           RESET E BASE
+           RESET
            ============================================================ */
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; overflow: hidden; }
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-family: 'Inter', -apple-system, sans-serif;
             background: var(--bg);
             color: var(--text);
+            font-size: 13px;
             display: flex;
             flex-direction: column;
         }
 
         /* ============================================================
-           BARRA SUPERIOR — Stats
+           BARRA SUPERIOR
            ============================================================ */
-        #stats-bar {
-            display: flex; gap: 16px; flex-wrap: wrap;
+        #topbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
             padding: 10px 20px;
             background: var(--bg-surface);
             border-bottom: 1px solid var(--border);
             flex-shrink: 0;
-            font-size: 0.82rem;
+            flex-wrap: wrap;
         }
-        .stat {
-            padding: 6px 14px; border-radius: 6px;
-            background: var(--bg-panel); border: 1px solid var(--border);
+        .topbar-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-right: 8px;
+        }
+        .topbar-title .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-whatsapp); }
+        .stat-pill {
+            padding: 4px 12px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 0.75rem;
             white-space: nowrap;
         }
-        .stat-label { color: var(--text-dim); margin-right: 4px; }
-        .stat-value { font-weight: 600; color: var(--text); }
-
-        /* ============================================================
-           LAYOUT PRINCIPAL — Sidebar + Conteúdo
-           ============================================================ */
-        #main-layout {
-            display: flex; flex: 1; overflow: hidden;
+        .stat-pill .lbl { color: var(--text-dim); margin-right: 4px; }
+        .stat-pill .val { font-weight: 600; }
+        #load-btn {
+            margin-left: auto;
+            padding: 6px 16px;
+            background: rgba(167,139,250,0.15);
+            border: 1px solid var(--color-supervisor);
+            border-radius: var(--radius-sm);
+            color: var(--color-supervisor);
+            cursor: pointer;
+            font-size: 0.78rem;
+            font-weight: 600;
+            transition: all var(--transition);
         }
+        #load-btn:hover { background: rgba(167,139,250,0.25); }
+        #file-input { display: none; }
 
         /* ============================================================
-           SIDEBAR ESQUERDA — Filtros
+           LAYOUT PRINCIPAL
+           ============================================================ */
+        #main-layout { display: flex; flex: 1; overflow: hidden; }
+
+        /* ============================================================
+           SIDEBAR
            ============================================================ */
         #sidebar {
-            width: 280px; flex-shrink: 0;
+            width: 260px;
+            flex-shrink: 0;
             background: var(--bg-surface);
             border-right: 1px solid var(--border);
-            display: flex; flex-direction: column;
+            display: flex;
+            flex-direction: column;
             overflow-y: auto;
-            padding: 16px;
-            gap: 16px;
-            font-size: 0.82rem;
+            padding: 14px;
+            gap: 14px;
+            font-size: 0.78rem;
         }
-        #sidebar h3 {
-            font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em;
-            color: var(--text-dim); margin-bottom: 4px;
+        .sidebar-section h4 {
+            font-size: 0.68rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-dim);
+            margin-bottom: 8px;
         }
-        .filter-group { display: flex; flex-direction: column; gap: 6px; }
-        .filter-row {
-            display: flex; align-items: center; gap: 8px;
-            padding: 4px 0; cursor: pointer; user-select: none;
-        }
-        .filter-row input[type="checkbox"] { accent-color: var(--color-supervisor); }
-        .filter-agent-dot {
-            width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
-        }
-        #search-input {
-            width: 100%; padding: 8px 12px; border-radius: 6px;
-            border: 1px solid var(--border); background: var(--bg-panel);
-            color: var(--text); font-size: 0.82rem; outline: none;
-        }
-        #search-input:focus { border-color: var(--color-supervisor); }
-        #search-input::placeholder { color: var(--text-dim); }
-        .toggle-row {
-            display: flex; align-items: center; justify-content: space-between;
-        }
-        .toggle-row label { cursor: pointer; }
-        .toggle-switch {
-            position: relative; width: 40px; height: 22px;
-            background: var(--border); border-radius: 11px; cursor: pointer;
-            transition: background var(--transition);
-        }
-        .toggle-switch.on { background: var(--color-supervisor); }
-        .toggle-switch::after {
-            content: ''; position: absolute; top: 3px; left: 3px;
-            width: 16px; height: 16px; border-radius: 50%; background: var(--text);
-            transition: transform var(--transition);
-        }
-        .toggle-switch.on::after { transform: translateX(18px); }
-        .sidebar-divider {
-            border: none; border-top: 1px solid var(--border); margin: 4px 0;
-        }
-        .metric-card {
-            background: var(--bg-panel); border: 1px solid var(--border);
-            border-radius: var(--radius); padding: 10px; font-size: 0.78rem;
-        }
-        .metric-card .metric-title { color: var(--text-dim); margin-bottom: 4px; }
-        .metric-card .metric-val { font-size: 1.1rem; font-weight: 600; }
-
-        /* ============================================================
-           ÁREA PRINCIPAL — Árvore de Decisão (Timeline Tree)
-           ============================================================ */
-        #main-content {
-            flex: 1; overflow-y: auto; padding: 20px;
-        }
-        .tree-node {
-            margin-left: 20px; border-left: 2px solid var(--border);
-            padding-left: 16px; position: relative;
-        }
-        .tree-node.root { margin-left: 0; border-left: none; padding-left: 0; }
-
-        /* Item de evento na árvore */
-        .event-card {
-            margin-bottom: 6px; position: relative;
-            border-radius: var(--radius);
+        #search-box {
+            width: 100%;
+            padding: 7px 10px;
+            border-radius: var(--radius-sm);
             border: 1px solid var(--border);
-            background: var(--bg-surface);
-            transition: border-color var(--transition);
+            background: var(--bg-panel);
+            color: var(--text);
+            font-size: 0.78rem;
+            outline: none;
+            font-family: inherit;
+        }
+        #search-box:focus { border-color: var(--color-supervisor); }
+        #search-box::placeholder { color: var(--text-dim); }
+        .filter-chip-group { display: flex; flex-wrap: wrap; gap: 5px; }
+        .filter-chip {
+            padding: 3px 10px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            background: var(--bg-panel);
+            color: var(--text-muted);
             cursor: pointer;
-        }
-        .event-card:hover { border-color: var(--border-active); }
-        .event-card.selected { border-color: var(--color-supervisor); box-shadow: 0 0 0 1px var(--color-supervisor); }
-        .event-card.loop { border-left: 3px solid var(--color-loop); }
-
-        /* Linha horizontal antes do card */
-        .tree-node > .event-card::before {
-            content: ''; position: absolute; top: 14px; left: -18px;
-            width: 16px; height: 2px; background: var(--border);
-        }
-        .tree-node.root > .event-card::before { display: none; }
-
-        /* Cabeçalho do card */
-        .event-card-header {
-            display: flex; align-items: center; gap: 10px;
-            padding: 8px 12px; flex-wrap: wrap;
-        }
-        .event-type-badge {
-            padding: 2px 8px; border-radius: 12px; font-size: 0.7rem;
-            font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
-            flex-shrink: 0;
-        }
-        .event-agent {
-            font-size: 0.8rem; font-weight: 600;
-        }
-        .event-time {
-            font-size: 0.75rem; color: var(--text-dim); margin-left: auto;
-            font-variant-numeric: tabular-nums;
-        }
-        .event-reason {
-            font-size: 0.8rem; color: var(--text-muted);
-            margin-left: 8px; font-style: italic;
-        }
-        .loop-badge {
-            padding: 2px 8px; border-radius: 12px; font-size: 0.7rem;
-            font-weight: 700; background: rgba(239,68,68,0.2); color: var(--color-loop);
-        }
-
-        /* Corpo expansível para LLM_START / LLM_END */
-        .event-card-body {
-            display: none; padding: 0 12px 12px 12px;
-        }
-        .event-card.expanded > .event-card-body { display: block; }
-
-        /* Side-by-side LLM */
-        .llm-side-by-side {
-            display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
-        }
-        @media (max-width: 800px) {
-            .llm-side-by-side { grid-template-columns: 1fr; }
-        }
-        .llm-panel {
-            background: var(--bg); border: 1px solid var(--border);
-            border-radius: 6px; overflow: hidden;
-        }
-        .llm-panel-title {
-            padding: 6px 10px; font-size: 0.72rem; font-weight: 700;
-            text-transform: uppercase; letter-spacing: 0.05em;
-            background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--border);
-        }
-        .llm-panel-content {
-            padding: 10px; font-size: 0.78rem; font-family: 'JetBrains Mono', 'Fira Code', monospace;
-            max-height: 400px; overflow-y: auto;
-            white-space: pre-wrap; word-break: break-word;
-            color: var(--text-muted); line-height: 1.5;
-        }
-        .llm-msg-role {
-            font-size: 0.7rem; font-weight: 700; color: var(--color-supervisor);
-            margin-top: 8px; margin-bottom: 2px;
-        }
-        .llm-msg-role:first-child { margin-top: 0; }
-        .llm-msg-content {
-            color: var(--text); font-size: 0.76rem; max-height: 150px; overflow-y: auto;
-            white-space: pre-wrap; word-break: break-word;
-        }
-        .llm-msg-truncated {
-            color: var(--color-warn); font-size: 0.7rem; font-style: italic; margin-top: 4px;
-        }
-
-        /* AGENT_DECISION destacado */
-        .event-card.decision { border-color: rgba(251,191,36,0.4); background: rgba(251,191,36,0.04); }
-        .decision-detail { padding: 8px 0; font-size: 0.82rem; }
-        .decision-label { color: var(--text-dim); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
-        .decision-nextAgent { font-weight: 700; color: var(--color-finish); }
-        .decision-response { color: var(--text-muted); margin-top: 4px; font-style: italic; }
-
-        /* ============================================================
-           PAINEL INFERIOR — Detalhes do evento
-           ============================================================ */
-        #detail-panel {
-            height: 280px; flex-shrink: 0;
-            background: var(--bg-surface);
-            border-top: 1px solid var(--border);
-            display: flex; flex-direction: column;
-        }
-        #detail-panel.hidden { height: 0; border-top: none; overflow: hidden; }
-        #detail-tabs {
-            display: flex; gap: 0; border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
-        }
-        .detail-tab {
-            padding: 10px 20px; font-size: 0.78rem; font-weight: 600;
-            cursor: pointer; border-bottom: 2px solid transparent;
-            color: var(--text-dim); transition: all var(--transition);
+            font-size: 0.72rem;
+            font-weight: 500;
+            transition: all var(--transition);
             user-select: none;
         }
-        .detail-tab:hover { color: var(--text); }
-        .detail-tab.active { color: var(--color-supervisor); border-bottom-color: var(--color-supervisor); }
-        #detail-content {
-            flex: 1; overflow-y: auto; padding: 16px;
-            font-family: 'JetBrains Mono', 'Fira Code', monospace;
-            font-size: 0.78rem; white-space: pre-wrap; word-break: break-word;
+        .filter-chip.active {
+            border-color: currentColor;
+            background: rgba(255,255,255,0.05);
+        }
+        .filter-chip.chip-wamsg { color: var(--color-whatsapp); }
+        .filter-chip.chip-cron { color: var(--color-cron); }
+        .filter-chip.chip-system { color: var(--color-system); }
+        .filter-chip.chip-silent { color: var(--color-silent); }
+        .filter-chip.chip-responded { color: var(--color-responded); }
+        .filter-chip.chip-error { color: var(--color-error); }
+        .sidebar-divider { border: none; border-top: 1px solid var(--border); }
+
+        .metric-block {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 8px 10px;
+            font-size: 0.75rem;
+        }
+        .metric-block .m-title { color: var(--text-dim); font-size: 0.68rem; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.05em; }
+        .metric-block .m-row { display: flex; justify-content: space-between; color: var(--text-muted); margin-top: 3px; }
+        .metric-block .m-row span:last-child { color: var(--text); font-weight: 600; }
+
+        /* ============================================================
+           ÁREA PRINCIPAL: Lista de Triggers (Nível 1)
+           ============================================================ */
+        #triggers-panel {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        /* Card de trigger (Nível 1) */
+        .trigger-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: border-color var(--transition), background var(--transition);
+            overflow: hidden;
+        }
+        .trigger-card:hover { border-color: var(--border-active); background: var(--bg-hover); }
+        .trigger-card.expanded { border-color: var(--border-active); }
+        .trigger-card.selected { border-color: var(--color-supervisor); }
+
+        .trigger-card-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+        }
+
+        .trigger-icon {
+            font-size: 1rem;
+            flex-shrink: 0;
+            width: 24px;
+            text-align: center;
+        }
+
+        .trigger-meta {
+            flex: 1;
+            min-width: 0;
+        }
+        .trigger-who {
+            font-weight: 600;
+            font-size: 0.82rem;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .trigger-who .acct-badge {
+            font-size: 0.65rem;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.06);
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .trigger-msg {
             color: var(--text-muted);
+            font-size: 0.78rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-top: 2px;
+        }
+
+        .trigger-right {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .trigger-time {
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            font-variant-numeric: tabular-nums;
+        }
+        .outcome-pill {
+            padding: 2px 9px;
+            border-radius: 12px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .outcome-pill.silent { background: rgba(71,85,105,0.2); color: var(--color-silent); }
+        .outcome-pill.responded { background: rgba(34,197,94,0.12); color: var(--color-responded); }
+        .outcome-pill.error { background: rgba(239,68,68,0.15); color: var(--color-error); }
+        .outcome-pill.pending { background: rgba(255,255,255,0.05); color: var(--text-dim); }
+
+        .agents-used {
+            font-size: 0.68rem;
+            color: var(--text-dim);
+            display: flex;
+            gap: 3px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .agent-dot {
+            width: 6px; height: 6px; border-radius: 50%; display: inline-block;
         }
 
         /* ============================================================
-           DROPZONE (tela inicial)
+           TIMELINE EXPANDIDA (Nível 2)
+           ============================================================ */
+        .trigger-timeline {
+            display: none;
+            border-top: 1px solid var(--border);
+            padding: 10px 14px 14px 14px;
+        }
+        .trigger-card.expanded .trigger-timeline { display: block; }
+
+        .timeline-item {
+            display: flex;
+            gap: 10px;
+            margin-top: 8px;
+            position: relative;
+        }
+        .timeline-item:first-child { margin-top: 0; }
+
+        /* Linha vertical conectando os itens */
+        .timeline-line {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex-shrink: 0;
+            width: 20px;
+        }
+        .timeline-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid;
+            flex-shrink: 0;
+            margin-top: 4px;
+            background: var(--bg);
+        }
+        .timeline-vline {
+            flex: 1;
+            width: 1px;
+            background: var(--border);
+            margin-top: 2px;
+            min-height: 12px;
+        }
+        .timeline-item:last-child .timeline-vline { display: none; }
+
+        .timeline-content { flex: 1; min-width: 0; padding-bottom: 4px; }
+        .timeline-header {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .timeline-type-badge {
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            padding: 1px 6px;
+            border-radius: 4px;
+        }
+        .timeline-agent-name {
+            font-size: 0.78rem;
+            font-weight: 600;
+        }
+        .timeline-detail {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+            font-style: italic;
+        }
+        .timeline-time {
+            font-size: 0.68rem;
+            color: var(--text-dim);
+            margin-left: auto;
+            font-variant-numeric: tabular-nums;
+            flex-shrink: 0;
+        }
+
+        /* Botão "Ver chamada LLM" dentro da timeline */
+        .llm-call-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+        }
+        .llm-summary-pill {
+            font-size: 0.68rem;
+            color: var(--text-dim);
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 7px;
+        }
+        .btn-view-llm {
+            font-size: 0.68rem;
+            font-weight: 600;
+            color: var(--color-llm);
+            background: rgba(16,185,129,0.08);
+            border: 1px solid rgba(16,185,129,0.25);
+            border-radius: 4px;
+            padding: 2px 8px;
+            cursor: pointer;
+            transition: all var(--transition);
+            white-space: nowrap;
+        }
+        .btn-view-llm:hover { background: rgba(16,185,129,0.18); }
+
+        /* Resposta final na timeline */
+        .final-response-box {
+            background: rgba(34,197,94,0.05);
+            border: 1px solid rgba(34,197,94,0.15);
+            border-radius: var(--radius-sm);
+            padding: 8px 10px;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .silent-box {
+            background: rgba(71,85,105,0.08);
+            border: 1px solid rgba(71,85,105,0.2);
+            border-radius: var(--radius-sm);
+            padding: 6px 10px;
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+
+        /* ============================================================
+           MODAL DE LLM CALL (Nível 3)
+           ============================================================ */
+        #llm-modal-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 100;
+            backdrop-filter: blur(3px);
+        }
+        #llm-modal-backdrop.open { display: flex; align-items: center; justify-content: center; }
+
+        #llm-modal {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-active);
+            border-radius: 14px;
+            width: calc(100vw - 60px);
+            max-width: 1200px;
+            height: calc(100vh - 80px);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 25px 80px rgba(0,0,0,0.6);
+        }
+
+        #llm-modal-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        #llm-modal-title {
+            font-weight: 700;
+            font-size: 0.88rem;
+            flex: 1;
+        }
+        #llm-modal-meta {
+            font-size: 0.72rem;
+            color: var(--text-dim);
+        }
+        #llm-modal-close {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            width: 28px; height: 28px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            transition: all var(--transition);
+        }
+        #llm-modal-close:hover { background: rgba(239,68,68,0.15); color: var(--color-error); border-color: var(--color-error); }
+
+        #llm-modal-body {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            flex: 1;
+            overflow: hidden;
+            gap: 0;
+        }
+
+        .llm-panel {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border-right: 1px solid var(--border);
+        }
+        .llm-panel:last-child { border-right: none; }
+
+        .llm-panel-title {
+            padding: 10px 16px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            background: rgba(255,255,255,0.02);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .llm-panel-title .token-est {
+            margin-left: auto;
+            font-size: 0.68rem;
+            font-weight: 400;
+            color: var(--text-dim);
+            text-transform: none;
+            letter-spacing: 0;
+        }
+
+        .llm-panel-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding: 14px 16px;
+        }
+
+        /* Mensagens do prompt */
+        .prompt-msg { margin-bottom: 14px; }
+        .prompt-msg:last-child { margin-bottom: 0; }
+        .prompt-msg-role {
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .prompt-msg-role .role-badge {
+            padding: 1px 7px;
+            border-radius: 10px;
+            font-size: 0.62rem;
+        }
+        .role-SYSTEM { color: #94a3b8; }
+        .role-SYSTEM .role-badge { background: rgba(148,163,184,0.15); color: #94a3b8; }
+        .role-HUMAN { color: var(--color-whatsapp); }
+        .role-HUMAN .role-badge { background: rgba(37,211,102,0.12); color: var(--color-whatsapp); }
+        .role-AI { color: var(--color-supervisor); }
+        .role-AI .role-badge { background: rgba(167,139,250,0.12); color: var(--color-supervisor); }
+        .role-TOOL { color: var(--color-tool); }
+        .role-TOOL .role-badge { background: rgba(236,72,153,0.12); color: var(--color-tool); }
+
+        .prompt-msg-content {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            line-height: 1.55;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 8px 10px;
+            max-height: 250px;
+            overflow-y: auto;
+        }
+        .prompt-msg-chars {
+            font-size: 0.65rem;
+            color: var(--text-dim);
+            margin-top: 3px;
+            text-align: right;
+        }
+
+        /* Resposta do modelo */
+        .output-block {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            line-height: 1.55;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .tool-call-block {
+            background: rgba(236,72,153,0.06);
+            border: 1px solid rgba(236,72,153,0.2);
+        }
+        .tool-call-name {
+            font-weight: 700;
+            color: var(--color-tool);
+            font-size: 0.73rem;
+            margin-bottom: 6px;
+        }
+
+        #llm-modal-footer {
+            padding: 10px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 14px;
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+        .cost-item { display: flex; gap: 5px; }
+        .cost-item strong { color: var(--text); }
+
+        /* ============================================================
+           DROPZONE OVERLAY
            ============================================================ */
         #dropzone-overlay {
-            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            position: absolute; inset: 0;
             display: flex; align-items: center; justify-content: center;
-            background: var(--bg); z-index: 10;
+            background: var(--bg); z-index: 20;
         }
         #dropzone-overlay.hidden { display: none; }
-        .dropzone-box {
-            border: 2px dashed var(--border);
-            border-radius: 16px; padding: 60px 80px;
+        .dz-box {
+            border: 2px dashed var(--border-active);
+            border-radius: 20px; padding: 70px 100px;
             text-align: center; cursor: pointer;
             transition: all 0.2s ease;
-            background: rgba(17,22,30,0.6);
         }
-        .dropzone-box:hover { border-color: var(--color-supervisor); background: rgba(167,139,250,0.03); }
-        .dropzone-box h2 { font-size: 1.3rem; font-weight: 600; margin-bottom: 8px; }
-        .dropzone-box p { color: var(--text-dim); font-size: 0.9rem; }
-        #dropzone-file-input { display: none; }
+        .dz-box:hover { border-color: var(--color-supervisor); background: rgba(167,139,250,0.03); }
+        .dz-box h2 { font-size: 1.4rem; font-weight: 700; margin-bottom: 6px; }
+        .dz-box p { color: var(--text-dim); font-size: 0.9rem; }
 
         /* ============================================================
-           EMPTY STATE
+           EMPTY STATE / GLOBAL LOGS SECTION
            ============================================================ */
-        .empty-state {
-            text-align: center; padding: 60px 20px; color: var(--text-dim);
+        .empty-state { text-align: center; padding: 60px 20px; color: var(--text-dim); }
+        .empty-state h3 { font-size: 1rem; margin-bottom: 8px; color: var(--text-muted); }
+
+        .section-header {
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            color: var(--text-dim);
+            padding: 6px 0;
+            margin-top: 10px;
+            margin-bottom: 4px;
+            border-bottom: 1px solid var(--border);
         }
-        .empty-state h3 { font-size: 1.1rem; margin-bottom: 8px; color: var(--text-muted); }
+        .section-header:first-child { margin-top: 0; }
+
+        /* Legacy / global event card (for non-trigger logs) */
+        .global-card {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 6px 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+        .global-card .ev-badge {
+            font-size: 0.62rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 1px 6px;
+            border-radius: 4px;
+            flex-shrink: 0;
+        }
 
         /* ============================================================
            SCROLLBARS
            ============================================================ */
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: var(--border-active); }
+        ::-webkit-scrollbar-thumb { background: var(--border-active); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3a4f6e; }
     </style>
 </head>
 <body>
 
-    <!-- Tela inicial: Dropzone -->
-    <div id="dropzone-overlay">
-        <div class="dropzone-box" id="dropzone-box">
-            <h2>📊 Bia Log Viewer</h2>
-            <p>Clique ou arraste o arquivo <strong>bia_detailed.jsonl</strong> para analisar</p>
-            <input type="file" id="dropzone-file-input" accept=".jsonl,.log">
+<!-- Dropzone -->
+<div id="dropzone-overlay">
+    <div class="dz-box" id="dz-box">
+        <h2>📊 Bia Debug Dashboard</h2>
+        <p>Clique ou arraste o arquivo <strong>bia_detailed.jsonl</strong></p>
+        <input type="file" id="dz-file-input" accept=".jsonl,.log" style="display:none">
+    </div>
+</div>
+
+<!-- Topbar -->
+<div id="topbar">
+    <div class="topbar-title">
+        <div class="dot"></div>
+        Bia Debug Dashboard
+    </div>
+    <div class="stat-pill"><span class="lbl">Triggers:</span><span class="val" id="stat-triggers">0</span></div>
+    <div class="stat-pill"><span class="lbl">LLM Calls:</span><span class="val" id="stat-llm">0</span></div>
+    <div class="stat-pill"><span class="lbl">Tokens est.:</span><span class="val" id="stat-tokens">0</span></div>
+    <div class="stat-pill"><span class="lbl">Custo est.:</span><span class="val" id="stat-cost">$0.00</span></div>
+    <div class="stat-pill"><span class="lbl">Erros:</span><span class="val" id="stat-errors" style="color:var(--color-error)">0</span></div>
+    <button id="load-btn">📂 Carregar arquivo</button>
+    <input type="file" id="file-input" accept=".jsonl,.log">
+</div>
+
+<!-- Layout principal -->
+<div id="main-layout">
+
+    <!-- Sidebar -->
+    <div id="sidebar">
+        <div class="sidebar-section">
+            <h4>🔍 Busca</h4>
+            <input type="text" id="search-box" placeholder="Buscar em mensagens, agentes...">
         </div>
-    </div>
 
-    <!-- Barra de Stats (escondida até carregar) -->
-    <div id="stats-bar" style="display:none;">
-        <div class="stat"><span class="stat-label">Eventos:</span><span class="stat-value" id="stat-events">0</span></div>
-        <div class="stat"><span class="stat-label">Agentes:</span><span class="stat-value" id="stat-agents">0</span></div>
-        <div class="stat"><span class="stat-label">LLM Calls:</span><span class="stat-value" id="stat-llm">0</span></div>
-        <div class="stat"><span class="stat-label">Tok. Entrada Est.:</span><span class="stat-value" id="stat-tok-in">0</span></div>
-        <div class="stat"><span class="stat-label">Tok. Saída Est.:</span><span class="stat-value" id="stat-tok-out">0</span></div>
-        <div class="stat"><span class="stat-label">Custo Est.:</span><span class="stat-value" id="stat-cost">$0.00</span></div>
-        <div class="stat"><span class="stat-label">Loops:</span><span class="stat-value" id="stat-loops">0</span></div>
-    </div>
+        <hr class="sidebar-divider">
 
-    <!-- Layout Principal -->
-    <div id="main-layout" style="display:none;">
-
-        <!-- Sidebar de Filtros -->
-        <div id="sidebar">
-            <h3>🔍 Busca</h3>
-            <input type="text" id="search-input" placeholder="Buscar no conteúdo...">
-
-            <hr class="sidebar-divider">
-
-            <h3>🤖 Agentes</h3>
-            <div class="filter-group" id="agent-filters"></div>
-
-            <hr class="sidebar-divider">
-
-            <h3>⚙️ Modo de Exibição</h3>
-            <div class="toggle-row">
-                <label for="toggle-decisions">🎯 Apenas Decisões</label>
-                <div class="toggle-switch" id="toggle-decisions" onclick="toggleDecisionsOnly()"></div>
-            </div>
-            <div class="toggle-row" style="margin-top:6px;">
-                <label for="toggle-expand">📖 Expandir LLM Input/Output</label>
-                <div class="toggle-switch" id="toggle-expand" onclick="toggleExpandAll()"></div>
-            </div>
-
-            <hr class="sidebar-divider">
-
-            <h3>📈 Métricas</h3>
-            <div class="metric-card">
-                <div class="metric-title">LLM Calls por Agente</div>
-                <div class="metric-val" id="metric-llm-per-agent" style="font-size:0.78rem;"></div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-title">Agentes Mais Chamados</div>
-                <div class="metric-val" id="metric-top-agents" style="font-size:0.78rem;"></div>
+        <div class="sidebar-section">
+            <h4>⚡ Tipo de Trigger</h4>
+            <div class="filter-chip-group">
+                <div class="filter-chip chip-wamsg active" data-filter="type" data-val="whatsapp_message" onclick="toggleFilter(this)">💬 WhatsApp</div>
+                <div class="filter-chip chip-cron active" data-filter="type" data-val="cron_routine" onclick="toggleFilter(this)">⏰ Cron</div>
+                <div class="filter-chip chip-system active" data-filter="type" data-val="system_inject" onclick="toggleFilter(this)">⚙️ Sistema</div>
+                <div class="filter-chip chip-startup active" data-filter="type" data-val="startup" onclick="toggleFilter(this)">🚀 Startup</div>
             </div>
         </div>
 
-        <!-- Área Principal — Árvore -->
-        <div id="main-content">
-            <div class="empty-state" id="empty-state">
-                <h3>Carregue um arquivo JSONL para começar</h3>
-                <p>Use o dropzone no centro da tela</p>
+        <div class="sidebar-section">
+            <h4>✅ Resultado</h4>
+            <div class="filter-chip-group">
+                <div class="filter-chip chip-responded active" data-filter="outcome" data-val="responded" onclick="toggleFilter(this)">✅ Respondeu</div>
+                <div class="filter-chip chip-silent active" data-filter="outcome" data-val="silent" onclick="toggleFilter(this)">🔇 Silêncio</div>
+                <div class="filter-chip chip-error active" data-filter="outcome" data-val="error" onclick="toggleFilter(this)">❌ Erro</div>
+                <div class="filter-chip chip-system active" data-filter="outcome" data-val="pending" onclick="toggleFilter(this)">⏳ Sem desfecho</div>
+            </div>
+        </div>
+
+        <hr class="sidebar-divider">
+
+        <div class="sidebar-section">
+            <h4>📈 Métricas</h4>
+            <div class="metric-block" id="metric-block">
+                <div class="m-title">Aguardando dados...</div>
             </div>
         </div>
     </div>
 
-    <!-- Painel de Detalhes (inferior) -->
-    <div id="detail-panel" class="hidden">
-        <div id="detail-tabs">
-            <div class="detail-tab active" data-tab="json" onclick="switchDetailTab('json')">📋 JSON</div>
-            <div class="detail-tab" data-tab="tree" onclick="switchDetailTab('tree')">🌳 Tree View</div>
-            <div class="detail-tab" data-tab="cost" onclick="switchDetailTab('cost')">💰 Custo</div>
+    <!-- Área de triggers -->
+    <div id="triggers-panel">
+        <div class="empty-state">
+            <h3>Carregue um arquivo JSONL para começar</h3>
+            <p>Arraste o arquivo <code>data/bia_detailed.jsonl</code> aqui</p>
         </div>
-        <div id="detail-content"></div>
     </div>
+</div>
 
-    <script>
-        /* ============================================================
-           DADOS GLOBAIS
-           ============================================================ */
-        /** @type {Array<Object>} todos os eventos carregados do JSONL */
-        let allLogs = [];
+<!-- Modal LLM (Nível 3) -->
+<div id="llm-modal-backdrop">
+    <div id="llm-modal">
+        <div id="llm-modal-header">
+            <div id="llm-modal-title">Chamada LLM</div>
+            <div id="llm-modal-meta"></div>
+            <div id="llm-modal-close" onclick="closeLLMModal()">✕</div>
+        </div>
+        <div id="llm-modal-body">
+            <div class="llm-panel" id="llm-input-panel">
+                <div class="llm-panel-title">
+                    📥 Prompt enviado para o modelo
+                    <span class="token-est" id="llm-input-tokens"></span>
+                </div>
+                <div class="llm-panel-scroll" id="llm-input-content"></div>
+            </div>
+            <div class="llm-panel" id="llm-output-panel">
+                <div class="llm-panel-title">
+                    📤 Resposta do modelo
+                    <span class="token-est" id="llm-output-tokens"></span>
+                </div>
+                <div class="llm-panel-scroll" id="llm-output-content"></div>
+            </div>
+        </div>
+        <div id="llm-modal-footer">
+            <div class="cost-item">Tokens input: <strong id="fc-tok-in">—</strong></div>
+            <div class="cost-item">Tokens output: <strong id="fc-tok-out">—</strong></div>
+            <div class="cost-item">Custo estimado: <strong id="fc-cost">—</strong></div>
+            <div class="cost-item" style="margin-left:auto;color:var(--text-dim);font-size:0.65rem;">Preços DeepSeek V4: $0.15/M input · $0.60/M output</div>
+        </div>
+    </div>
+</div>
 
-        /** Evento atualmente selecionado (para painel de detalhes) */
-        let selectedEvent = null;
+<script>
+    /* ============================================================
+       CONSTANTES DE PREÇO
+       ============================================================ */
+    const PRICE_IN_PER_M = 0.15;
+    const PRICE_OUT_PER_M = 0.60;
 
-        /** Modo "apenas decisões" ativo? */
-        let decisionsOnly = false;
+    /* ============================================================
+       ESTADO GLOBAL
+       ============================================================ */
+    let allLogs = [];       // todos os eventos do JSONL
+    let searchText = '';
+    let activeTypeFilters = new Set(['whatsapp_message','cron_routine','system_inject','startup']);
+    let activeOutcomeFilters = new Set(['responded','silent','error','pending']);
 
-        /** Expandir todos os LLM cards? */
-        let expandAll = false;
+    /* ============================================================
+       CORES POR AGENTE
+       ============================================================ */
+    const agentColors = {
+        supervisor: '#a78bfa', chitchat: '#38bdf8', memoryAgent: '#34d399',
+        searchAgent: '#fb923c', calendarAgent: '#fbbf24', gmailAgent: '#f87171',
+        sheetsAgent: '#22d3ee', docsAgent: '#818cf8', routineAgent: '#f472b6',
+        securityAgent: '#e879f9', shoppingAgent: '#2dd4bf', whatsappAgent: '#a3e635',
+    };
 
-        /** Filtro de agentes: Set com nomes de agentes visíveis */
-        let visibleAgents = new Set();
+    /* ============================================================
+       INICIALIZAÇÃO — Dropzone e load button
+       ============================================================ */
+    const dzOverlay = document.getElementById('dropzone-overlay');
+    const dzBox = document.getElementById('dz-box');
+    const dzInput = document.getElementById('dz-file-input');
+    const fileInput = document.getElementById('file-input');
 
-        /** Texto de busca atual */
-        let searchText = '';
+    dzBox.addEventListener('click', () => dzInput.click());
+    dzBox.addEventListener('dragover', e => { e.preventDefault(); dzBox.style.borderColor = '#a78bfa'; });
+    dzBox.addEventListener('dragleave', () => dzBox.style.borderColor = '');
+    dzBox.addEventListener('drop', e => { e.preventDefault(); dzBox.style.borderColor = ''; if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+    dzInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+    document.body.addEventListener('dragover', e => e.preventDefault());
+    document.body.addEventListener('drop', e => { e.preventDefault(); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
 
-        /** Preços DeepSeek V4 (por 1M tokens) */
-        const PRICE_INPUT_PER_1M = 0.15;
-        const PRICE_OUTPUT_PER_1M = 0.60;
+    document.getElementById('load-btn').addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
 
-        /* ============================================================
-           MAPA DE CORES POR AGENTE
-           ============================================================ */
-        const agentColors = {
-            supervisor: 'var(--color-supervisor)',
-            chitchat: 'var(--color-chitchat)',
-            memoryAgent: 'var(--color-memoryAgent)',
-            searchAgent: 'var(--color-searchAgent)',
-            calendarAgent: 'var(--color-calendarAgent)',
-            gmailAgent: 'var(--color-gmailAgent)',
-            sheetsAgent: 'var(--color-sheetsAgent)',
-            docsAgent: 'var(--color-docsAgent)',
-            routineAgent: 'var(--color-routineAgent)',
-            securityAgent: 'var(--color-securityAgent)',
-            shoppingAgent: 'var(--color-shoppingAgent)',
-            whatsappAgent: 'var(--color-whatsappAgent)',
-            topic_broker: 'var(--color-topic_broker)',
+    /* ============================================================
+       CARREGAMENTO
+       ============================================================ */
+    function loadFile(file) {
+        const reader = new FileReader();
+        reader.onload = e => {
+            parseLogs(e.target.result);
+            dzOverlay.classList.add('hidden');
         };
-
-        /* Cores hex sem CSS vars para uso inline */
-        const agentColorsHex = {
-            supervisor: '#a78bfa', chitchat: '#38bdf8', memoryAgent: '#34d399',
-            searchAgent: '#fb923c', calendarAgent: '#fbbf24', gmailAgent: '#f87171',
-            sheetsAgent: '#22d3ee', docsAgent: '#818cf8', routineAgent: '#f472b6',
-            securityAgent: '#e879f9', shoppingAgent: '#2dd4bf', whatsappAgent: '#a3e635',
-            topic_broker: '#94a3b8',
-        };
-
-        /* ============================================================
-           INICIALIZAÇÃO — Configurar dropzone
-           ============================================================ */
-        const dropzoneBox = document.getElementById('dropzone-box');
-        const dropzoneFileInput = document.getElementById('dropzone-file-input');
-        const dropzoneOverlay = document.getElementById('dropzone-overlay');
-
-        dropzoneBox.addEventListener('click', () => dropzoneFileInput.click());
-        dropzoneBox.addEventListener('dragover', (e) => { e.preventDefault(); dropzoneBox.style.borderColor = 'var(--color-supervisor)'; });
-        dropzoneBox.addEventListener('dragleave', () => { dropzoneBox.style.borderColor = ''; });
-        dropzoneBox.addEventListener('drop', (e) => {
-            e.preventDefault();
-            dropzoneBox.style.borderColor = '';
-            if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
-        });
-        dropzoneFileInput.addEventListener('change', (e) => {
-            if (e.target.files.length) loadFile(e.target.files[0]);
-        });
-
-        /* Evento global de drop no body para capturar drags fora do dropzone */
-        document.body.addEventListener('dragover', (e) => { e.preventDefault(); });
-        document.body.addEventListener('drop', (e) => {
-            e.preventDefault();
-            if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
-        });
-
-        /* ============================================================
-           CARREGAMENTO DO ARQUIVO
-           ============================================================ */
-        function loadFile(file) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                parseLogs(e.target.result);
-                dropzoneOverlay.classList.add('hidden');
-                document.getElementById('stats-bar').style.display = 'flex';
-                document.getElementById('main-layout').style.display = 'flex';
-            };
-            reader.readAsText(file);
-        }
-
-        /**
-         * Faz o parse do JSONL, uma linha por evento.
-         * Cada linha é um JSON com { timestamp, event, threadId?, agentName?, data }
-         */
-        function parseLogs(text) {
-            const lines = text.split('\n').filter(l => l.trim());
-            allLogs = [];
-            for (const line of lines) {
-                try {
-                    const obj = JSON.parse(line);
-                    // Normaliza: garante que threadId e agentName existam (extrai de data.contextData se necessário)
-                    if (!obj.threadId && obj.data && obj.data.contextData && obj.data.contextData.chatJid) {
-                        obj.threadId = obj.data.contextData.chatJid;
-                    }
-                    if (!obj.agentName && obj.data && obj.data.contextData && obj.data.contextData.agentName) {
-                        obj.agentName = obj.data.contextData.agentName;
-                    }
-                    allLogs.push(obj);
-                } catch (_) { /* ignora linhas inválidas */ }
-            }
-            buildAgentFilter();
-            renderAll();
-        }
-
-        /* ============================================================
-           FILTRO DE AGENTES — Checkboxes na sidebar
-           ============================================================ */
-        function buildAgentFilter() {
-            // Coleta agentes únicos dos eventos
-            const agents = new Map();
-            for (const log of allLogs) {
-                const name = log.agentName;
-                if (name && !agents.has(name)) {
-                    agents.set(name, (agents.get(name) || 0) + 1);
-                }
-            }
-            // Também conta agentes que aparecem no AGENT_START / AGENT_DECISION
-            for (const log of allLogs) {
-                const name = log.agentName;
-                if (name) agents.set(name, (agents.get(name) || 0) + 1);
-            }
-            // Inicializa visibleAgents com todos
-            visibleAgents = new Set(agents.keys());
-
-            const container = document.getElementById('agent-filters');
-            container.innerHTML = '';
-            // Ordena por nome
-            const sorted = [...agents.keys()].sort();
-            for (const agent of sorted) {
-                const color = agentColorsHex[agent] || '#94a3b8';
-                const row = document.createElement('div');
-                row.className = 'filter-row';
-                row.innerHTML = `
-                    <input type="checkbox" checked id="filter-agent-${agent}" onchange="onAgentFilterChange('${agent}', this.checked)">
-                    <span class="filter-agent-dot" style="background:${color};"></span>
-                    <label for="filter-agent-${agent}" style="cursor:pointer;">${agent}</label>
-                `;
-                container.appendChild(row);
-            }
-        }
-
-        function onAgentFilterChange(agent, checked) {
-            if (checked) visibleAgents.add(agent);
-            else visibleAgents.delete(agent);
-            renderTree();
-        }
-
-        /* ============================================================
-           BUSCA TEXTUAL
-           ============================================================ */
-        document.getElementById('search-input').addEventListener('input', (e) => {
-            searchText = e.target.value.toLowerCase().trim();
-            renderTree();
-        });
-
-        /* ============================================================
-           TOGGLES
-           ============================================================ */
-        function toggleDecisionsOnly() {
-            decisionsOnly = !decisionsOnly;
-            document.getElementById('toggle-decisions').classList.toggle('on', decisionsOnly);
-            renderTree();
-        }
-
-        function toggleExpandAll() {
-            expandAll = !expandAll;
-            document.getElementById('toggle-expand').classList.toggle('on', expandAll);
-            // Aplica/remove classe expanded nos cards
-            document.querySelectorAll('.event-card').forEach(card => {
-                if (expandAll) card.classList.add('expanded');
-                else card.classList.remove('expanded');
-            });
-        }
-
-        /* ============================================================
-           RENDERIZAÇÃO PRINCIPAL
-           ============================================================ */
-        function renderAll() {
-            updateStats();
-            renderTree();
-            updateMetrics();
-        }
-
-        /* ============================================================
-           ATUALIZAÇÃO DAS ESTATÍSTICAS NA BARRA SUPERIOR
-           ============================================================ */
-        function updateStats() {
-            const totalEvents = allLogs.length;
-            const uniqueAgents = new Set();
-            let llmCalls = 0;
-            let estimatedInputTokens = 0;
-            let estimatedOutputTokens = 0;
-            let loops = 0;
-
-            // Para detectar loops: rastreia agentes por thread
-            const threadAgents = new Map(); // threadId -> [agentName, ...]
-
-            for (const log of allLogs) {
-                if (log.agentName) uniqueAgents.add(log.agentName);
-                if (log.event === 'LLM_START') {
-                    llmCalls++;
-                    // Estima tokens de entrada: soma o length de todas as messages
-                    if (log.data && log.data.messages) {
-                        for (const msg of log.data.messages) {
-                            estimatedInputTokens += Math.ceil((msg.content || '').length / 4);
-                        }
-                    }
-                }
-                if (log.event === 'LLM_END') {
-                    // Estima tokens de saída
-                    if (log.data && log.data.generations) {
-                        for (const gen of log.data.generations) {
-                            for (const entry of gen) {
-                                if (entry.type === 'message' && entry.content) {
-                                    estimatedOutputTokens += Math.ceil(entry.content.length / 4);
-                                }
-                                if (entry.type === 'tool_calls' && entry.toolCalls) {
-                                    for (const tc of entry.toolCalls) {
-                                        const argsStr = JSON.stringify(tc.args || {});
-                                        estimatedOutputTokens += Math.ceil(argsStr.length / 4);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // Detecta loops: mesmo agente chamado 2x+ na mesma thread
-                if (log.event === 'AGENT_START' && log.agentName) {
-                    const tid = log.threadId || '__global';
-                    if (!threadAgents.has(tid)) threadAgents.set(tid, []);
-                    const agents = threadAgents.get(tid);
-                    if (agents.includes(log.agentName)) loops++;
-                    agents.push(log.agentName);
-                }
-            }
-
-            const costInput = (estimatedInputTokens / 1_000_000) * PRICE_INPUT_PER_1M;
-            const costOutput = (estimatedOutputTokens / 1_000_000) * PRICE_OUTPUT_PER_1M;
-            const totalCost = costInput + costOutput;
-
-            document.getElementById('stat-events').textContent = totalEvents;
-            document.getElementById('stat-agents').textContent = uniqueAgents.size;
-            document.getElementById('stat-llm').textContent = llmCalls;
-            document.getElementById('stat-tok-in').textContent = estimatedInputTokens.toLocaleString();
-            document.getElementById('stat-tok-out').textContent = estimatedOutputTokens.toLocaleString();
-            document.getElementById('stat-cost').textContent = '$' + totalCost.toFixed(4);
-            document.getElementById('stat-loops').textContent = loops;
-        }
-
-        /* ============================================================
-           ATUALIZAÇÃO DAS MÉTRICAS NA SIDEBAR
-           ============================================================ */
-        function updateMetrics() {
-            // LLM Calls por agente
-            const llmPerAgent = new Map();
-            const agentCalls = new Map();
-            for (const log of allLogs) {
-                if (log.event === 'LLM_START' && log.agentName) {
-                    llmPerAgent.set(log.agentName, (llmPerAgent.get(log.agentName) || 0) + 1);
-                }
-                if (log.event === 'AGENT_START' && log.agentName) {
-                    agentCalls.set(log.agentName, (agentCalls.get(log.agentName) || 0) + 1);
-                }
-            }
-
-            // Exibe top LLM calls por agente
-            const llmSorted = [...llmPerAgent.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-            document.getElementById('metric-llm-per-agent').innerHTML = llmSorted
-                .map(([ag, n]) => `<span style="color:${agentColorsHex[ag] || '#94a3b8'};">${ag}</span>: ${n}`)
-                .join('<br>') || '—';
-
-            // Exibe agentes mais chamados
-            const topAgents = [...agentCalls.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-            document.getElementById('metric-top-agents').innerHTML = topAgents
-                .map(([ag, n]) => `<span style="color:${agentColorsHex[ag] || '#94a3b8'};">${ag}</span>: ${n}x`)
-                .join('<br>') || '—';
-        }
-
-        /* ============================================================
-           CONSTRUÇÃO DA ÁRVORE DE DECISÃO
-           Usa os eventos AGENT_START, AGENT_DECISION, LLM_START, LLM_END
-           para construir uma hierarquia baseada no threadId e ordem temporal.
-           ============================================================ */
-
-        /**
-         * Agrupa eventos em "turns" por threadId + fluxo contíguo de AGENT_START.
-         * Um turn começa com AGENT_START (ou qualquer evento se não houver AGENT_START)
-         * e termina quando outro AGENT_START aparece com mesmo threadId.
-         *
-         * Para simplificar, usamos o AGENT_START como "pai" dos eventos seguintes
-         * até o próximo AGENT_START na mesma thread.
-         */
-        function buildTree(events) {
-            // Estrutura: raiz contendo turns (sequências de eventos agrupados por thread)
-            const turns = []; // { threadId, title?, events: [...] }
-
-            // Agrupa eventos por threadId (ou thread global se ausente)
-            const threadMap = new Map(); // threadId -> eventos[]
-
-            for (const ev of events) {
-                const tid = ev.threadId || '__no_thread';
-                if (!threadMap.has(tid)) threadMap.set(tid, []);
-                threadMap.get(tid).push(ev);
-            }
-
-            // Para cada thread, constrói sub-árvore
-            const threadEntries = [...threadMap.entries()];
-
-            // Tenta extrair título do tópico a partir de eventos INFO com [TOPIC BROKER] ou [TOPICS DB]
-            const threadTitles = new Map();
-            for (const ev of events) {
-                if (ev.event === 'INFO' && ev.data && ev.data.message) {
-                    // "Direcionando mensagens para o assunto: \"Título\""
-                    const match = ev.data.message.match(/Direcionando mensagens para o assunto:\s*"([^"]+)"/);
-                    if (match) {
-                        const tid = ev.threadId || '__no_thread';
-                        if (!threadTitles.has(tid)) threadTitles.set(tid, match[1]);
-                    }
-                }
-            }
-
-            return { threadMap, threadTitles, events };
-        }
-
-        /**
-         * Renderiza a árvore no #main-content.
-         * Cada thread vira uma seção raiz.
-         */
-        function renderTree() {
-            const container = document.getElementById('main-content');
-            const emptyState = document.getElementById('empty-state');
-
-            if (allLogs.length === 0) {
-                container.innerHTML = '';
-                container.appendChild(emptyState);
-                emptyState.style.display = '';
-                return;
-            }
-            emptyState.style.display = 'none';
-
-            // Aplica busca textual e filtro de agentes
-            let filtered = allLogs;
-
-            if (searchText) {
-                filtered = filtered.filter(log => {
-                    return JSON.stringify(log).toLowerCase().includes(searchText);
-                });
-            }
-
-            if (decisionsOnly) {
-                // Mostra apenas AGENT_DECISION, LLM_START, LLM_END
-                filtered = filtered.filter(log =>
-                    log.event === 'AGENT_DECISION' || log.event === 'LLM_START' || log.event === 'LLM_END' || log.event === 'AGENT_START'
-                );
-            }
-
-            // Filtro por agente: se o evento tem agentName e não está no visibleAgents, esconde
-            if (visibleAgents.size > 0) {
-                filtered = filtered.filter(log => {
-                    if (!log.agentName) return true; // eventos sem agente sempre visíveis
-                    return visibleAgents.has(log.agentName);
-                });
-            }
-
-            // Constrói árvore
-            const { threadMap, threadTitles } = buildTree(filtered);
-
-            // Detecta loops (agente repetido na mesma thread)
-            const threadLoopAgents = new Map(); // threadId -> Set de agentes que já apareceram
-            for (const [tid, evs] of threadMap) {
-                const seen = new Set();
-                const loopAgents = new Set();
-                for (const ev of evs) {
-                    if (ev.agentName) {
-                        if (seen.has(ev.agentName)) loopAgents.add(ev.agentName);
-                        seen.add(ev.agentName);
-                    }
-                }
-                if (loopAgents.size > 0) threadLoopAgents.set(tid, loopAgents);
-            }
-
-            // Renderiza
-            container.innerHTML = '';
-            if ([...threadMap.keys()].length === 0) {
-                container.innerHTML = '<div class="empty-state"><h3>Nenhum evento encontrado</h3><p>Ajuste os filtros para ver eventos.</p></div>';
-                return;
-            }
-
-            // Ordena threads pelo timestamp do primeiro evento
-            const sortedThreads = [...threadMap.entries()].sort((a, b) => {
-                const tA = a[1][0]?.timestamp || '';
-                const tB = b[1][0]?.timestamp || '';
-                return tA.localeCompare(tB);
-            });
-
-            for (const [tid, evs] of sortedThreads) {
-                const title = threadTitles.get(tid) || tid.replace('__no_thread', 'Global');
-                const loopAgents = threadLoopAgents.get(tid);
-
-                // Container da thread
-                const threadDiv = document.createElement('div');
-                threadDiv.className = 'tree-node root';
-                threadDiv.style.marginBottom = '20px';
-
-                // Título da thread
-                const threadTitle = document.createElement('div');
-                threadTitle.style.cssText = 'font-weight:600;font-size:0.85rem;color:var(--text-muted);margin-bottom:10px;padding:6px 12px;background:var(--bg-panel);border-radius:6px;border:1px solid var(--border);';
-                threadTitle.textContent = `🧵 ${title}`;
-                threadDiv.appendChild(threadTitle);
-
-                // Container para os eventos da thread
-                const eventsContainer = document.createElement('div');
-                eventsContainer.className = 'tree-node';
-
-                for (const ev of evs) {
-                    const card = buildEventCard(ev, loopAgents);
-                    eventsContainer.appendChild(card);
-                }
-
-                threadDiv.appendChild(eventsContainer);
-                container.appendChild(threadDiv);
-            }
-
-            // Reaplica expandAll
-            if (expandAll) {
-                document.querySelectorAll('.event-card').forEach(c => c.classList.add('expanded'));
-            }
-        }
-
-        /**
-         * Constrói o card HTML para um evento específico.
-         */
-        function buildEventCard(ev, loopAgents) {
-            const card = document.createElement('div');
-            card.className = 'event-card';
-            card.dataset.index = allLogs.indexOf(ev);
-
-            const isLoop = loopAgents && ev.agentName && loopAgents.has(ev.agentName);
-            if (isLoop) card.classList.add('loop');
-
-            // Destaca AGENT_DECISION
-            if (ev.event === 'AGENT_DECISION') card.classList.add('decision');
-
-            // Cabeçalho
-            const header = document.createElement('div');
-            header.className = 'event-card-header';
-
-            // Badge do tipo
-            const badge = document.createElement('span');
-            badge.className = 'event-type-badge';
-            badge.style.cssText = getBadgeStyle(ev.event);
-            badge.textContent = ev.event;
-            header.appendChild(badge);
-
-            // Nome do agente (se houver)
-            if (ev.agentName) {
-                const agentSpan = document.createElement('span');
-                agentSpan.className = 'event-agent';
-                agentSpan.style.color = agentColorsHex[ev.agentName] || '#94a3b8';
-                agentSpan.textContent = ev.agentName;
-                header.appendChild(agentSpan);
-            }
-
-            // Razão (para AGENT_DECISION)
-            if (ev.event === 'AGENT_DECISION' && ev.data && ev.data.reason) {
-                const reasonSpan = document.createElement('span');
-                reasonSpan.className = 'event-reason';
-                reasonSpan.textContent = '— ' + truncate(ev.data.reason, 120);
-                header.appendChild(reasonSpan);
-            }
-
-            // Mensagem INFO/DEBUG curta
-            if ((ev.event === 'INFO' || ev.event === 'DEBUG') && ev.data && ev.data.message) {
-                const msgSpan = document.createElement('span');
-                msgSpan.className = 'event-reason';
-                msgSpan.textContent = '— ' + truncate(ev.data.message, 100);
-                header.appendChild(msgSpan);
-            }
-
-            // Loop badge
-            if (isLoop) {
-                const loopBadge = document.createElement('span');
-                loopBadge.className = 'loop-badge';
-                loopBadge.textContent = 'LOOP';
-                header.appendChild(loopBadge);
-            }
-
-            // Timestamp
-            const timeSpan = document.createElement('span');
-            timeSpan.className = 'event-time';
-            timeSpan.textContent = formatTime(ev.timestamp);
-            header.appendChild(timeSpan);
-
-            card.appendChild(header);
-
-            // Corpo expansível
-            // Para AGENT_DECISION: mostra detalhes da decisão
-            if (ev.event === 'AGENT_DECISION') {
-                const body = document.createElement('div');
-                body.className = 'event-card-body';
-                body.innerHTML = buildDecisionBody(ev);
-                card.appendChild(body);
-            }
-
-            // Para LLM_START: mostra o prompt (input)
-            if (ev.event === 'LLM_START') {
-                const body = document.createElement('div');
-                body.className = 'event-card-body';
-
-                // Busca o LLM_END correspondente (próximo LLM_END após este na mesma thread)
-                const llmEnd = findMatchingLLMEnd(ev);
-                body.innerHTML = buildLLMBody(ev, llmEnd);
-                card.appendChild(body);
-            }
-
-            // Para LLM_END sem LLM_START correspondente (ex: topic_broker)
-            if (ev.event === 'LLM_END' && !hasMatchingLLMStart(ev)) {
-                const body = document.createElement('div');
-                body.className = 'event-card-body';
-                body.innerHTML = buildLLMEndOnlyBody(ev);
-                card.appendChild(body);
-            }
-
-            // Clique: expandir/recolher + selecionar para painel de detalhes
-            card.addEventListener('click', (e) => {
-                // Não expande/recolhe se clicou em um elemento interativo dentro
-                if (e.target.closest('.llm-panel-content') || e.target.closest('.detail-tab')) return;
-
-                // Toggle expand
-                if (ev.event === 'LLM_START' || ev.event === 'AGENT_DECISION' || ev.event === 'LLM_END') {
-                    card.classList.toggle('expanded');
-                }
-
-                // Seleciona para painel de detalhes
-                selectEvent(ev, card);
-            });
-
-            return card;
-        }
-
-        /**
-         * Encontra o LLM_END correspondente ao LLM_START.
-         * Estratégia: próximo LLM_END na mesma thread, depois deste evento.
-         */
-        function findMatchingLLMEnd(llmStart) {
-            const tid = llmStart.threadId;
-            const startIdx = allLogs.indexOf(llmStart);
-            for (let i = startIdx + 1; i < allLogs.length; i++) {
-                const ev = allLogs[i];
-                if (ev.event === 'LLM_END') {
-                    // Verifica se pertence à mesma thread ou se não tem threadId
-                    if (!tid || ev.threadId === tid || !ev.threadId) return ev;
-                }
-                // Se encontrar outro LLM_START na mesma thread, para (não cruzar calls)
-                if (ev.event === 'LLM_START' && ev.threadId === tid) return null;
-            }
-            return null;
-        }
-
-        /**
-         * Verifica se este LLM_END tem um LLM_START correspondente antes dele.
-         */
-        function hasMatchingLLMStart(llmEnd) {
-            const tid = llmEnd.threadId;
-            const endIdx = allLogs.indexOf(llmEnd);
-            for (let i = endIdx - 1; i >= 0; i--) {
-                const ev = allLogs[i];
-                if (ev.event === 'LLM_START') {
-                    if (!tid || ev.threadId === tid || !ev.threadId) return true;
-                }
-                if (ev.event === 'LLM_END' && ev.threadId === tid) return false;
-            }
-            return false;
-        }
-
-        /**
-         * Constrói HTML do corpo de um AGENT_DECISION.
-         */
-        function buildDecisionBody(ev) {
-            const d = ev.data || {};
-            const nextAgent = d.nextAgent || '?';
-            const reason = d.reason || '';
-            const response = d.response || '';
-            const intermediateMsg = d.intermediateMessage || '';
-
-            let html = '<div class="decision-detail">';
-            html += `<div><span class="decision-label">Próximo Agente:</span> <span class="decision-nextAgent">${escapeHtml(nextAgent)}</span></div>`;
-            if (reason) html += `<div style="margin-top:4px;"><span class="decision-label">Razão:</span> ${escapeHtml(reason)}</div>`;
-            if (intermediateMsg) html += `<div style="margin-top:4px;"><span class="decision-label">Msg Intermediária:</span> "${escapeHtml(intermediateMsg)}"</div>`;
-            if (response && response !== '[SILENT]') html += `<div style="margin-top:4px;"><span class="decision-label">Resposta:</span> <span class="decision-response">${escapeHtml(truncate(response, 200))}</span></div>`;
-            if (response === '[SILENT]') html += `<div style="margin-top:4px;"><span class="decision-label">Resposta:</span> <span style="color:var(--text-dim);">[SILENT] — resposta suprimida</span></div>`;
-            html += '</div>';
-            return html;
-        }
-
-        /**
-         * Constrói HTML side-by-side para LLM_START (input) + LLM_END (output).
-         */
-        function buildLLMBody(llmStart, llmEnd) {
-            let html = '<div class="llm-side-by-side">';
-
-            // Painel esquerdo: Input (prompt)
-            html += '<div class="llm-panel"><div class="llm-panel-title">📥 Prompt (Input)</div><div class="llm-panel-content">';
-            if (llmStart.data && llmStart.data.messages) {
-                for (const msg of llmStart.data.messages) {
-                    const role = msg.role || '?';
-                    const content = msg.content || '';
-                    const maxLen = 800;
-                    const truncated = content.length > maxLen;
-                    html += `<div class="llm-msg-role">${escapeHtml(role.toUpperCase())}</div>`;
-                    html += `<div class="llm-msg-content">${escapeHtml(truncated ? content.substring(0, maxLen) : content)}</div>`;
-                    if (truncated) html += `<div class="llm-msg-truncated">... (${content.length - maxLen} caracteres ocultos — clique no evento para ver tudo no painel inferior)</div>`;
-                }
-            } else {
-                html += '<span style="color:var(--text-dim);">(sem dados de mensagens)</span>';
-            }
-            html += '</div></div>';
-
-            // Painel direito: Output (resposta)
-            html += '<div class="llm-panel"><div class="llm-panel-title">📤 Resposta (Output)</div><div class="llm-panel-content">';
-            if (llmEnd && llmEnd.data && llmEnd.data.generations) {
-                const parts = [];
-                for (const gen of llmEnd.data.generations) {
-                    for (const entry of gen) {
-                        if (entry.type === 'message' && entry.content) {
-                            parts.push(escapeHtml(entry.content));
-                        }
-                        if (entry.type === 'tool_calls' && entry.toolCalls) {
-                            for (const tc of entry.toolCalls) {
-                                parts.push(`🔧 ${escapeHtml(tc.name)}(${escapeHtml(JSON.stringify(tc.args, null, 2))})`);
-                            }
-                        }
-                    }
-                }
-                html += parts.join('\n\n') || '<span style="color:var(--text-dim);">(sem conteúdo)</span>';
-            } else {
-                html += '<span style="color:var(--text-dim);">(LLM_END não encontrado)</span>';
-            }
-            html += '</div></div>';
-
-            html += '</div>';
-            return html;
-        }
-
-        /**
-         * Constrói HTML para LLM_END órfão (ex: topic_broker).
-         */
-        function buildLLMEndOnlyBody(ev) {
-            let html = '<div style="padding:8px 0;">';
-            html += '<div style="font-weight:600;font-size:0.8rem;color:var(--color-llm);margin-bottom:6px;">📤 Resposta (Output)</div>';
-            if (ev.data && ev.data.generations) {
-                for (const gen of ev.data.generations) {
-                    for (const entry of gen) {
-                        if (entry.type === 'message' && entry.content) {
-                            html += `<div style="color:var(--text-muted);">${escapeHtml(entry.content)}</div>`;
-                        }
-                        if (entry.type === 'tool_calls' && entry.toolCalls) {
-                            for (const tc of entry.toolCalls) {
-                                html += `<div style="color:var(--text-muted);">🔧 ${escapeHtml(tc.name)}(${escapeHtml(JSON.stringify(tc.args, null, 2))})</div>`;
-                            }
-                        }
-                    }
-                }
-            }
-            html += '</div>';
-            return html;
-        }
-
-        /* ============================================================
-           PAINEL DE DETALHES (INFERIOR)
-           ============================================================ */
-        let detailTab = 'json';
-
-        function selectEvent(ev, card) {
-            // Remove seleção anterior
-            document.querySelectorAll('.event-card.selected').forEach(c => c.classList.remove('selected'));
-            if (card) card.classList.add('selected');
-            selectedEvent = ev;
-            document.getElementById('detail-panel').classList.remove('hidden');
-            renderDetailContent();
-        }
-
-        function switchDetailTab(tab) {
-            detailTab = tab;
-            document.querySelectorAll('.detail-tab').forEach(t => t.classList.remove('active'));
-            document.querySelector(`.detail-tab[data-tab="${tab}"]`).classList.add('active');
-            renderDetailContent();
-        }
-
-        function renderDetailContent() {
-            const content = document.getElementById('detail-content');
-            if (!selectedEvent) {
-                content.textContent = 'Selecione um evento para ver detalhes.';
-                return;
-            }
-
-            switch (detailTab) {
-                case 'json':
-                    content.textContent = JSON.stringify(selectedEvent, null, 2);
-                    break;
-                case 'tree':
-                    content.innerHTML = buildTreeView(selectedEvent);
-                    break;
-                case 'cost':
-                    content.innerHTML = buildCostView(selectedEvent);
-                    break;
-            }
-        }
-
-        /**
-         * Constrói uma visualização hierárquica do evento selecionado.
-         */
-        function buildTreeView(ev) {
-            let html = '<div style="font-family:monospace;font-size:0.78rem;">';
-            html += `<div style="color:var(--color-supervisor);margin-bottom:6px;">📌 ${escapeHtml(ev.event)}</div>`;
-            html += `<div>timestamp: <span style="color:var(--color-chitchat);">${escapeHtml(ev.timestamp || '')}</span></div>`;
-            if (ev.threadId) html += `<div>threadId: <span style="color:var(--color-chitchat);">${escapeHtml(ev.threadId)}</span></div>`;
-            if (ev.agentName) html += `<div>agentName: <span style="color:var(--color-chitchat);">${escapeHtml(ev.agentName)}</span></div>`;
-            if (ev.data) {
-                html += '<div style="margin-top:8px;color:var(--text-dim);">data:</div>';
-                html += buildTreeObject(ev.data, 1);
-            }
-            html += '</div>';
-            return html;
-        }
-
-        function buildTreeObject(obj, depth) {
-            if (obj === null) return ' <span style="color:var(--text-dim);">null</span>';
-            if (typeof obj !== 'object') {
-                const s = String(obj);
-                if (s.length > 100) return ` <span style="color:var(--color-chitchat);">"${escapeHtml(s.substring(0, 100))}..."</span>`;
-                return ` <span style="color:var(--color-chitchat);">"${escapeHtml(s)}"</span>`;
-            }
-            const indent = '&nbsp;&nbsp;'.repeat(depth);
-            let html = '';
-            if (Array.isArray(obj)) {
-                html += ` <span style="color:var(--text-dim);">[${obj.length}]</span>`;
-                for (let i = 0; i < Math.min(obj.length, 5); i++) {
-                    html += `<br>${indent}[${i}]:${buildTreeObject(obj[i], depth + 1)}`;
-                }
-                if (obj.length > 5) html += `<br>${indent}<span style="color:var(--text-dim);">... +${obj.length - 5} itens</span>`;
-            } else {
-                const keys = Object.keys(obj);
-                for (const key of keys.slice(0, 10)) {
-                    const val = obj[key];
-                    if (typeof val === 'object' && val !== null) {
-                        html += `<br>${indent}<span style="color:var(--color-supervisor);">${escapeHtml(key)}:</span>`;
-                        html += buildTreeObject(val, depth + 1);
-                    } else {
-                        const s = String(val);
-                        const display = s.length > 80 ? escapeHtml(s.substring(0, 80)) + '...' : escapeHtml(s);
-                        html += `<br>${indent}<span style="color:var(--color-supervisor);">${escapeHtml(key)}:</span> <span style="color:var(--color-chitchat);">${display}</span>`;
-                    }
-                }
-                if (keys.length > 10) html += `<br>${indent}<span style="color:var(--text-dim);">... +${keys.length - 10} campos</span>`;
-            }
-            return html;
-        }
-
-        /**
-         * Constrói estimativa de custo para um evento LLM.
-         */
-        function buildCostView(ev) {
-            let html = '<div style="font-size:0.82rem;">';
-            html += '<div style="margin-bottom:12px;color:var(--text-dim);">Estimativas baseadas em DeepSeek V4: <b>$0.15/M</b> input tokens, <b>$0.60/M</b> output tokens</div>';
-
-            if (ev.event === 'LLM_START') {
-                let totalChars = 0;
-                if (ev.data && ev.data.messages) {
-                    for (const msg of ev.data.messages) {
-                        totalChars += (msg.content || '').length;
-                    }
-                }
-                const estTokens = Math.ceil(totalChars / 4);
-                const estCost = (estTokens / 1_000_000) * PRICE_INPUT_PER_1M;
-                html += `<div><span class="decision-label">Caracteres de input:</span> ${totalChars.toLocaleString()}</div>`;
-                html += `<div><span class="decision-label">Tokens estimados (input):</span> ${estTokens.toLocaleString()}</div>`;
-                html += `<div><span class="decision-label">Custo estimado (input):</span> <b>$${estCost.toFixed(6)}</b></div>`;
-
-                // Se tem LLM_END correspondente, estima output também
-                const llmEnd = findMatchingLLMEnd(ev);
-                if (llmEnd) {
-                    let outputChars = 0;
-                    if (llmEnd.data && llmEnd.data.generations) {
-                        for (const gen of llmEnd.data.generations) {
-                            for (const entry of gen) {
-                                if (entry.type === 'message' && entry.content) outputChars += entry.content.length;
-                                if (entry.type === 'tool_calls' && entry.toolCalls) {
-                                    for (const tc of entry.toolCalls) {
-                                        outputChars += JSON.stringify(tc.args || {}).length;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    const outTokens = Math.ceil(outputChars / 4);
-                    const outCost = (outTokens / 1_000_000) * PRICE_OUTPUT_PER_1M;
-                    const totalCost = estCost + outCost;
-                    html += `<hr style="border-color:var(--border);margin:8px 0;">`;
-                    html += `<div><span class="decision-label">Caracteres de output:</span> ${outputChars.toLocaleString()}</div>`;
-                    html += `<div><span class="decision-label">Tokens estimados (output):</span> ${outTokens.toLocaleString()}</div>`;
-                    html += `<div><span class="decision-label">Custo estimado (output):</span> <b>$${outCost.toFixed(6)}</b></div>`;
-                    html += `<hr style="border-color:var(--border);margin:8px 0;">`;
-                    html += `<div style="font-size:0.9rem;"><span class="decision-label">Custo total desta call:</span> <b style="color:var(--color-finish);">$${totalCost.toFixed(6)}</b></div>`;
-                }
-            } else if (ev.event === 'LLM_END') {
-                let outputChars = 0;
-                if (ev.data && ev.data.generations) {
-                    for (const gen of ev.data.generations) {
-                        for (const entry of gen) {
-                            if (entry.type === 'message' && entry.content) outputChars += entry.content.length;
-                            if (entry.type === 'tool_calls' && entry.toolCalls) {
-                                for (const tc of entry.toolCalls) {
-                                    outputChars += JSON.stringify(tc.args || {}).length;
-                                }
-                            }
-                        }
-                    }
-                }
-                const outTokens = Math.ceil(outputChars / 4);
-                const outCost = (outTokens / 1_000_000) * PRICE_OUTPUT_PER_1M;
-                html += `<div><span class="decision-label">Caracteres de output:</span> ${outputChars.toLocaleString()}</div>`;
-                html += `<div><span class="decision-label">Tokens estimados (output):</span> ${outTokens.toLocaleString()}</div>`;
-                html += `<div><span class="decision-label">Custo estimado (output):</span> <b>$${outCost.toFixed(6)}</b></div>`;
-            } else {
-                html += '<div style="color:var(--text-dim);">Selecione um evento LLM_START ou LLM_END para ver estimativas de custo.</div>';
-            }
-
-            html += '</div>';
-            return html;
-        }
-
-        /* ============================================================
-           UTILITÁRIOS
-           ============================================================ */
-
-        function getBadgeStyle(eventType) {
-            const colors = {
-                'INFO': 'background:rgba(100,116,139,0.2);color:#94a3b8;',
-                'DEBUG': 'background:rgba(139,92,246,0.2);color:#a78bfa;',
-                'ERROR': 'background:rgba(239,68,68,0.2);color:#f87171;',
-                'WARN': 'background:rgba(245,158,11,0.2);color:#fbbf24;',
-                'LLM_START': 'background:rgba(16,185,129,0.2);color:#34d399;',
-                'LLM_END': 'background:rgba(16,185,129,0.15);color:#6ee7b7;',
-                'AGENT_START': 'background:rgba(6,182,212,0.2);color:#22d3ee;',
-                'AGENT_DECISION': 'background:rgba(251,191,36,0.2);color:#fbbf24;',
-                'AGENT_END': 'background:rgba(6,182,212,0.15);color:#67e8f9;',
-                'TOOL_START': 'background:rgba(236,72,153,0.2);color:#f472b6;',
-                'TOOL_END': 'background:rgba(236,72,153,0.15);color:#f9a8d4;',
-            };
-            return colors[eventType] || 'background:rgba(148,163,184,0.15);color:#94a3b8;';
-        }
-
-        function formatTime(isoString) {
-            if (!isoString) return '';
+        reader.readAsText(file);
+    }
+
+    function parseLogs(text) {
+        const lines = text.split('\n').filter(l => l.trim());
+        allLogs = [];
+        for (const line of lines) {
             try {
-                const d = new Date(isoString);
-                return d.toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
-            } catch (_) {
-                return String(isoString).substring(11, 23) || isoString;
+                allLogs.push(JSON.parse(line));
+            } catch (_) {}
+        }
+        updateStats();
+        updateMetrics();
+        renderAll();
+    }
+
+    /* ============================================================
+       FILTROS
+       ============================================================ */
+    function toggleFilter(el) {
+        const filter = el.dataset.filter;
+        const val = el.dataset.val;
+        const set = filter === 'type' ? activeTypeFilters : activeOutcomeFilters;
+        if (set.has(val)) { set.delete(val); el.classList.remove('active'); }
+        else { set.add(val); el.classList.add('active'); }
+        renderAll();
+    }
+
+    document.getElementById('search-box').addEventListener('input', e => {
+        searchText = e.target.value.toLowerCase().trim();
+        renderAll();
+    });
+
+    /* ============================================================
+       AGRUPAMENTO POR TRIGGER
+       Retorna { triggers: Map<triggerId, {triggerEvent, endEvent, events[]}>,
+                 globalLogs: [] }
+       ============================================================ */
+    function groupByTrigger() {
+        // Map: triggerId → { triggerEvent, endEvent, events[] }
+        const triggers = new Map();
+        // Logs sem triggerId → globalLogs
+        const globalLogs = [];
+
+        for (const log of allLogs) {
+            const tid = log.triggerId;
+            if (!tid) {
+                globalLogs.push(log);
+                continue;
             }
+            if (!triggers.has(tid)) {
+                triggers.set(tid, { triggerEvent: null, endEvent: null, events: [] });
+            }
+            const grp = triggers.get(tid);
+            if (log.event === 'TRIGGER') grp.triggerEvent = log;
+            else if (log.event === 'TRIGGER_END') grp.endEvent = log;
+            else grp.events.push(log);
         }
 
-        function truncate(str, maxLen) {
-            if (!str) return '';
-            if (str.length <= maxLen) return str;
-            return str.substring(0, maxLen) + '…';
+        return { triggers, globalLogs };
+    }
+
+    /* ============================================================
+       DETERMINAÇÃO DO OUTCOME
+       ============================================================ */
+    function getTriggerOutcome(grp) {
+        if (!grp.endEvent) return 'pending';
+        return grp.endEvent.data?.action || 'pending';
+    }
+
+    function getTriggerType(grp) {
+        return grp.triggerEvent?.data?.triggerType || grp.triggerEvent?.triggerType || 'whatsapp_message';
+    }
+
+    /* ============================================================
+       STATS
+       ============================================================ */
+    function updateStats() {
+        const { triggers } = groupByTrigger();
+        let llmCalls = 0;
+        let totalInChars = 0;
+        let totalOutChars = 0;
+        let errors = 0;
+
+        for (const log of allLogs) {
+            if (log.event === 'LLM_START') {
+                llmCalls++;
+                if (log.data?.messages) {
+                    for (const m of log.data.messages) totalInChars += (m.content || '').length;
+                }
+            }
+            if (log.event === 'LLM_END' && log.data?.generations) {
+                for (const gen of log.data.generations) {
+                    for (const e of gen) {
+                        if (e.type === 'message') totalOutChars += (e.content || '').length;
+                        if (e.type === 'tool_calls') for (const tc of (e.toolCalls || [])) totalOutChars += JSON.stringify(tc.args || {}).length;
+                    }
+                }
+            }
+            if (log.event === 'ERROR') errors++;
         }
 
-        function escapeHtml(str) {
-            if (!str) return '';
-            return String(str)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#039;');
+        const estIn = Math.ceil(totalInChars / 4);
+        const estOut = Math.ceil(totalOutChars / 4);
+        const cost = (estIn / 1e6) * PRICE_IN_PER_M + (estOut / 1e6) * PRICE_OUT_PER_M;
+
+        document.getElementById('stat-triggers').textContent = triggers.size;
+        document.getElementById('stat-llm').textContent = llmCalls;
+        document.getElementById('stat-tokens').textContent = (estIn + estOut).toLocaleString('pt-BR');
+        document.getElementById('stat-cost').textContent = '$' + cost.toFixed(4);
+        document.getElementById('stat-errors').textContent = errors;
+    }
+
+    function updateMetrics() {
+        const { triggers } = groupByTrigger();
+        const agentCount = new Map();
+        const outcomeCounts = { responded: 0, silent: 0, error: 0, pending: 0 };
+        let llmByAgent = new Map();
+
+        for (const log of allLogs) {
+            if (log.event === 'AGENT_START' && log.agentName) {
+                agentCount.set(log.agentName, (agentCount.get(log.agentName) || 0) + 1);
+            }
+            if (log.event === 'LLM_START' && log.agentName) {
+                llmByAgent.set(log.agentName, (llmByAgent.get(log.agentName) || 0) + 1);
+            }
+        }
+        for (const grp of triggers.values()) {
+            const o = getTriggerOutcome(grp);
+            if (outcomeCounts[o] !== undefined) outcomeCounts[o]++;
         }
 
-        /* ============================================================
-           ATALHOS DE TECLADO
-           ============================================================ */
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                // Fecha o painel de detalhes
-                document.getElementById('detail-panel').classList.add('hidden');
-                selectedEvent = null;
-                document.querySelectorAll('.event-card.selected').forEach(c => c.classList.remove('selected'));
+        const topAgents = [...agentCount.entries()].sort((a,b) => b[1]-a[1]).slice(0,6);
+        let html = '<div class="m-title">Agentes mais chamados</div>';
+        for (const [ag, n] of topAgents) {
+            const c = agentColors[ag] || '#94a3b8';
+            html += `<div class="m-row"><span style="color:${c}">${ag}</span><span>${n}x</span></div>`;
+        }
+        html += '<div class="m-title" style="margin-top:10px;">Resultados</div>';
+        html += `<div class="m-row"><span>✅ Respondeu</span><span>${outcomeCounts.responded}</span></div>`;
+        html += `<div class="m-row"><span>🔇 Silêncio</span><span>${outcomeCounts.silent}</span></div>`;
+        html += `<div class="m-row"><span>❌ Erro</span><span>${outcomeCounts.error}</span></div>`;
+        html += `<div class="m-row"><span>⏳ Sem desfecho</span><span>${outcomeCounts.pending}</span></div>`;
+
+        document.getElementById('metric-block').innerHTML = html;
+    }
+
+    /* ============================================================
+       RENDER PRINCIPAL
+       ============================================================ */
+    function renderAll() {
+        const { triggers, globalLogs } = groupByTrigger();
+        const panel = document.getElementById('triggers-panel');
+        panel.innerHTML = '';
+
+        // Filtra triggers
+        let filtered = [...triggers.entries()].filter(([id, grp]) => {
+            const type = getTriggerType(grp);
+            const outcome = getTriggerOutcome(grp);
+            if (!activeTypeFilters.has(type)) return false;
+            if (!activeOutcomeFilters.has(outcome)) return false;
+            if (searchText) {
+                const haystack = JSON.stringify(grp).toLowerCase();
+                if (!haystack.includes(searchText)) return false;
             }
-            if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-                e.preventDefault();
-                document.getElementById('search-input').focus();
-            }
+            return true;
         });
-    </script>
+
+        // Ordena por timestamp do triggerEvent
+        filtered.sort((a, b) => {
+            const tA = a[1].triggerEvent?.timestamp || a[1].events[0]?.timestamp || '';
+            const tB = b[1].triggerEvent?.timestamp || b[1].events[0]?.timestamp || '';
+            return tB.localeCompare(tA); // mais recentes primeiro
+        });
+
+        if (filtered.length === 0 && globalLogs.length === 0) {
+            panel.innerHTML = '<div class="empty-state"><h3>Nenhum trigger encontrado</h3><p>Ajuste os filtros ou carregue um arquivo com eventos.</p></div>';
+            return;
+        }
+
+        // Renderiza triggers
+        for (const [id, grp] of filtered) {
+            panel.appendChild(buildTriggerCard(id, grp));
+        }
+
+        // Renderiza logs globais (sem triggerId) em seção separada
+        if (globalLogs.length > 0) {
+            const sectionEl = document.createElement('div');
+            sectionEl.className = 'section-header';
+            sectionEl.textContent = `⚙️ Logs Globais (${globalLogs.length} eventos sem trigger associado)`;
+            panel.appendChild(sectionEl);
+
+            // Mostra apenas últimos 50 para não travar
+            const slice = globalLogs.slice(-50);
+            for (const log of slice) {
+                const card = document.createElement('div');
+                card.className = 'global-card';
+                card.innerHTML = `
+                    <span class="ev-badge" style="${getBadgeStyle(log.event)}">${esc(log.event)}</span>
+                    <span style="color:var(--text-dim);font-size:0.68rem;">${fmtTime(log.timestamp)}</span>
+                    ${log.agentName ? `<span style="color:${agentColors[log.agentName]||'#94a3b8'};font-weight:600">${esc(log.agentName)}</span>` : ''}
+                    <span>${esc(truncate(log.data?.message || log.data?.toolName || '', 100))}</span>
+                `;
+                panel.appendChild(card);
+            }
+            if (globalLogs.length > 50) {
+                const more = document.createElement('div');
+                more.style.cssText = 'text-align:center;color:var(--text-dim);font-size:0.72rem;padding:8px;';
+                more.textContent = `... e mais ${globalLogs.length - 50} eventos não exibidos`;
+                panel.appendChild(more);
+            }
+        }
+    }
+
+    /* ============================================================
+       CONSTRUÇÃO DO TRIGGER CARD (Nível 1 + 2)
+       ============================================================ */
+    function buildTriggerCard(triggerId, grp) {
+        const tev = grp.triggerEvent;
+        const endEv = grp.endEvent;
+        const outcome = getTriggerOutcome(grp);
+        const triggerType = getTriggerType(grp);
+
+        const card = document.createElement('div');
+        card.className = 'trigger-card';
+
+        // ─── Header (Nível 1) ───────────────────────────────────
+        const header = document.createElement('div');
+        header.className = 'trigger-card-header';
+
+        // Ícone do tipo
+        const iconEl = document.createElement('div');
+        iconEl.className = 'trigger-icon';
+        iconEl.textContent = triggerTypeIcon(triggerType);
+        header.appendChild(iconEl);
+
+        // Meta: quem/o quê
+        const meta = document.createElement('div');
+        meta.className = 'trigger-meta';
+
+        const d = tev?.data || {};
+        const chatName = d.chatName || d.chatJid || '?';
+        const senderName = d.senderName || '';
+        const accountName = d.accountName || '';
+        const routinePrompt = d.routinePrompt || '';
+
+        const metaFlags = d.metadata || {};
+        let badgesHtml = accountName ? `<span class="acct-badge">${esc(accountName)}</span>` : '';
+        if (metaFlags.isGroup) {
+            badgesHtml += ` <span class="acct-badge" style="background:rgba(59,130,246,0.15);color:#60a5fa;">Grupo</span>`;
+        }
+        if (metaFlags.wasReceivedWhileProcessing) {
+            badgesHtml += ` <span class="acct-badge" style="background:rgba(245,158,11,0.15);color:#fbbf24;" title="Mensagem enviada enquanto formulava resposta anterior">⚠️ Sobreposta</span>`;
+        }
+        if (metaFlags.mentionsBia) {
+            badgesHtml += ` <span class="acct-badge" style="background:rgba(168,85,247,0.15);color:#c084fc;">Menciona Bia</span>`;
+        }
+        if (metaFlags.isReplyToBot) {
+            badgesHtml += ` <span class="acct-badge" style="background:rgba(16,185,129,0.15);color:#34d399;">Resposta Direta</span>`;
+        }
+
+        const who = document.createElement('div');
+        who.className = 'trigger-who';
+        who.innerHTML = `
+            ${esc(triggerType === 'cron_routine' ? `⏰ Rotina #${d.routineId || '?'}` : chatName)}
+            ${senderName && senderName !== 'SISTEMA' ? `<span style="color:var(--text-muted);font-weight:400">· ${esc(senderName)}</span>` : ''}
+            ${badgesHtml}
+        `;
+        meta.appendChild(who);
+
+        // Preview da mensagem
+        const msgPreview = document.createElement('div');
+        msgPreview.className = 'trigger-msg';
+        const rawContent = d.messageContent || routinePrompt || '';
+        msgPreview.textContent = truncate(rawContent, 100);
+        meta.appendChild(msgPreview);
+
+        header.appendChild(meta);
+
+        // Direita: horário + outcome
+        const right = document.createElement('div');
+        right.className = 'trigger-right';
+
+        const timeEl = document.createElement('div');
+        timeEl.className = 'trigger-time';
+        timeEl.textContent = fmtTime(tev?.timestamp || grp.events[0]?.timestamp || '');
+        right.appendChild(timeEl);
+
+        const outcomePill = document.createElement('div');
+        outcomePill.className = `outcome-pill ${outcome}`;
+        outcomePill.textContent = outcomeLabel(outcome);
+        right.appendChild(outcomePill);
+
+        // Agentes usados
+        const agentsUsed = endEv?.data?.agentsUsed || [];
+        if (agentsUsed.length > 0) {
+            const agentsEl = document.createElement('div');
+            agentsEl.className = 'agents-used';
+            for (const ag of agentsUsed) {
+                const c = agentColors[ag] || '#94a3b8';
+                agentsEl.innerHTML += `<span class="agent-dot" style="background:${c}" title="${esc(ag)}"></span>`;
+            }
+            agentsEl.title = agentsUsed.join(' → ');
+            right.appendChild(agentsEl);
+        }
+
+        header.appendChild(right);
+        card.appendChild(header);
+
+        // ─── Timeline (Nível 2) ─────────────────────────────────
+        const timeline = document.createElement('div');
+        timeline.className = 'trigger-timeline';
+        buildTimeline(timeline, grp);
+        card.appendChild(timeline);
+
+        // Clique para expandir
+        header.addEventListener('click', () => {
+            card.classList.toggle('expanded');
+        });
+
+        return card;
+    }
+
+    /* ============================================================
+       CONSTRUÇÃO DA TIMELINE (Nível 2)
+       ============================================================ */
+    function buildTimeline(container, grp) {
+        // Coleta todos os eventos relevantes em ordem cronológica
+        const allEvs = [...grp.events];
+        if (grp.endEvent) allEvs.push(grp.endEvent);
+        allEvs.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+
+        // Para encontrar LLM_END correspondente a cada LLM_START
+        const llmEndMap = new Map(); // index → llm end log
+        for (let i = 0; i < allEvs.length; i++) {
+            if (allEvs[i].event === 'LLM_START') {
+                // Procura próximo LLM_END do mesmo agente
+                for (let j = i + 1; j < allEvs.length; j++) {
+                    if (allEvs[j].event === 'LLM_END') {
+                        llmEndMap.set(i, allEvs[j]);
+                        break;
+                    }
+                    if (allEvs[j].event === 'LLM_START') break;
+                }
+            }
+        }
+
+        let skipIndices = new Set();
+
+        for (let i = 0; i < allEvs.length; i++) {
+            if (skipIndices.has(i)) continue;
+            const ev = allEvs[i];
+
+            // Pula LLM_END porque são renderizados junto com LLM_START
+            if (ev.event === 'LLM_END') continue;
+            // Pula TRIGGER_END — vai ser renderizado no item final abaixo
+            if (ev.event === 'TRIGGER_END') continue;
+
+            const item = buildTimelineItem(ev, i, allEvs, llmEndMap);
+            if (item) container.appendChild(item);
+        }
+
+        // Item final: outcome
+        const endEv = grp.endEvent;
+        if (endEv) {
+            const finalItem = buildFinalOutcomeItem(endEv);
+            container.appendChild(finalItem);
+        }
+
+        if (container.children.length === 0) {
+            container.innerHTML = '<div style="color:var(--text-dim);font-size:0.75rem;padding:6px 0;">Nenhum evento de detalhe registrado.</div>';
+        }
+    }
+
+    function buildTimelineItem(ev, idx, allEvs, llmEndMap) {
+        const item = document.createElement('div');
+        item.className = 'timeline-item';
+
+        // Linha vertical
+        const line = document.createElement('div');
+        line.className = 'timeline-line';
+        const dot = document.createElement('div');
+        dot.className = 'timeline-dot';
+        const vline = document.createElement('div');
+        vline.className = 'timeline-vline';
+        line.appendChild(dot);
+        line.appendChild(vline);
+        item.appendChild(line);
+
+        const content = document.createElement('div');
+        content.className = 'timeline-content';
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'timeline-header';
+
+        // Badge do tipo
+        const badge = document.createElement('span');
+        badge.className = 'timeline-type-badge';
+        badge.style.cssText = getBadgeStyle(ev.event);
+        badge.textContent = ev.event;
+        headerEl.appendChild(badge);
+
+        // Nome do agente
+        if (ev.agentName) {
+            const agName = document.createElement('span');
+            agName.className = 'timeline-agent-name';
+            agName.style.color = agentColors[ev.agentName] || '#94a3b8';
+            agName.textContent = ev.agentName;
+            headerEl.appendChild(agName);
+        }
+
+        // Timestamp
+        const timeEl = document.createElement('span');
+        timeEl.className = 'timeline-time';
+        timeEl.textContent = fmtTime(ev.timestamp);
+        headerEl.appendChild(timeEl);
+
+        // Cor do dot baseada no tipo
+        dot.style.borderColor = getDotColor(ev.event, ev.agentName);
+
+        content.appendChild(headerEl);
+
+        // Detalhe por tipo de evento
+        if (ev.event === 'AGENT_DECISION') {
+            const d = ev.data || {};
+            const detail = document.createElement('div');
+            detail.className = 'timeline-detail';
+            detail.style.fontStyle = 'normal';
+            const nextAgent = d.nextAgent || '?';
+            const color = agentColors[nextAgent] || '#94a3b8';
+            detail.innerHTML = `→ <span style="color:${color};font-weight:600">${esc(nextAgent)}</span>${d.reason ? `<div style="color:var(--text-muted);font-size:0.75rem;margin-top:2px;">${esc(d.reason)}</div>` : ''}`;
+            content.appendChild(detail);
+            if (d.intermediateMessage) {
+                const im = document.createElement('div');
+                im.style.cssText = 'font-size:0.72rem;color:var(--color-cron);margin-top:4px;font-style:italic;';
+                im.textContent = `💬 Msg intermediária: "${d.intermediateMessage}"`;
+                content.appendChild(im);
+            }
+        }
+
+        if (ev.event === 'TOOL_START') {
+            const detail = document.createElement('div');
+            detail.className = 'timeline-detail';
+            detail.textContent = `🔧 ${ev.data?.toolName || '?'} — ${truncate(ev.data?.input || '', 80)}`;
+            content.appendChild(detail);
+        }
+
+        if (ev.event === 'LLM_START') {
+            const llmEnd = llmEndMap.get(idx);
+            const msgs = ev.data?.messages || [];
+            const inChars = msgs.reduce((s, m) => s + (m.content || '').length, 0);
+            const estIn = Math.ceil(inChars / 4);
+            let estOut = 0;
+            if (llmEnd?.data?.generations) {
+                for (const gen of llmEnd.data.generations) {
+                    for (const e of gen) {
+                        if (e.type === 'message') estOut += Math.ceil((e.content || '').length / 4);
+                        if (e.type === 'tool_calls') for (const tc of (e.toolCalls||[])) estOut += Math.ceil(JSON.stringify(tc.args||{}).length/4);
+                    }
+                }
+            }
+            const cost = ((estIn/1e6)*PRICE_IN_PER_M + (estOut/1e6)*PRICE_OUT_PER_M).toFixed(6);
+
+            const callRow = document.createElement('div');
+            callRow.className = 'llm-call-row';
+            callRow.innerHTML = `
+                <span class="llm-summary-pill">${msgs.length} msgs</span>
+                <span class="llm-summary-pill">~${estIn.toLocaleString('pt-BR')} tok in</span>
+                ${estOut ? `<span class="llm-summary-pill">~${estOut.toLocaleString('pt-BR')} tok out</span>` : ''}
+                <span class="llm-summary-pill">$${cost}</span>
+            `;
+            const viewBtn = document.createElement('button');
+            viewBtn.className = 'btn-view-llm';
+            viewBtn.textContent = 'Ver chamada completa →';
+            viewBtn.addEventListener('click', e => {
+                e.stopPropagation();
+                openLLMModal(ev, llmEnd);
+            });
+            callRow.appendChild(viewBtn);
+            content.appendChild(callRow);
+        }
+
+        if (ev.event === 'INFO' || ev.event === 'DEBUG' || ev.event === 'WARN' || ev.event === 'ERROR') {
+            const detail = document.createElement('div');
+            detail.className = 'timeline-detail';
+            detail.textContent = truncate(ev.data?.message || '', 120);
+            content.appendChild(detail);
+        }
+
+        item.appendChild(content);
+        return item;
+    }
+
+    function buildFinalOutcomeItem(endEv) {
+        const item = document.createElement('div');
+        item.className = 'timeline-item';
+
+        const line = document.createElement('div');
+        line.className = 'timeline-line';
+        const dot = document.createElement('div');
+        dot.className = 'timeline-dot';
+        const action = endEv.data?.action || 'pending';
+        dot.style.borderColor = action === 'responded' ? 'var(--color-responded)' : action === 'error' ? 'var(--color-error)' : 'var(--color-silent)';
+        dot.style.background = dot.style.borderColor;
+        line.appendChild(dot);
+        line.appendChild(document.createElement('div')); // no vline on last item
+        item.appendChild(line);
+
+        const content = document.createElement('div');
+        content.className = 'timeline-content';
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'timeline-header';
+        const badge = document.createElement('span');
+        badge.className = 'timeline-type-badge';
+        badge.style.cssText = getBadgeStyle('TRIGGER_END');
+        badge.textContent = 'RESULTADO';
+        headerEl.appendChild(badge);
+
+        const dur = endEv.data?.durationMs;
+        if (dur) {
+            const durEl = document.createElement('span');
+            durEl.style.cssText = 'font-size:0.68rem;color:var(--text-dim);';
+            durEl.textContent = `${(dur/1000).toFixed(1)}s`;
+            headerEl.appendChild(durEl);
+        }
+
+        const timeEl = document.createElement('span');
+        timeEl.className = 'timeline-time';
+        timeEl.textContent = fmtTime(endEv.timestamp);
+        headerEl.appendChild(timeEl);
+
+        content.appendChild(headerEl);
+
+        if (action === 'responded' && endEv.data?.responseText) {
+            const box = document.createElement('div');
+            box.className = 'final-response-box';
+            box.textContent = endEv.data.responseText;
+            content.appendChild(box);
+        } else if (action === 'silent') {
+            const box = document.createElement('div');
+            box.className = 'silent-box';
+            box.textContent = '🔇 Bia decidiu ficar em silêncio (sem resposta enviada)';
+            content.appendChild(box);
+        } else if (action === 'error') {
+            const box = document.createElement('div');
+            box.className = 'final-response-box';
+            box.style.borderColor = 'rgba(239,68,68,0.2)';
+            box.style.background = 'rgba(239,68,68,0.05)';
+            box.textContent = '❌ Erro: ' + (endEv.data?.error || 'Desconhecido');
+            content.appendChild(box);
+        }
+
+        item.appendChild(content);
+        return item;
+    }
+
+    /* ============================================================
+       MODAL LLM (Nível 3)
+       ============================================================ */
+    function openLLMModal(llmStart, llmEnd) {
+        const agentName = llmStart.agentName || 'Desconhecido';
+        document.getElementById('llm-modal-title').textContent = `🧠 LLM Call — ${agentName}`;
+        document.getElementById('llm-modal-meta').textContent = fmtTime(llmStart.timestamp);
+
+        // Calcula tokens
+        const msgs = llmStart.data?.messages || [];
+        let inChars = 0;
+        for (const m of msgs) inChars += (m.content || '').length;
+        const estIn = Math.ceil(inChars / 4);
+        document.getElementById('llm-input-tokens').textContent = `~${estIn.toLocaleString('pt-BR')} tokens est.`;
+
+        // Constrói painel de input
+        const inputContent = document.getElementById('llm-input-content');
+        inputContent.innerHTML = '';
+        for (const msg of msgs) {
+            const role = msg.role || 'UNKNOWN';
+            const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+            const block = document.createElement('div');
+            block.className = 'prompt-msg';
+            const chars = content.length;
+            block.innerHTML = `
+                <div class="prompt-msg-role role-${role}">
+                    <span class="role-badge">${esc(role)}</span>
+                </div>
+                <div class="prompt-msg-content">${esc(content)}</div>
+                <div class="prompt-msg-chars">${chars.toLocaleString('pt-BR')} caracteres</div>
+            `;
+            inputContent.appendChild(block);
+        }
+
+        // Constrói painel de output
+        const outputContent = document.getElementById('llm-output-content');
+        outputContent.innerHTML = '';
+        let estOut = 0;
+
+        if (llmEnd?.data?.generations) {
+            for (const gen of llmEnd.data.generations) {
+                for (const e of gen) {
+                    if (e.type === 'message' && e.content) {
+                        estOut += Math.ceil(e.content.length / 4);
+                        const block = document.createElement('div');
+                        block.className = 'output-block';
+                        block.textContent = e.content;
+                        outputContent.appendChild(block);
+                    }
+                    if (e.type === 'tool_calls' && e.toolCalls) {
+                        for (const tc of e.toolCalls) {
+                            const argsStr = JSON.stringify(tc.args, null, 2);
+                            estOut += Math.ceil(argsStr.length / 4);
+                            const block = document.createElement('div');
+                            block.className = 'output-block tool-call-block';
+                            block.innerHTML = `<div class="tool-call-name">🔧 ${esc(tc.name)}</div><pre style="white-space:pre-wrap;font-size:0.7rem;color:var(--text-muted)">${esc(argsStr)}</pre>`;
+                            outputContent.appendChild(block);
+                        }
+                    }
+                }
+            }
+        } else {
+            outputContent.innerHTML = '<div style="color:var(--text-dim);font-size:0.78rem;">LLM_END não encontrado ou ainda não registrado.</div>';
+        }
+
+        const costIn = (estIn / 1e6) * PRICE_IN_PER_M;
+        const costOut = (estOut / 1e6) * PRICE_OUT_PER_M;
+        document.getElementById('llm-output-tokens').textContent = `~${estOut.toLocaleString('pt-BR')} tokens est.`;
+        document.getElementById('fc-tok-in').textContent = estIn.toLocaleString('pt-BR');
+        document.getElementById('fc-tok-out').textContent = estOut.toLocaleString('pt-BR');
+        document.getElementById('fc-cost').textContent = `$${(costIn + costOut).toFixed(6)}`;
+
+        document.getElementById('llm-modal-backdrop').classList.add('open');
+    }
+
+    function closeLLMModal() {
+        document.getElementById('llm-modal-backdrop').classList.remove('open');
+    }
+
+    document.getElementById('llm-modal-backdrop').addEventListener('click', e => {
+        if (e.target === document.getElementById('llm-modal-backdrop')) closeLLMModal();
+    });
+
+    /* ============================================================
+       UTILITÁRIOS
+       ============================================================ */
+    function triggerTypeIcon(type) {
+        const icons = {
+            whatsapp_message: '💬',
+            cron_routine: '⏰',
+            system_inject: '⚙️',
+            startup: '🚀',
+            connection: '📡',
+        };
+        return icons[type] || '📌';
+    }
+
+    function outcomeLabel(outcome) {
+        const labels = {
+            responded: '✅ Respondeu',
+            silent: '🔇 Silêncio',
+            error: '❌ Erro',
+            pending: '⏳ Sem desfecho',
+        };
+        return labels[outcome] || outcome;
+    }
+
+    function getBadgeStyle(ev) {
+        const styles = {
+            'INFO': 'background:rgba(71,85,105,0.25);color:#94a3b8;',
+            'DEBUG': 'background:rgba(139,92,246,0.2);color:#a78bfa;',
+            'ERROR': 'background:rgba(239,68,68,0.2);color:#f87171;',
+            'WARN': 'background:rgba(245,158,11,0.2);color:#fbbf24;',
+            'LLM_START': 'background:rgba(16,185,129,0.18);color:#34d399;',
+            'LLM_END': 'background:rgba(16,185,129,0.1);color:#6ee7b7;',
+            'AGENT_START': 'background:rgba(6,182,212,0.18);color:#22d3ee;',
+            'AGENT_DECISION': 'background:rgba(251,191,36,0.18);color:#fbbf24;',
+            'TOOL_START': 'background:rgba(236,72,153,0.18);color:#f472b6;',
+            'TOOL_END': 'background:rgba(236,72,153,0.1);color:#f9a8d4;',
+            'TRIGGER': 'background:rgba(99,102,241,0.18);color:#818cf8;',
+            'TRIGGER_END': 'background:rgba(34,197,94,0.15);color:#4ade80;',
+        };
+        return styles[ev] || 'background:rgba(148,163,184,0.12);color:#94a3b8;';
+    }
+
+    function getDotColor(eventType, agentName) {
+        if (agentName && agentColors[agentName]) return agentColors[agentName];
+        const colors = {
+            'LLM_START': '#10b981',
+            'LLM_END': '#6ee7b7',
+            'AGENT_START': '#06b6d4',
+            'AGENT_DECISION': '#fbbf24',
+            'TOOL_START': '#ec4899',
+            'TOOL_END': '#f9a8d4',
+            'INFO': '#475569',
+            'WARN': '#f59e0b',
+            'ERROR': '#ef4444',
+            'TRIGGER': '#6366f1',
+            'TRIGGER_END': '#22c55e',
+        };
+        return colors[eventType] || '#475569';
+    }
+
+    function fmtTime(iso) {
+        if (!iso) return '';
+        try {
+            const d = new Date(iso);
+            return d.toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
+        } catch (_) { return String(iso).substring(11, 23) || iso; }
+    }
+
+    function truncate(str, max) {
+        if (!str) return '';
+        str = String(str);
+        return str.length <= max ? str : str.substring(0, max) + '…';
+    }
+
+    function esc(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    /* ============================================================
+       ATALHOS DE TECLADO
+       ============================================================ */
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') closeLLMModal();
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+            e.preventDefault();
+            document.getElementById('search-box').focus();
+        }
+    });
+</script>
 </body>
 </html>

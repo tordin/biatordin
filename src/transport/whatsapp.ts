@@ -2,12 +2,14 @@ import makeWASocket, { useMultiFileAuthState, DisconnectReason, downloadMediaMes
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import path from 'path';
-import { HumanMessage } from '@langchain/core/messages';
+import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { agent } from '../graph/workflow.js';
-import { logger } from '../utils/logger.js';
+import { logger, generateTriggerId, setActiveTrigger, clearActiveTrigger, getActiveTrigger, runWithTriggerContext } from '../utils/logger.js';
 import { resolveTopicForMessage } from '../utils/topicBroker.js';
 import { isTrustedChat, MASTER_NUMBER, MASTER_JIDS, consumeApprovalToken, addTrustedChat, consumeMessageApprovalToken } from '../memory/security.js';
+import { isGroupIgnored, addIgnoredGroup, removeIgnoredGroup, isGroupManagementCommand } from '../config/ignoredGroups.js';
 import { appendMessageToHistory } from '../memory/chatHistory.js';
+import { savePendingMessage, clearPendingMessagesForQueue, getAllPendingMessages } from '../memory/pendingQueue.js';
 import OpenAI, { toFile } from 'openai';
 
 const groqClient = new OpenAI({
@@ -21,16 +23,25 @@ let globalSock: any = null; // Default main sock for legacy global functions
 const sockets = new Map<string, any>();
 const botJids = new Map<string, string | null>();
 const botLids = new Map<string, string | null>();
+const reconnectAttempts = new Map<string, number>();
 
 // Conjunto para rastrear mensagens enviadas pelo bot e evitar loops infinitos
 const botSentMessageIds = new Set<string>();
 
+export interface MessageMetadata {
+    isGroup: boolean;
+    mentionsBia: boolean;
+    isReplyToBot: boolean;
+    wasReceivedWhileProcessing: boolean;
+}
+
 interface BufferedMessage {
-    content: string;
+    text: string;
     displayName: string;
     messageId: string;
     userJid: string;
     timestamp: number;
+    metadata: MessageMetadata;
 }
 
 interface ChatState {
@@ -40,6 +51,7 @@ interface ChatState {
     isProcessing: boolean;
     firstMessageTime: number;
     lastSilenceDelay?: number;
+    pendingInjectMetas?: SystemInjectOptions[];
 }
 
 const chatQueues = new Map<string, ChatState>();
@@ -49,6 +61,41 @@ const rateLimitTimestamps = new Map<string, number[]>();
 const RATE_LIMIT_MAX = 5;
 const RATE_LIMIT_WINDOW_MS = 30_000;
 const groupNameCache = new Map<string, string>();
+
+async function recoverPendingMessagesOnStartup(accountName: string, sock: any) {
+    try {
+        const pending = await getAllPendingMessages();
+        const accountPending = pending.filter(p => p.accountName === accountName);
+        if (accountPending.length > 0) {
+            logger.info(`[RECOVERY] Encontradas ${accountPending.length} mensagens pendentes para a conta ${accountName}. Reagendando processamento...`);
+            for (const item of accountPending) {
+                const queueKey = item.queueKey;
+                let queue = chatQueues.get(queueKey);
+                if (!queue) {
+                    queue = {
+                        accountName: item.accountName,
+                        messages: [],
+                        timeoutId: null,
+                        isProcessing: false,
+                        firstMessageTime: Date.now()
+                    };
+                    chatQueues.set(queueKey, queue);
+                }
+                const meta = item.metadata ? (typeof item.metadata === 'string' ? JSON.parse(item.metadata) : item.metadata) : {};
+                queue.messages.push({
+                    text: item.text,
+                    displayName: item.displayName,
+                    messageId: item.id || `rec-${Date.now()}`,
+                    userJid: item.userJid,
+                    timestamp: item.timestamp,
+                    metadata: meta
+                });
+            }
+        }
+    } catch (e) {
+        logger.error(`[RECOVERY] Erro na recuperação de mensagens pendentes (${accountName}):`, e);
+    }
+}
 
 async function getChatName(sock: any, chatJid: string, accountName: string): Promise<string> {
     if (!chatJid.endsWith('@g.us')) return "";
@@ -125,6 +172,64 @@ export function normalizeJid(jid: string | null | undefined): string {
     return cleanUser;
 }
 
+// Conjunto em memória para rastrear os JIDs dos grupos dos quais a conta main (Bia) faz parte
+const mainGroupJids = new Set<string>();
+
+/**
+ * Verifica se um determinado JID pertence à própria Bia (conta main)
+ */
+export function isMessageFromBia(userJid: string): boolean {
+    const normUser = normalizeJid(userJid);
+    if (!normUser) return false;
+
+    const mainSock = sockets.get('main') || globalSock;
+    const mainJid = botJids.get('main') || (mainSock?.user?.id ? normalizeJid(mainSock.user.id) : null);
+    const mainLid = botLids.get('main') || (mainSock?.user?.lid ? normalizeJid(mainSock.user.lid) : null);
+
+    if (mainJid && normUser === mainJid) return true;
+    if (mainLid && normUser === mainLid) return true;
+
+    return false;
+}
+
+/**
+ * Atualiza a lista de grupos em que a conta main da Bia participa.
+ */
+export async function refreshMainGroupJids(): Promise<Set<string>> {
+    const mainSock = sockets.get('main') || globalSock;
+    if (mainSock) {
+        try {
+            const groups = await mainSock.groupFetchAllParticipating();
+            for (const gId of Object.keys(groups)) {
+                mainGroupJids.add(gId);
+            }
+        } catch (e) {
+            logger.error('[WHATSAPP] Erro ao atualizar grupos da conta main:', e);
+        }
+    }
+    return mainGroupJids;
+}
+
+/**
+ * Verifica se a conta main (Bia) é participante de um determinado grupo.
+ */
+export async function isMainAccountInGroup(groupJid: string): Promise<boolean> {
+    if (!groupJid || !groupJid.endsWith('@g.us')) return false;
+    if (mainGroupJids.has(groupJid)) return true;
+
+    const mainSock = sockets.get('main') || globalSock;
+    if (mainSock) {
+        try {
+            await refreshMainGroupJids();
+            if (mainGroupJids.has(groupJid)) return true;
+        } catch (e) {
+            logger.error(`[WHATSAPP] Erro ao verificar se a conta main participa do grupo ${groupJid}:`, e);
+        }
+    }
+    return false;
+}
+
+
 async function processChatQueue(queueKey: string, sock: any) {
     const queue = chatQueues.get(queueKey);
     if (!queue) return;
@@ -146,13 +251,31 @@ async function processChatQueue(queueKey: string, sock: any) {
         queue.timeoutId = null;
     }
 
-    // Copia e esvazia a fila de mensagens
+    // Copia e esvazia a fila de mensagens e lê metadados de inject se presentes
     const messagesToProcess = [...queue.messages];
     queue.messages = [];
+    const injectMetas = queue.pendingInjectMetas ? [...queue.pendingInjectMetas] : [];
+    queue.pendingInjectMetas = [];
+    const injectMeta = injectMetas.length > 0 ? injectMetas[injectMetas.length - 1] : undefined;
+
+    // Limpa da fila SQLite permanente uma vez que as mensagens passaram para execução
+    clearPendingMessagesForQueue(queueKey).catch(err =>
+        logger.error(`[PENDING_QUEUE DB] Erro ao limpar mensagens do SQLite para ${queueKey}:`, err)
+    );
+
+    // Declared outside try so the catch block can reference them for error logging
+    let activeTriggerCtx: ReturnType<typeof setActiveTrigger> | null = null;
+    let triggerStartMs = 0;
+    let resolvedThreadId = '';
 
     try {
+        const isGroup = chatJid.endsWith('@g.us');
+
         // Guardrail: Truncate combined text to 2000 characters
-        let combinedText = messagesToProcess.map(m => m.content).join("\n");
+        let combinedText = messagesToProcess.map(m => {
+            return isGroup ? `${m.displayName}: ${m.text}` : m.text;
+        }).join("\n---\n");
+
         if (combinedText.length > 2000) {
             logger.warn(`[GUARDRAIL] Mensagem truncada de ${combinedText.length} para 2000 caracteres no chat ${chatJid}`);
             combinedText = combinedText.substring(0, 2000);
@@ -180,7 +303,11 @@ async function processChatQueue(queueKey: string, sock: any) {
         const humanMessages = messagesToProcess.map(
             m => {
                 const dateStr = new Date(m.timestamp).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-                return new HumanMessage({ content: `[${dateStr}] ${m.content}`, name: m.displayName });
+                let msgContent = isGroup ? `${m.displayName}: ${m.text}` : m.text;
+                if (m.metadata?.wasReceivedWhileProcessing) {
+                    msgContent = `[⚠️ Mensagem enviada enquanto você formulava a resposta anterior] ${msgContent}`;
+                }
+                return new HumanMessage({ content: `[${dateStr}] ${msgContent}`, name: m.displayName });
             }
         );
 
@@ -190,71 +317,129 @@ async function processChatQueue(queueKey: string, sock: any) {
         const senderName = lastMsg?.displayName || "Desconhecido";
         
         let chatName = chatJid;
-        const isGroup = chatJid.endsWith('@g.us');
         if (isGroup) {
             chatName = await getChatName(sock, chatJid, accountName) || "Grupo Desconhecido";
         }
 
-        const config = { 
-            configurable: { thread_id: threadId },
-            metadata: { threadId: threadId, agentName: "graph" }
-        };
-        const result = await agent.invoke({
-            messages: humanMessages,
-            contextData: { 
-                active_topic_title: title,
-                isTrustedChat: isTrusted,
-                chatJid: chatJid,
-                chatName: chatName,
-                senderJid: lastMsgUserJid,
-                senderName: senderName,
-                masterNumber: MASTER_NUMBER,
-                accountName: accountName
-            }
-        }, config);
+        // ── TRIGGER: register the generating event before invoking the agent ──
+        // Use inject metadata if this queue was triggered by a cron/system inject;
+        // otherwise it's a regular WhatsApp message.
+        const triggerId = generateTriggerId();
+        const resolvedTriggerType = injectMeta?.triggerType ?? 'whatsapp_message';
+        resolvedThreadId = threadId;
+        const triggerCtx = setActiveTrigger(threadId, {
+            triggerId,
+            triggerType: resolvedTriggerType,
+            threadId,
+            chatJid,
+            chatName,
+            senderJid: injectMeta ? undefined : lastMsgUserJid,
+            senderName: injectMeta ? 'SISTEMA' : senderName,
+            accountName,
+            messageContent: combinedText,
+            metadata: {
+                isGroup,
+                mentionsBia: messagesToProcess.some(m => m.metadata?.mentionsBia),
+                isReplyToBot: messagesToProcess.some(m => m.metadata?.isReplyToBot),
+                wasReceivedWhileProcessing: messagesToProcess.some(m => m.metadata?.wasReceivedWhileProcessing),
+            },
+            routineId: injectMeta?.routineId,
+            routinePrompt: injectMeta?.routinePrompt,
+        });
+        activeTriggerCtx = triggerCtx;
+        logger.logTriggerEvent(triggerCtx);
+        triggerStartMs = Date.now();
 
-        const responseMessage = result.messages[result.messages.length - 1];
-        let responseText = typeof responseMessage.content === 'string'
-            ? responseMessage.content
-            : JSON.stringify(responseMessage.content);
-
-        // Bloqueio de segurança para a conta pessoal
-        if (accountName === 'personal') {
-            logger.info(`[SECURITY] Resposta direta bloqueada na conta pessoal. Chat: ${chatJid}`);
-            responseText = ''; // Força o silêncio absoluto. Mensagens na personal apenas via interceptador algorítmico.
-        }
-
-        // Se a resposta for '[SILENT]', não enviamos nenhuma mensagem de volta
-        if (responseText && responseText.trim().toUpperCase() === '[SILENT]') {
-            logger.info(`[DEBUG] Bia decidiu ficar em silêncio no chat ${chatJid} (Conta: ${accountName}).`);
-        } else if (responseText) {
-            await queueMessageSend(queueKey, async () => {
-                // Ativa indicador de digitando apenas se de fato vamos responder
-                await sock.sendPresenceUpdate('composing', chatJid);
-
-                // Simula tempo de digitação natural baseado no tamanho do texto
-                const typingTime = Math.min(Math.max(responseText.length * 30, 1000), 4000);
-                await delay(typingTime);
-
-                await sock.sendPresenceUpdate('paused', chatJid);
-
-                const sentMsg = await sock.sendMessage(chatJid, { text: responseText });
-                if (sentMsg?.key?.id) {
-                    botSentMessageIds.add(sentMsg.key.id);
-                    appendMessageToHistory(accountName, chatJid, {
-                        id: sentMsg.key.id,
-                        timestamp: Date.now(),
-                        sender: "bia",
-                        senderName: "Bia",
-                        chatName: chatName,
-                        content: responseText,
-                        isFromMe: true
-                    });
+        await runWithTriggerContext(triggerCtx, async () => {
+            const config = { 
+                configurable: { thread_id: threadId },
+                metadata: { threadId: threadId, agentName: "graph" }
+            };
+            const result = await agent.invoke({
+                messages: humanMessages,
+                contextData: { 
+                    active_topic_title: title,
+                    isTrustedChat: isTrusted,
+                    chatJid: chatJid,
+                    chatName: chatName,
+                    senderJid: lastMsgUserJid,
+                    senderName: senderName,
+                    masterNumber: MASTER_NUMBER,
+                    accountName: accountName
                 }
-            });
-        }
+            }, config);
+
+            const responseMessage = result.messages[result.messages.length - 1];
+            let responseText = (responseMessage instanceof AIMessage)
+                ? (typeof responseMessage.content === 'string' ? responseMessage.content : JSON.stringify(responseMessage.content))
+                : '';
+
+            // Collect agents used from contextData executionLog
+            const agentsUsed: string[] = result.contextData?.executionLog || [];
+
+            // Bloqueio de segurança para a conta pessoal
+            if (accountName === 'personal') {
+                logger.info(`[SECURITY] Resposta direta bloqueada na conta pessoal. Chat: ${chatJid}`);
+                responseText = ''; // Força o silêncio absoluto. Mensagens na personal apenas via interceptador algorítmico.
+            }
+
+            // Se a resposta for '[SILENT]' ou vazia/não-AIMessage, não enviamos nenhuma mensagem de volta
+            if (!responseText || responseText.trim().toUpperCase() === '[SILENT]') {
+                logger.info(`[DEBUG] Bia decidiu ficar em silêncio ou não gerou resposta de IA no chat ${chatJid} (Conta: ${accountName}).`);
+                // Log trigger outcome: silent
+                logger.logTriggerOutcome(triggerCtx, {
+                    action: 'silent',
+                    agentsUsed,
+                    durationMs: Date.now() - triggerStartMs,
+                });
+                clearActiveTrigger(threadId);
+            } else {
+                // Log trigger outcome: responded
+                logger.logTriggerOutcome(triggerCtx, {
+                    action: 'responded',
+                    responseText,
+                    agentsUsed,
+                    durationMs: Date.now() - triggerStartMs,
+                });
+                clearActiveTrigger(threadId);
+
+                await queueMessageSend(queueKey, async () => {
+                    // Ativa indicador de digitando apenas se de fato vamos responder
+                    await sock.sendPresenceUpdate('composing', chatJid);
+
+                    // Simula tempo de digitação natural baseado no tamanho do texto
+                    const typingTime = Math.min(Math.max(responseText.length * 30, 1000), 4000);
+                    await delay(typingTime);
+
+                    await sock.sendPresenceUpdate('paused', chatJid);
+
+                    const sentMsg = await sock.sendMessage(chatJid, { text: responseText });
+                    if (sentMsg?.key?.id) {
+                        botSentMessageIds.add(sentMsg.key.id);
+                        appendMessageToHistory(accountName, chatJid, {
+                            id: sentMsg.key.id,
+                            timestamp: Date.now(),
+                            sender: "bia",
+                            senderName: "Bia",
+                            chatName: chatName,
+                            content: responseText,
+                            isFromMe: true
+                        });
+                    }
+                });
+            }
+        });
     } catch (error) {
         logger.error(`Erro ao processar fila do chat ${chatJid}:`, error);
+        // Log trigger outcome: error — use the outer-scoped triggerCtx if available
+        if (activeTriggerCtx) {
+            logger.logTriggerOutcome(activeTriggerCtx, {
+                action: 'error',
+                error: error instanceof Error ? error.message : String(error),
+                durationMs: triggerStartMs ? Date.now() - triggerStartMs : undefined,
+            });
+            clearActiveTrigger(resolvedThreadId);
+        }
         try {
             await sock.sendPresenceUpdate('paused', chatJid);
         } catch (_) {}
@@ -267,8 +452,7 @@ async function processChatQueue(queueKey: string, sock: any) {
             queue.firstMessageTime = Date.now();
             
             const lastMsg = queue.messages[queue.messages.length - 1];
-            const rawText = lastMsg.content.split('\n[Metadados')[0];
-            const silenceDelay = getSilenceDelayForMessage(rawText);
+            const silenceDelay = getSilenceDelayForMessage(lastMsg.text);
             queue.lastSilenceDelay = silenceDelay;
 
             queue.timeoutId = setTimeout(() => {
@@ -280,7 +464,18 @@ async function processChatQueue(queueKey: string, sock: any) {
     }
 }
 
-export async function injectSystemMessage(chatJid: string, text: string, accountName: string = 'main') {
+export interface SystemInjectOptions {
+    triggerType?: 'cron_routine' | 'system_inject';
+    routineId?: number;
+    routinePrompt?: string;
+}
+
+export async function injectSystemMessage(
+    chatJid: string,
+    text: string,
+    accountName: string = 'main',
+    options: SystemInjectOptions = {}
+) {
     const sock = sockets.get(accountName) || globalSock;
     if (!sock) {
         logger.error(`[SYSTEM INJECT] Socket for ${accountName} is not initialized.`);
@@ -288,7 +483,8 @@ export async function injectSystemMessage(chatJid: string, text: string, account
     }
     
     const queueKey = `${accountName}:${chatJid}`;
-    logger.info(`[SYSTEM INJECT] Injetando mensagem na fila ${queueKey}: "${text}"`);
+    const resolvedType = options.triggerType || 'system_inject';
+    logger.info(`[SYSTEM INJECT] Injetando mensagem na fila ${queueKey} (tipo: ${resolvedType}): "${text}"`);
     let queue = chatQueues.get(queueKey);
     if (!queue) {
         queue = {
@@ -305,13 +501,37 @@ export async function injectSystemMessage(chatJid: string, text: string, account
         queue.firstMessageTime = Date.now();
     }
 
-    queue.messages.push({
-        content: text,
-        displayName: "SISTEMA",
-        messageId: "sys-" + Date.now(),
-        userJid: chatJid,
-        timestamp: Date.now()
+    if (!queue.pendingInjectMetas) {
+        queue.pendingInjectMetas = [];
+    }
+    queue.pendingInjectMetas.push({
+        triggerType: resolvedType,
+        routineId: options.routineId,
+        routinePrompt: options.routinePrompt,
     });
+
+    const msgId = "sys-" + Date.now();
+    const timestamp = Date.now();
+    const isGroup = chatJid.endsWith('@g.us');
+    const metadata = {
+        isGroup,
+        mentionsBia: false,
+        isReplyToBot: false,
+        wasReceivedWhileProcessing: false
+    };
+
+    queue.messages.push({
+        text: text,
+        displayName: "SISTEMA",
+        messageId: msgId,
+        userJid: chatJid,
+        timestamp: timestamp,
+        metadata: metadata
+    });
+
+    savePendingMessage(msgId, queueKey, accountName, chatJid, text, "SISTEMA", chatJid, timestamp, metadata).catch(err => 
+        logger.error("[PENDING_QUEUE DB] Erro ao salvar mensagem injetada no SQLite:", err)
+    );
 
     if (queue.timeoutId) {
         clearTimeout(queue.timeoutId);
@@ -429,22 +649,40 @@ export async function disconnectFromWhatsApp(accountName: string, logout: boolea
 }
 
 export function isWhatsAppConnected(accountName: string): boolean {
-    return sockets.has(accountName);
+    return sockets.has(accountName) || (accountName === 'main' && !!globalSock);
 }
 
-export async function getAllGroups(accountName: string): Promise<{jid: string, name: string}[]> {
-    const sock = sockets.get(accountName);
-    if (!sock) return [];
-    try {
-        const groups = await sock.groupFetchAllParticipating();
-        return Object.values(groups).map((g: any) => ({
-            jid: g.id,
-            name: g.subject
-        }));
-    } catch (e) {
-        logger.error(`Erro ao buscar grupos de ${accountName}:`, e);
-        return [];
+export async function getAllGroups(accountName?: string): Promise<{jid: string, name: string}[]> {
+    const groupMap = new Map<string, string>();
+
+    // 1. Coleta do cache em memória (groupNameCache)
+    for (const [key, name] of groupNameCache.entries()) {
+        const [acc, jid] = key.split(':');
+        if (!accountName || acc === accountName) {
+            groupMap.set(jid, name);
+        }
     }
+
+    // 2. Coleta das conexões ativas do Baileys
+    const targetAccounts = accountName ? [accountName] : ['main', 'personal'];
+    for (const acc of targetAccounts) {
+        const sock = sockets.get(acc) || (acc === 'main' ? globalSock : null);
+        if (sock) {
+            try {
+                const groups = await sock.groupFetchAllParticipating();
+                for (const g of Object.values(groups) as any[]) {
+                    if (g && g.id && g.subject) {
+                        groupMap.set(g.id, g.subject);
+                        groupNameCache.set(`${acc}:${g.id}`, g.subject);
+                    }
+                }
+            } catch (e) {
+                logger.error(`Erro ao buscar grupos de ${acc}:`, e);
+            }
+        }
+    }
+
+    return Array.from(groupMap.entries()).map(([jid, name]) => ({ jid, name }));
 }
 
 export async function connectToWhatsApp(accountName: string = 'main') {
@@ -486,8 +724,20 @@ export async function connectToWhatsApp(accountName: string = 'main') {
             logger.info(`Conexão fechada (${accountName}). Logged out: ${isLoggedOut}. Reconectando imediatamente: ${shouldReconnect}`);
             
             if (shouldReconnect) {
-                connectToWhatsApp(accountName);
+                const attempts = (reconnectAttempts.get(accountName) || 0) + 1;
+                reconnectAttempts.set(accountName, attempts);
+
+                // Exponential backoff com jitter: base 2s, fator 1.5, teto em 30s + jitter (0-1000ms)
+                const baseDelay = Math.min(2000 * Math.pow(1.5, attempts - 1), 30000);
+                const jitter = Math.floor(Math.random() * 1000);
+                const delayMs = Math.round(baseDelay + jitter);
+
+                logger.info(`[WATCHDOG] Reconectando ${accountName} em ${Math.round(delayMs / 1000)}s (tentativa ${attempts})...`);
+                setTimeout(() => {
+                    connectToWhatsApp(accountName).catch(err => logger.error(`[WATCHDOG] Erro ao reconectar ${accountName}:`, err));
+                }, delayMs);
             } else {
+                reconnectAttempts.delete(accountName);
                 logger.warn(`[WATCHDOG] Sessão de ${accountName} expirou ou foi desconectada pelo usuário. Limpando credenciais e reiniciando...`);
                 // Se foi a principal, avisa o Luiz pelo personal para que ele saiba o que aconteceu
                 if (accountName === 'main') {
@@ -520,8 +770,19 @@ export async function connectToWhatsApp(accountName: string = 'main') {
             }
         } else if (connection === 'open') {
             logger.info(`WhatsApp (${accountName}) conectado com sucesso!`);
+            reconnectAttempts.set(accountName, 0);
             botJids.set(accountName, normalizeJid(sock.user?.id));
             botLids.set(accountName, normalizeJid(sock.user?.lid));
+
+            if (accountName === 'main') {
+                refreshMainGroupJids().catch(err =>
+                    logger.error(`[WHATSAPP] Erro ao atualizar lista de grupos da conta main no login:`, err)
+                );
+            }
+
+            recoverPendingMessagesOnStartup(accountName, sock).catch(err =>
+                logger.error(`[RECOVERY] Erro ao recuperar mensagens pendentes de ${accountName}:`, err)
+            );
         }
     });
 
@@ -582,23 +843,54 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
             const isSelf = chatJid === myJid || chatJid === myLid;
             const isGroup = chatJid.endsWith('@g.us');
 
+            // ===== MENSAGENS DA BIA: Ignora qualquer mensagem enviada pela própria Bia =====
+            if (isMessageFromBia(userJid)) {
+                logger.info(`[IGNORED] Mensagem de ${userJid} ignorada no processRawQueue pois foi enviada pela própria Bia (Conta: ${accountName}).`);
+                continue;
+            }
+
+            // ===== GRUPOS DA CONTA MAIN NA PERSONAL: Ignora no personal grupos que a Bia (main) já participa =====
+            if (accountName === 'personal' && isGroup) {
+                if (mainGroupJids.has(chatJid) || (await isMainAccountInGroup(chatJid))) {
+                    logger.info(`[IGNORED] Mensagem do grupo ${chatJid} ignorada na conta personal pois a Bia (main) já faz parte do grupo.`);
+                    continue;
+                }
+            }
+
+            const docMsg = msg.message?.documentMessage || msg.message?.documentWithCaptionMessage?.message?.documentMessage;
             let text = msg.message?.conversation || 
                          msg.message?.extendedTextMessage?.text || 
                          msg.message?.imageMessage?.caption || 
-                         msg.message?.videoMessage?.caption;
+                         msg.message?.videoMessage?.caption ||
+                         docMsg?.caption;
+
+            // ===== GRUPOS IGNORADOS: Se for grupo e estiver na lista de ignorados, descarta =====
+            let cachedGroupName = groupNameCache.get(`${accountName}:${chatJid}`);
+            if (isGroup && !cachedGroupName) {
+                cachedGroupName = await getChatName(sock, chatJid, accountName);
+            }
+            if (isGroup && isGroupIgnored(chatJid, cachedGroupName)) {
+                logger.info(`[IGNORED] Mensagem de grupo ignorado: ${chatJid} (${cachedGroupName || 'sem nome em cache'})`);
+                continue;
+            }
 
             if (msg.message?.audioMessage) {
-                try {
-                    logger.info(`[AUDIO] Baixando áudio de ${chatJid}...`);
-                    const buffer = (await downloadMediaMessage(
-                        msg,
-                        'buffer',
-                        { },
-                        { 
-                            logger: logger as any,
-                            reuploadRequest: sock.updateMediaMessage
-                        }
-                    )) as Buffer;
+                const audioSeconds = msg.message?.audioMessage?.seconds || 0;
+                if (audioSeconds > 300) {
+                    logger.warn(`[AUDIO] Áudio de ${chatJid} possui ${audioSeconds}s (excede o limite de 5 min). Transcrição ignorada.`);
+                    text = `[Áudio de ${Math.round(audioSeconds / 60)} min recebido — não transcrito por exceder o limite máximo de 5 minutos]`;
+                } else {
+                    try {
+                        logger.info(`[AUDIO] Baixando áudio de ${chatJid} (${audioSeconds}s)...`);
+                        const buffer = (await downloadMediaMessage(
+                            msg,
+                            'buffer',
+                            { },
+                            { 
+                                logger: logger as any,
+                                reuploadRequest: sock.updateMediaMessage
+                            }
+                        )) as Buffer;
                     
                     logger.info(`[AUDIO] Áudio baixado, iniciando transcrição via Groq...`);
                     const audioFile = await toFile(buffer, 'audio.ogg', { type: 'audio/ogg' });
@@ -618,9 +910,10 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                     } else {
                         logger.warn(`[AUDIO] Transcrição retornou vazia.`);
                     }
-                } catch (err) {
-                    logger.error(`[AUDIO] Erro ao processar áudio:`, err);
-                    continue;
+                    } catch (err) {
+                        logger.error(`[AUDIO] Erro ao processar áudio:`, err);
+                        continue;
+                    }
                 }
             }
 
@@ -640,7 +933,7 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                     logger.info(`[IMAGE] Imagem baixada, iniciando análise via Gemini...`);
                     
                     const { GoogleGenAI } = await import('@google/genai');
-                    const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+                    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY });
                     
                     let response;
                     const attempts = 3;
@@ -681,6 +974,98 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                 } catch (err) {
                     logger.error(`[IMAGE] Erro ao processar imagem:`, err);
                     continue;
+                }
+            }
+
+            if (docMsg) {
+                try {
+                    const fileName = docMsg.fileName || 'arquivo';
+                    const mimetype = docMsg.mimetype || '';
+                    const caption = docMsg.caption || '';
+                    logger.info(`[DOCUMENT] Baixando documento de ${chatJid}: "${fileName}" (${mimetype})...`);
+
+                    const buffer = (await downloadMediaMessage(
+                        msg,
+                        'buffer',
+                        {},
+                        {
+                            logger: logger as any,
+                            reuploadRequest: sock.updateMediaMessage
+                        }
+                    )) as Buffer;
+
+                    if (buffer) {
+                        const fileExt = fileName.includes('.') ? fileName.substring(fileName.lastIndexOf('.')).toLowerCase() : '';
+                        const isTextLike = 
+                            ['.csv', '.txt', '.json', '.md', '.tsv', '.log', '.xml', '.html', '.css', '.js', '.ts', '.py', '.sh', '.yaml', '.yml'].includes(fileExt) ||
+                            mimetype.startsWith('text/') ||
+                            mimetype.includes('csv') ||
+                            mimetype.includes('json') ||
+                            mimetype.includes('javascript') ||
+                            mimetype.includes('xml');
+
+                        if (isTextLike) {
+                            let contentStr = buffer.toString('utf-8');
+                            const maxChars = 30000;
+                            let truncatedNotice = '';
+                            if (contentStr.length > maxChars) {
+                                truncatedNotice = `\n... [Conteúdo do arquivo foi truncado aos 30.000 caracteres de um total de ${contentStr.length}]`;
+                                contentStr = contentStr.substring(0, maxChars);
+                            }
+
+                            text = `[Arquivo/Documento recebido: "${fileName}"]:\n--- CONTEÚDO DO ARQUIVO ---\n${contentStr}${truncatedNotice}\n--- FIM DO ARQUIVO ---`;
+                            if (caption) {
+                                text += `\n[Legenda do arquivo]: "${caption}"`;
+                            }
+                            logger.info(`[DOCUMENT] Arquivo de texto/CSV "${fileName}" processado com sucesso (${buffer.length} bytes).`);
+                        } else if (mimetype === 'application/pdf' || fileExt === '.pdf') {
+                            logger.info(`[DOCUMENT] Documento PDF "${fileName}" baixado. Analisando via Gemini...`);
+                            try {
+                                const { GoogleGenAI } = await import('@google/genai');
+                                const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY });
+                                const response = await ai.models.generateContent({
+                                    model: 'gemini-flash-lite-latest',
+                                    contents: [
+                                        {
+                                            role: 'user',
+                                            parts: [
+                                                { text: 'Extraia e resuma o conteúdo principal deste documento PDF de forma estruturada para contextualizar a conversa.' },
+                                                { inlineData: { data: buffer.toString('base64'), mimeType: 'application/pdf' } }
+                                            ]
+                                        }
+                                    ]
+                                });
+                                const pdfSummary = response?.text;
+                                if (pdfSummary) {
+                                    text = `[Documento PDF recebido: "${fileName}"]:\nConteúdo do PDF:\n${pdfSummary}`;
+                                    if (caption) {
+                                        text += `\n[Legenda do arquivo]: "${caption}"`;
+                                    }
+                                    logger.info(`[DOCUMENT] Análise do PDF "${fileName}" concluída via Gemini.`);
+                                } else {
+                                    text = `[Documento PDF recebido: "${fileName}"] (não foi possível extrair o texto automaticamente).`;
+                                    if (caption) text += `\n[Legenda]: "${caption}"`;
+                                }
+                            } catch (pdfErr) {
+                                logger.error(`[DOCUMENT] Erro ao analisar PDF via Gemini:`, pdfErr);
+                                text = `[Documento PDF recebido: "${fileName}"]`;
+                                if (caption) text += `\n[Legenda]: "${caption}"`;
+                            }
+                        } else {
+                            text = `[Documento/Arquivo anexado: "${fileName}" (Tipo: ${mimetype || 'binário'})]`;
+                            if (caption) {
+                                text += `\n[Legenda do arquivo]: "${caption}"`;
+                            }
+                            logger.info(`[DOCUMENT] Documento binário "${fileName}" recebido.`);
+                        }
+                    }
+                } catch (err) {
+                    logger.error(`[DOCUMENT] Erro ao processar documento:`, err);
+                    if (!text && docMsg.caption) {
+                        text = `[Arquivo recebido com erro no download]: ${docMsg.caption}`;
+                    } else if (!text) {
+                        continue;
+                    }
                 }
             }
 
@@ -738,6 +1123,23 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
             }
             // ----------------------------------------------
 
+            // --- GERENCIAMENTO DE GRUPOS IGNORADOS ---
+            if (isGroup && MASTER_JIDS.includes(userJid) && accountName === 'main') {
+                const cmd = isGroupManagementCommand(text);
+                if (cmd.action === 'ignore') {
+                    const groupName = await getChatName(sock, chatJid, accountName) || chatJid;
+                    addIgnoredGroup(chatJid, groupName);
+                    await sock.sendMessage(chatJid, { text: '✅ Entendido! Não vou mais responder neste grupo. Se precisar de mim, é só me chamar no privado. 😊' });
+                    continue;
+                }
+                if (cmd.action === 'unignore') {
+                    removeIgnoredGroup(chatJid);
+                    await sock.sendMessage(chatJid, { text: '✅ Pronto! Voltei a prestar atenção neste grupo. 😊' });
+                    continue;
+                }
+            }
+            // ----------------------------------------------
+
             // Subscreve para receber atualizações de presença deste chat
             try {
                 await sock.presenceSubscribe(chatJid);
@@ -757,19 +1159,10 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                 // Verifica menções à Bia no texto (case-insensitive)
                 const mentionsBia = text.toLowerCase().includes('bia');
 
-                let formattedContent = isGroup ? `${displayName}: ${text}` : text;
-                if (isGroup) {
-                    formattedContent += `\n[Metadados do Grupo: Menciona Bia = ${mentionsBia ? 'Sim' : 'Não'} | Resposta Direta para Bia = ${isReplyToBot ? 'Sim' : 'Não'}]`;
-                }
-
                 logger.info(`[DEBUG] Recebido de ${chatJid} (${isGroup ? 'Grupo' : 'Privado'}): "${text}". Adicionando à fila.`);
 
                 let queue = chatQueues.get(queueKey);
                 const isProcessing = queue ? queue.isProcessing : false;
-
-                if (isProcessing) {
-                    formattedContent = `[⚠️ Mensagem enviada enquanto você formulava a resposta anterior] ` + formattedContent;
-                }
 
                 if (!queue) {
                     queue = {
@@ -792,17 +1185,31 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                     continue;
                 }
 
+                const msgId = msg.key.id || `sys-${Date.now()}`;
+                const timestamp = Date.now();
+                const metadata = {
+                    isGroup,
+                    mentionsBia,
+                    isReplyToBot,
+                    wasReceivedWhileProcessing: isProcessing
+                };
+
                 queue.messages.push({
-                    content: formattedContent,
+                    text: text,
                     displayName: displayName,
-                    messageId: msg.key.id || '',
+                    messageId: msgId,
                     userJid: userJid,
-                    timestamp: Date.now()
+                    timestamp: timestamp,
+                    metadata: metadata
                 });
+
+                savePendingMessage(msgId, queueKey, accountName, chatJid, text, displayName, userJid, timestamp, metadata).catch(err => 
+                    logger.error("[PENDING_QUEUE DB] Erro ao salvar mensagem recebida no SQLite:", err)
+                );
                 
                 appendMessageToHistory(accountName, chatJid, {
-                    id: msg.key.id || `sys-${Date.now()}`,
-                    timestamp: Date.now(),
+                    id: msgId,
+                    timestamp: timestamp,
                     sender: userJid,
                     senderName: displayName,
                     chatName: isGroup ? await getChatName(sock, chatJid, accountName) : displayName,
@@ -842,16 +1249,38 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
         if (m.type !== 'notify') return;
 
         for (const msg of m.messages) {
+            const chatJid = normalizeJid(msg.key.remoteJid);
+            const userJid = normalizeJid(msg.key.participant || msg.participant || chatJid);
+
             // Ignora as próprias mensagens que o bot/usuário enviou para evitar self-loops
             if (msg.key.fromMe) continue;
 
-            const chatJid = normalizeJid(msg.key.remoteJid);
-            
-            // Previne loop cruzado: a conta personal NÃO deve monitorar a conversa do Luiz com a própria Bia (main)
+            // Ignora TODAS as mensagens enviadas pela própria Bia (main JID / LID) em qualquer socket
+            if (isMessageFromBia(userJid)) {
+                logger.info(`[IGNORED] Mensagem enviada pela própria Bia (${userJid}) recebida na conta ${accountName}. Descartando.`);
+                continue;
+            }
+
+            // Mapeia grupos nos quais a conta main está ativa
+            if (accountName === 'main' && chatJid.endsWith('@g.us')) {
+                mainGroupJids.add(chatJid);
+            }
+
+            // Previne monitoramento duplicado na conta personal
             if (accountName === 'personal') {
                 const mainJid = botJids.get('main');
                 const mainLid = botLids.get('main');
+                
+                // 1. Previne monitorar a conversa direta do Luiz com a própria Bia (main)
                 if ((mainJid && chatJid === mainJid) || (mainLid && chatJid === mainLid)) continue;
+
+                // 2. Se for grupo e a conta MAIN já fizer parte desse grupo, a conta personal ignora!
+                if (chatJid.endsWith('@g.us')) {
+                    if (mainGroupJids.has(chatJid) || (await isMainAccountInGroup(chatJid))) {
+                        logger.info(`[IGNORED] Mensagem de grupo (${chatJid}) ignorada na conta personal pois a Bia (main) já faz parte do grupo.`);
+                        continue;
+                    }
+                }
             }
 
             const queueKey = `${accountName}:${chatJid}`;

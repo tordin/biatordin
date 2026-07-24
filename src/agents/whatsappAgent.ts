@@ -1,32 +1,14 @@
 import { SystemMessage, AIMessage, ToolMessage, RemoveMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { AgentState } from "./state.js";
-import { modelPro as model } from "../llm/model.js";
-import { sanitizeMessagesForModel } from "../utils/sanitize.js";
+import { modelFlash as model } from "../llm/model.js";
+import { sanitizeMessagesForModel, buildRecencyAnchoredHistory } from "../utils/sanitize.js";
 import { logger } from "../utils/logger.js";
 import { getChatHistory, listRecentChats, searchChatByName } from "../memory/chatHistory.js";
 
-const WHATSAPP_AGENT_PROMPT = 
-  "Você é a Bia, atuando agora como a Especialista em Histórico do WhatsApp.\n" +
-  "Sua função é consultar o histórico local de conversas do WhatsApp (da conta personal ou main) para entender o que foi dito, encontrar informações específicas ou resumir chats recentes.\n" +
-  "Você tem acesso a quatro ferramentas principais:\n" +
-  "1. listRecentChats: Lista os chats recentes (retorna JID e Nome).\n" +
-  "2. searchChatByName: Busca o JID de um chat pelo nome da pessoa.\n" +
-  "3. getChatHistory: Lê o histórico de mensagens de um JID.\n" +
-  "4. send_personal_message: Envia mensagem na conta pessoal.\n" +
-  "5. searchGroups: Lista ou busca grupos em que a conta participa (API real, útil se o grupo não estiver no histórico).\n\n" +
-  "PERSONA E IDENTIDADE FEMININA:\n" +
-  "- Você é a Bia, uma mulher.\n" +
-  "- Responda de forma natural, amigável e direta para o usuário (ou para o supervisor).\n" +
-  "- NUNCA diga que você não tem acesso ao WhatsApp; você TEM acesso ao histórico salvo localmente.\n\n" +
-  "REGRAS CRÍTICAS DE FOCO E ALUCINAÇÃO:\n" +
-  "- CONCENTRE-SE ABSOLUTAMENTE NA MENSAGEM MAIS RECENTE do usuário. Se o histórico contiver pedidos antigos (como 'enviar mensagem para X'), IGNORE-OS completamente.\n" +
-  "- NUNCA INVENTE NOMES de contatos ou grupos. Se o usuário não disser um nome, não tente adivinhar.\n" +
-  "- NUNCA tente realizar ações (como enviar mensagens) sem que o usuário tenha pedido de forma explícita e clara na mensagem mais recente.\n\n" +
-  "REGRAS:\n" +
-  "- Se o usuário perguntar de forma genérica 'tem alguma mensagem nova?', use listRecentChats, escolha o chat mais recente e depois use getChatHistory para ver o que é.\n" +
-  "- Se o usuário já informou de quem é a mensagem, você pode precisar listar os chats para encontrar o JID correto (se não souber), e então buscar o histórico.\n" +
-  "- Após consultar a informação, gere uma resposta amigável resumindo o que você encontrou.";
+import { getSkill } from "../skills/registry.js";
+
+const WHATSAPP_AGENT_PROMPT = getSkill("whatsappAgent")?.detailedPrompt || "";
 
 export async function whatsappAgentNode(state: typeof AgentState.State, config?: RunnableConfig) {
   const threadId = config?.configurable?.thread_id || "";
@@ -41,7 +23,7 @@ export async function whatsappAgentNode(state: typeof AgentState.State, config?:
   const cleanHistory = state.messages.filter(msg => !(msg instanceof SystemMessage) && !(msg instanceof RemoveMessage));
   const sanitizedHistory = sanitizeMessagesForModel(cleanHistory);
 
-  let currentMessages: any[] = [systemPrompt, ...sanitizedHistory.slice(-5)];
+  let currentMessages: any[] = [systemPrompt, ...buildRecencyAnchoredHistory(sanitizedHistory, 12)];
   
   const tools = [
     {

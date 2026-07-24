@@ -2,8 +2,9 @@ import { AIMessage } from "@langchain/core/messages";
 import { AgentState } from "./state.js";
 import { notifyMaster, sendIntermediateMessage, connectToWhatsApp, disconnectFromWhatsApp, isWhatsAppConnected } from "../transport/whatsapp.js";
 import { addTrustedChat, removeTrustedChat, isTrustedChat, listTrustedChats, MASTER_NUMBER, MASTER_JIDS, createMessageApprovalToken } from "../memory/security.js";
+import { addIgnoredGroup, removeIgnoredGroup, getAllIgnoredGroups, normalizeText } from "../config/ignoredGroups.js";
 import { logger } from "../utils/logger.js";
-import { modelPro as model } from "../llm/model.js";
+import { modelFlash as model } from "../llm/model.js";
 import { sanitizeMessagesForModel } from "../utils/sanitize.js";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
@@ -171,16 +172,177 @@ const checkPersonalAccountStatusTool = tool(
   }
 );
 
-const securityTools = [addTrustedChatTool, removeTrustedChatTool, checkTrustTool, listTrustedChatsTool, getMasterInfoTool, connectPersonalAccountTool, disconnectPersonalAccountTool, checkPersonalAccountStatusTool];
+const ignoreGroupTool = tool(
+  async ({ target, name }, config) => {
+    try {
+      const state = config.configurable as any;
+      const currentChatJid = state?.contextData?.chatJid;
+
+      let jidToIgnore = target?.trim() || "";
+      let nameToIgnore = name?.trim() || target?.trim() || "";
+
+      if (!jidToIgnore || jidToIgnore.toLowerCase() === "atual" || jidToIgnore.toLowerCase() === "este grupo" || jidToIgnore.toLowerCase() === "aqui") {
+        if (currentChatJid && currentChatJid.endsWith('@g.us')) {
+          jidToIgnore = currentChatJid;
+          nameToIgnore = nameToIgnore || currentChatJid;
+        }
+      }
+
+      if (!jidToIgnore && !nameToIgnore) {
+        return "Erro: É necessário informar o nome ou o JID do grupo a ser ignorado.";
+      }
+
+      // Tenta resolver o JID real do grupo se apenas o nome foi informado
+      if (!jidToIgnore.endsWith('@g.us')) {
+        try {
+          const { getAllGroups } = await import("../transport/whatsapp.js");
+          const mainGroups = await getAllGroups('main');
+          const personalGroups = await getAllGroups('personal');
+          const allGroups = [...mainGroups, ...personalGroups];
+
+          const searchName = normalizeText(nameToIgnore || jidToIgnore);
+          const matchedGroup = allGroups.find(g => {
+            const gNorm = normalizeText(g.name);
+            return gNorm === searchName || gNorm.includes(searchName) || searchName.includes(gNorm);
+          });
+
+          if (matchedGroup) {
+            jidToIgnore = matchedGroup.jid;
+            nameToIgnore = matchedGroup.name;
+            logger.info(`[SECURITY_AGENT] Grupo "${nameToIgnore}" resolvido para JID: ${jidToIgnore}`);
+          }
+        } catch (e) {
+          logger.warn('[SECURITY_AGENT] Não foi possível consultar grupos das contas conectadas:', e);
+        }
+      } else if (jidToIgnore.endsWith('@g.us') && (!nameToIgnore || nameToIgnore === jidToIgnore)) {
+        try {
+          const { getAllGroups } = await import("../transport/whatsapp.js");
+          const allGroups = [...(await getAllGroups('main')), ...(await getAllGroups('personal'))];
+          const matchedGroup = allGroups.find(g => g.jid === jidToIgnore);
+          if (matchedGroup) {
+            nameToIgnore = matchedGroup.name;
+          }
+        } catch (e) {}
+      }
+
+      const success = addIgnoredGroup(jidToIgnore || `name:${nameToIgnore}`, nameToIgnore || jidToIgnore);
+      if (success) {
+        return `✅ O grupo "${nameToIgnore || jidToIgnore}" (${jidToIgnore}) foi adicionado à lista de grupos ignorados. As mensagens dele serão descartadas automaticamente.`;
+      } else {
+        return `O grupo "${nameToIgnore || jidToIgnore}" (${jidToIgnore}) já está na lista de grupos ignorados.`;
+      }
+    } catch (e: any) {
+      return `Erro ao ignorar grupo: ${e.message}`;
+    }
+  },
+  {
+    name: "ignore_group",
+    description: "Adiciona um grupo do WhatsApp à lista de grupos ignorados. Aceita o nome do grupo, JID, ou 'este grupo'/'atual' para se referir ao chat atual.",
+    schema: z.object({
+      target: z.string().optional().describe("O nome do grupo, JID ou 'este grupo'/'atual' para referir-se ao chat atual."),
+      name: z.string().optional().describe("Nome amigável do grupo, se disponível."),
+    }),
+  }
+);
+
+const unignoreGroupTool = tool(
+  async ({ target }, config) => {
+    try {
+      const state = config.configurable as any;
+      const currentChatJid = state?.contextData?.chatJid;
+
+      let jidToUnignore = target?.trim() || "";
+      if (!jidToUnignore || jidToUnignore.toLowerCase() === "atual" || jidToUnignore.toLowerCase() === "este grupo" || jidToUnignore.toLowerCase() === "aqui") {
+        if (currentChatJid) {
+          jidToUnignore = currentChatJid;
+        }
+      }
+
+      if (!jidToUnignore) {
+        return "Erro: É necessário informar o nome ou JID do grupo a ser retirado da lista de ignorados.";
+      }
+
+      // Tenta resolver o grupo nas contas conectadas para garantir remoção precisa
+      if (!jidToUnignore.endsWith('@g.us')) {
+        try {
+          const { getAllGroups } = await import("../transport/whatsapp.js");
+          const allGroups = [...(await getAllGroups('main')), ...(await getAllGroups('personal'))];
+          const searchName = normalizeText(jidToUnignore);
+          const matchedGroup = allGroups.find(g => {
+            const gNorm = normalizeText(g.name);
+            return gNorm === searchName || gNorm.includes(searchName) || searchName.includes(gNorm);
+          });
+
+          if (matchedGroup) {
+            const removedByJid = removeIgnoredGroup(matchedGroup.jid);
+            if (removedByJid) {
+              return `✅ O grupo "${matchedGroup.name}" (${matchedGroup.jid}) foi removido da lista de grupos ignorados. Voltei a acompanhar mensagens deste grupo.`;
+            }
+          }
+        } catch (e) {}
+      }
+
+      const success = removeIgnoredGroup(jidToUnignore);
+      if (success) {
+        return `✅ O grupo "${jidToUnignore}" foi removido da lista de grupos ignorados. Voltei a acompanhar mensagens deste grupo.`;
+      } else {
+        return `O grupo "${jidToUnignore}" não foi encontrado na lista de grupos ignorados.`;
+      }
+    } catch (e: any) {
+      return `Erro ao remover grupo dos ignorados: ${e.message}`;
+    }
+  },
+  {
+    name: "unignore_group",
+    description: "Remove um grupo da lista de grupos ignorados, voltando a acompanhar e atender o grupo.",
+    schema: z.object({
+      target: z.string().describe("O nome do grupo, JID ou 'este grupo' para referir-se ao chat atual."),
+    }),
+  }
+);
+
+const listIgnoredGroupsTool = tool(
+  async () => {
+    try {
+      const groups = getAllIgnoredGroups();
+      if (groups.length === 0) {
+        return "Atualmente não há nenhum grupo na lista de ignorados.";
+      }
+      const list = groups.map(g => `- **${g.name || g.jid}** (${g.jid}) - Ignorado em: ${new Date(g.ignoredAt).toLocaleString('pt-BR')}`).join('\n');
+      return `Grupos ignorados atualmente:\n${list}`;
+    } catch (e: any) {
+      return `Erro ao listar grupos ignorados: ${e.message}`;
+    }
+  },
+  {
+    name: "list_ignored_groups",
+    description: "Lista todos os grupos do WhatsApp que a Bia está ignorando atualmente.",
+    schema: z.object({}),
+  }
+);
+
+const securityTools = [
+  addTrustedChatTool, 
+  removeTrustedChatTool, 
+  checkTrustTool, 
+  listTrustedChatsTool, 
+  getMasterInfoTool, 
+  connectPersonalAccountTool, 
+  disconnectPersonalAccountTool, 
+  checkPersonalAccountStatusTool,
+  ignoreGroupTool,
+  unignoreGroupTool,
+  listIgnoredGroupsTool
+];
+
+import { getSkill } from "../skills/registry.js";
+
+const SECURITY_PROMPT = getSkill("securityAgent")?.detailedPrompt || "";
 
 const securityReactAgent = createReactAgent({
   llm: model,
   tools: securityTools,
-  messageModifier: `Você é o agente de segurança da Bia. Sua função é gerenciar as permissões de acesso do sistema.
-Você só tem permissão para atuar quando solicitado pelo Master (administrador).
-Use as ferramentas disponíveis para adicionar, remover, listar ou consultar o status de confiança dos números.
-Você também é responsável por conectar, desconectar ou checar o status da conta de monitoramento pessoal do administrador, sempre que ele solicitar.
-Para pedir autorização para enviar mensagens para contatos na conta pessoal do administrador, use o request_send_personal_message.`
+  messageModifier: SECURITY_PROMPT
 });
 
 export async function securityAgentNode(state: typeof AgentState.State) {
@@ -189,6 +351,7 @@ export async function securityAgentNode(state: typeof AgentState.State) {
   const isMaster = !!context.chatJid && MASTER_JIDS.includes(context.chatJid);
   let responseText = "";
 
+  logger.logAgentStart("securityAgent", context.chatJid || "", context);
   logger.info(`[SECURITY AGENT] Executando... isTrusted: ${isTrusted}, isMaster: ${isMaster}, chatJid: ${context.chatJid}`);
 
   // Se o usuário não é de confiança e está tentando acessar dados:
@@ -232,6 +395,7 @@ export async function securityAgentNode(state: typeof AgentState.State) {
 
   return {
     messages: [new AIMessage(responseText)],
+    nextAgent: "FINISH",
     contextData: { newExecution: "securityAgent" }
   };
 }

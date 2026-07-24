@@ -267,7 +267,7 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
     logger.warn(`Loop detectado: ${updates.nextAgent} chamado repetidamente. Forçando FINISH.`);
     updates.nextAgent = "FINISH";
     if (!parsed.response) {
-      parsed.response = "Pronto! Aqui está o resumo do que encontrei.";
+      parsed.response = "Deixa que já anotei isso! Se precisar de mais alguma coisa é só falar.";
     }
   } else if (updates.nextAgent !== "FINISH" && currentExecutions >= maxAgentCalls) {
     logger.warn(`Max agent calls (${maxAgentCalls}) atingido. Forçando FINISH.`);

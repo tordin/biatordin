@@ -1,7 +1,7 @@
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import { AIMessage, SystemMessage, RemoveMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
-import { sanitizeMessagesForModel } from "../../utils/sanitize.js";
+import { sanitizeMessagesForModel, buildRecencyAnchoredHistory } from "../../utils/sanitize.js";
 import { AgentState } from "../state.js";
 import { logger } from "../../utils/logger.js";
 import dotenv from "dotenv";
@@ -69,16 +69,16 @@ export async function safeAgentNode(
     
     const cleanHistory = state.messages.filter(msg => !(msg instanceof SystemMessage) && !(msg instanceof RemoveMessage));
     const sanitizedHistory = sanitizeMessagesForModel(cleanHistory);
-    const slicedHistory = sanitizedHistory.slice(-12);
+    const slicedHistory = buildRecencyAnchoredHistory(sanitizedHistory, 12);
     
     const dateTimeMessage = new SystemMessage(
       `[DATA E HORA ATUAL]: ${new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}`
     );
     const messagesWithTime = [dateTimeMessage, ...slicedHistory];
     
-    // Timeout de 60 segundos para evitar travamento indefinido
+    // Timeout de 35 segundos para evitar travamento da execução
     const timeoutPromise = new Promise<never>((_, reject) => 
-      setTimeout(() => reject(new Error(`Timeout: ${name} demorou mais de 60s`)), 60000)
+      setTimeout(() => reject(new Error(`Timeout: ${name} demorou mais de 35s`)), 35000)
     );
     
     const response = await Promise.race([
@@ -99,9 +99,12 @@ export async function safeAgentNode(
   } catch (error: any) {
     logger.error(`[${name.toUpperCase()} ERROR]`, error.message || error);
     
-    const errorMessage = new AIMessage(
-      `[ERRO do agente ${name}]: ${error.message || 'Falha desconhecida ao executar a tarefa.'}`
-    );
+    const isTimeout = error.message?.includes("Timeout");
+    const userFriendlyNotice = isTimeout
+      ? `A consulta pelo agente especialista ${name} excedeu o limite de tempo.`
+      : `Ocorreu uma oscilação temporária na execução do especialista ${name}.`;
+
+    const errorMessage = new AIMessage(userFriendlyNotice);
     
     return {
       messages: [errorMessage],

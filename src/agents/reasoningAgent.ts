@@ -1,27 +1,29 @@
 import { SystemMessage, AIMessage, RemoveMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { AgentState } from "./state.js";
-import { modelFlash as model } from "../llm/model.js";
+import { modelPro as model } from "../llm/model.js";
 import { sanitizeMessagesForModel, buildRecencyAnchoredHistory } from "../utils/sanitize.js";
 import { cleanMarkdownForWhatsApp } from "../transport/formatters.js";
 import { logger } from "../utils/logger.js";
 import { getSkill } from "../skills/registry.js";
 
-const CHITCHAT_PROMPT = getSkill("chitchat")?.detailedPrompt || "";
+const REASONING_PROMPT = getSkill("reasoningAgent")?.detailedPrompt || "";
 
-export async function chitchatNode(state: typeof AgentState.State, config?: RunnableConfig) {
+export async function reasoningAgentNode(state: typeof AgentState.State, config?: RunnableConfig) {
   const threadId = config?.configurable?.thread_id || "";
-  logger.logAgentStart("chitchat", threadId, state.contextData);
+  logger.logAgentStart("reasoningAgent", threadId, state.contextData);
   
   try {
-    const chitchatSystemPrompt = `${CHITCHAT_PROMPT}\n\n[DATA E HORA ATUAL]: ${new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}`;
-    const systemMessage = new SystemMessage(chitchatSystemPrompt);
+    const systemPrompt = `${REASONING_PROMPT}\n\n[DATA E HORA ATUAL]: ${new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}`;
+    const systemMessage = new SystemMessage(systemPrompt);
     const cleanHistory = state.messages.filter(msg => !(msg instanceof SystemMessage) && !(msg instanceof RemoveMessage));
     const sanitizedHistory = sanitizeMessagesForModel(cleanHistory);
     
+    // Utiliza modelPro (ChatDeepSeek com Thinking Mode ativado, budget_tokens: 8192)
+    // Sem tools vinculadas, permitindo que o Thinking Mode funcione perfeitamente sem erros de incompatibilidade de API.
     const response = await model.invoke(
       [systemMessage, ...buildRecencyAnchoredHistory(sanitizedHistory, 12)],
-      { metadata: { agentName: "chitchat", threadId } }
+      { metadata: { agentName: "reasoningAgent", threadId } }
     );
     
     if (typeof response.content === "string") {
@@ -31,14 +33,14 @@ export async function chitchatNode(state: typeof AgentState.State, config?: Runn
     return {
       messages: [response],
       nextAgent: "FINISH",
-      contextData: { newExecution: "chitchat" }
+      contextData: { newExecution: "reasoningAgent" }
     };
   } catch (error: any) {
-    logger.error("[CHITCHAT ERROR]", error.message || error);
+    logger.error("[REASONING AGENT ERROR]", error.message || error);
     return {
-      messages: [new AIMessage("Desculpe, tive um probleminha aqui. Pode repetir?")],
+      messages: [new AIMessage("Tive um problema ao processar esse raciocínio complexo. Pode reformular a pergunta?")],
       nextAgent: "FINISH",
-      contextData: { newExecution: "chitchat" }
+      contextData: { newExecution: "reasoningAgent" }
     };
   }
 }

@@ -3,7 +3,7 @@ import { RunnableConfig } from "@langchain/core/runnables";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { safeAgentNode } from "./workspace/base.js";
-import { modelPro as model } from "../llm/model.js";
+import { modelFlash as model } from "../llm/model.js";
 import { AgentState } from "./state.js";
 import { logger } from "../utils/logger.js";
 import { saveRoutine, getRoutinesForChat, deactivateRoutine, deleteRoutine } from "../memory/routines.js";
@@ -78,15 +78,9 @@ const deleteRoutineTool = tool(
   }
 );
 
-const ROUTINE_PROMPT = 
-  "Você é o Routine Agent (Especialista em Agendamentos e Lembretes) da Bia.\n" +
-  "Sua função é criar, listar e excluir rotinas agendadas usando expressões Cron.\n" +
-  "O usuário pode pedir para ser lembrado de algo (daqui a alguns minutos, horas, dias), criar rotinas recorrentes (todos os dias, toda semana) ou pedir para ser COBRADO sobre tarefas no futuro.\n" +
-  "Converta a solicitação de tempo para uma expressão CRON válida e chame a ferramenta `create_routine`.\n" +
-  "Se o objetivo for cobrar o usuário sobre uma tarefa, defina um `prompt` que instrua você mesma a agir quando o tempo chegar. Exemplo de prompt: 'Cobre o usuário amigavelmente para saber se ele já finalizou a tarefa de comprar o presente'.\n" +
-  "Se o usuário pedir para listar os lembretes ou rotinas, chame `list_routines`.\n" +
-  "Se o usuário pedir para cancelar/excluir, chame `delete_routine` com o ID apropriado.\n" +
-  "Sempre chame a ferramenta apropriada e descreva os resultados. Não fale diretamente com o usuário no final, seja objetiva.";
+import { getSkill } from "../skills/registry.js";
+
+const ROUTINE_PROMPT = getSkill("routineAgent")?.detailedPrompt || "";
 
 const routineAgent = createReactAgent({
   llm: model,

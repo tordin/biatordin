@@ -1,17 +1,15 @@
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { initWorkspaceTools, safeAgentNode } from "./base.js";
-import { modelPro as model } from "../../llm/model.js";
+import { modelFlash as model } from "../../llm/model.js";
 import { AgentState } from "../state.js";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { google } from "googleapis";
 
-const SHEETS_PROMPT = 
-  "Você é o Agente de Google Planilhas da Bia.\n" +
-  "Sua função principal é gerenciar as planilhas do Google do usuário usando as ferramentas nativas fornecidas.\n" +
-  "Você pode criar planilhas e preenchê-las com dados.\n" +
-  "Liste a URL da planilha criada ou as ações realizadas com precisão para que a supervisora (Bia) formule a resposta final. Não responda diretamente ao usuário final.";
+import { getSkill } from "../../skills/registry.js";
+
+const SHEETS_PROMPT = getSkill("sheetsAgent")?.detailedPrompt || "";
 
 const createSpreadsheetTool = tool(
   async ({ title, initialData }) => {

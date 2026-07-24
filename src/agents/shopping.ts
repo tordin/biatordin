@@ -46,15 +46,9 @@ const googleShoppingTool = tool(
   }
 );
 
-const SHOPPING_PROMPT = 
-  "Você é o Agente de Compras (Especialista em Produtos e Preços) da Bia.\n" +
-  "Sua função principal é buscar produtos, comparar preços e encontrar lojas usando a ferramenta `google_shopping`.\n" +
-  "Sempre use as ferramentas para fundamentar suas respostas.\n" +
-  "Diretrizes importantes:\n" +
-  "1. REGRAS DE CUSTO (MUITO IMPORTANTE): FAÇA APENAS UMA (1) BUSCA por execução. A API tem um limite estrito de custo/cota, portanto NUNCA realize buscas repetidas com pequenas variações do termo (ex: 'iPhone 17 256 GB' e 'iPhone 17 256GB'). Pense bem no termo, faça a melhor busca na primeira tentativa e contente-se com os resultados obtidos.\n" +
-  "2. PRIORIDADE DE LOJAS: Ignore completamente resultados de marketplaces internacionais sujeitos a impostos de importação e de qualidade duvidosa (como AliExpress, eBay, Techinn, etc). Filtre os resultados retornados pela busca e traga apenas opções de vendedores nacionais de credibilidade (como Amazon, Mercado Livre, Magazine Luiza, Carrefour, Kabum, Fast Shop, etc).\n" +
-  "3. Liste os produtos encontrados informando título, preço, loja (source) e o link para compra.\n" +
-  "4. Seja objetivo e estruture os dados recuperados de forma clara para que a supervisora (Bia) formule a resposta final. Não responda diretamente ao usuário final.";
+import { getSkill } from "../skills/registry.js";
+
+const SHOPPING_PROMPT = getSkill("shoppingAgent")?.detailedPrompt || "";
 
 const shoppingAgent = createReactAgent({
   llm: model,
