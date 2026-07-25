@@ -12,6 +12,7 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       chatJid TEXT NOT NULL,
+      topicId TEXT,
       title TEXT NOT NULL,
       category TEXT NOT NULL DEFAULT 'Geral',
       urgency TEXT NOT NULL DEFAULT 'Média',
@@ -20,11 +21,25 @@ db.serialize(() => {
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  
+  // Migrate existing table to add topicId if it doesn't exist
+  db.all("PRAGMA table_info(tasks)", (err, rows: any[]) => {
+    if (!err && rows) {
+      const hasTopicId = rows.some(row => row.name === 'topicId');
+      if (!hasTopicId) {
+        db.run("ALTER TABLE tasks ADD COLUMN topicId TEXT", (alterErr) => {
+          if (alterErr) logger.error("[TASKS DB] Erro ao adicionar coluna topicId:", alterErr);
+          else logger.info("[TASKS DB] Coluna topicId adicionada com sucesso.");
+        });
+      }
+    }
+  });
 });
 
 export interface Task {
   id: number;
   chatJid: string;
+  topicId?: string;
   title: string;
   category: string;
   urgency: string;
@@ -38,17 +53,19 @@ export function saveTask(
   title: string,
   category: string = 'Geral',
   urgency: string = 'Média',
-  dueDate?: string
+  dueDate?: string,
+  topicId?: string
 ): Promise<Task> {
   return new Promise((resolve, reject) => {
     db.run(
-      `INSERT INTO tasks (chatJid, title, category, urgency, dueDate, isCompleted) VALUES (?, ?, ?, ?, ?, 0)`,
-      [chatJid, title, category, urgency, dueDate || null],
+      `INSERT INTO tasks (chatJid, topicId, title, category, urgency, dueDate, isCompleted) VALUES (?, ?, ?, ?, ?, ?, 0)`,
+      [chatJid, topicId || null, title, category, urgency, dueDate || null],
       function (err) {
         if (err) return reject(err);
         resolve({
           id: this.lastID,
           chatJid,
+          topicId,
           title,
           category,
           urgency,
@@ -65,7 +82,8 @@ export function getTasksForChat(
   chatJid: string,
   statusFilter: 'pending' | 'completed' | 'all' = 'pending',
   categoryFilter?: string,
-  isTrustedChat: boolean = true
+  isTrustedChat: boolean = true,
+  topicId?: string
 ): Promise<Task[]> {
   return new Promise((resolve, reject) => {
     let sql = `SELECT * FROM tasks`;
@@ -88,6 +106,11 @@ export function getTasksForChat(
     if (categoryFilter) {
       sql += ` AND category LIKE ?`;
       params.push(`%${categoryFilter}%`);
+    }
+
+    if (topicId) {
+      sql += ` AND topicId = ?`;
+      params.push(topicId);
     }
 
     sql += ` ORDER BY createdAt DESC`;

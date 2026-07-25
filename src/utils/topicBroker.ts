@@ -2,6 +2,7 @@ import { z } from "zod";
 import { modelFlashStructured as model } from "../llm/model.js";
 import { getRecentTopics, createTopic, updateTopicActivity } from "../memory/topics.js";
 import { logger } from "./logger.js";
+import { invokeStructuredWithFallback } from "./structuredOutput.js";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
 
 const CLASSIFICATION_PROMPT = 
@@ -20,14 +21,11 @@ const CLASSIFICATION_PROMPT =
   "6. MENSAGENS CURTAS (1-2 PALAVRAS): Se não for um comando para um tema totalmente novo, mensagens curtas são continuação do assunto ativo.\n" +
   "7. Se for assunto novo (topicId = 'new'), forneça um newTitle curto (até 4 palavras) descrevendo o assunto.";
 
-// Stateless structured model — hoisted to module scope to avoid recreation on every call
 const classificationSchema = z.object({
   topicId: z.string().describe("O ID do assunto onde a mensagem se encaixa, ou 'new' para novo assunto"),
   newTitle: z.string().optional().describe("Título curto (até 4 palavras) se for novo assunto"),
   reason: z.string().describe("Justificativa da decisão")
 });
-
-const classificationModel = model.withStructuredOutput(classificationSchema, { name: "TopicClassification" });
 
 export async function resolveTopicForMessage(chatJid: string, messageText: string, accountName?: string): Promise<{ topicId: string, title: string }> {
   // 1. Obter os assuntos recentes
@@ -51,12 +49,18 @@ export async function resolveTopicForMessage(chatJid: string, messageText: strin
       .replace("{currentTopic}", currentTopicFormatted)
       .replace("{recentTopics}", recentListFormatted || "(Nenhum outro assunto recente)");
 
-    const response = await classificationModel.invoke([
-      new SystemMessage(formattedPrompt),
-      new HumanMessage(`Nova Mensagem: "${messageText}"`)
-    ], {
-      metadata: { agentName: "topic_broker", threadId: chatJid }
-    });
+    const response = await invokeStructuredWithFallback(
+      model,
+      classificationSchema,
+      [
+        new SystemMessage(formattedPrompt),
+        new HumanMessage(`Nova Mensagem: "${messageText}"`)
+      ],
+      {
+        name: "TopicClassification",
+        metadata: { agentName: "topic_broker", threadId: chatJid }
+      }
+    );
 
     logger.info(`[TOPIC BROKER] Decisão: ${response.topicId} | Motivo: ${response.reason}`);
 

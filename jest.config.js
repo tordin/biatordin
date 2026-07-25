@@ -14,4 +14,17 @@ export default {
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
+  testPathIgnorePatterns: ['<rootDir>/dist/'],
+  collectCoverageFrom: [
+    'src/**/*.ts',
+    '!src/agents/search.ts',
+    '!src/agents/shopping.ts',
+    '!src/agents/workspace/calendar.ts',
+    '!src/agents/workspace/gmail.ts',
+    '!src/agents/workspace/sheets.ts',
+    '!src/agents/workspace/docs.ts',
+    '!src/transport/whatsapp.ts',
+    '!src/index.ts'
+  ],
 };
+

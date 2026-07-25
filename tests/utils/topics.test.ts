@@ -1,4 +1,11 @@
-import { initTopicsTable, createTopic, getRecentTopics, getTopic, updateTopicActivity } from '../../src/memory/topics.js';
+import { 
+  initTopicsTable, 
+  createTopic, 
+  getRecentTopics, 
+  getTopic, 
+  updateTopicActivity,
+  getOrCreateTopicByTitle
+} from '../../src/memory/topics.js';
 
 describe('Topics Database Manager', () => {
   beforeAll(async () => {
@@ -25,7 +32,6 @@ describe('Topics Database Manager', () => {
     const t1 = await createTopic(chatJid, 'Topic 1');
     const t2 = await createTopic(chatJid, 'Topic 2');
     
-    // Update t1 to make it most active
     await new Promise((r) => setTimeout(r, 10));
     await updateTopicActivity(t1.id);
 
@@ -33,5 +39,16 @@ describe('Topics Database Manager', () => {
     expect(recent.length).toBeGreaterThanOrEqual(2);
     expect(recent[0].id).toBe(t1.id);
     expect(recent[1].id).toBe(t2.id);
+  });
+
+  it('should get existing topic or create new topic by title (getOrCreateTopicByTitle)', async () => {
+    const chatJid = 'test-get-create@s.whatsapp.net';
+    const topicTitle = 'Viagem de Férias';
+
+    const firstCall = await getOrCreateTopicByTitle(chatJid, topicTitle);
+    expect(firstCall.title).toBe(topicTitle);
+
+    const secondCall = await getOrCreateTopicByTitle(chatJid, topicTitle);
+    expect(secondCall.id).toBe(firstCall.id);
   });
 });

@@ -4,9 +4,9 @@ import { loggerCallbackHandler } from "../utils/logger.js";
 
 dotenv.config();
 
-const deepseekApiKey = process.env.DEEPSEEK_API_KEY || 'sk-e1550dbbc57f43f5b06d0d80451b7f26';
-if (!process.env.DEEPSEEK_API_KEY) {
-  console.warn("WARNING: DEEPSEEK_API_KEY environment variable is not defined. Using fallback key.");
+const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
+if (!deepseekApiKey) {
+  console.warn("WARNING: DEEPSEEK_API_KEY environment variable is not defined.");
 }
 
 // Flash: Rápido e custo-eficiente para volume

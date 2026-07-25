@@ -326,6 +326,60 @@ export async function listVectorMemories(limit: number = 50): Promise<VectorMemo
 }
 
 /**
+ * Retorna as memórias vinculadas a um assunto (topicId) específico.
+ */
+export async function getMemoriesByTopicId(topicId: string, limit: number = 20): Promise<VectorMemoryRecord[]> {
+  await initVectorMemory();
+  const db = getVectorDB();
+
+  return new Promise((resolve, reject) => {
+    // Usando JSON_EXTRACT para buscar no sqlite pelo metadado
+    db.all(
+      `SELECT id, content, category, chat_jid, created_at, updated_at, metadata
+       FROM long_term_memories 
+       WHERE json_extract(metadata, '$.topicId') = ? 
+       ORDER BY created_at DESC LIMIT ?`,
+      [topicId, limit],
+      (err, rows: any[]) => {
+        if (err) {
+          // Fallback caso a versão do sqlite não suporte json_extract: busca tudo e filtra no JS
+          logger.warn('[VECTOR_MEMORY] Erro na query JSON, tentando fallback JS', err);
+          db.all(
+            `SELECT id, content, category, chat_jid, created_at, updated_at, metadata
+             FROM long_term_memories ORDER BY created_at DESC`,
+            (err2, rows2: any[]) => {
+              if (err2) return reject(err2);
+              const filtered = (rows2 || []).map((r) => ({
+                id: r.id,
+                content: r.content,
+                category: r.category,
+                chatJid: r.chat_jid,
+                createdAt: r.created_at,
+                updatedAt: r.updated_at,
+                metadata: r.metadata ? JSON.parse(r.metadata) : undefined
+              })).filter(m => m.metadata && m.metadata.topicId === topicId).slice(0, limit);
+              resolve(filtered);
+            }
+          );
+          return;
+        }
+
+        const results = (rows || []).map((r) => ({
+          id: r.id,
+          content: r.content,
+          category: r.category,
+          chatJid: r.chat_jid,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+          metadata: r.metadata ? JSON.parse(r.metadata) : undefined
+        }));
+        resolve(results);
+      }
+    );
+  });
+}
+
+/**
  * Sincroniza informações legadas em formato Markdown (data/bia_memory.md) para o banco vetorial.
  */
 export async function syncCoreMemoryToVector(): Promise<number> {

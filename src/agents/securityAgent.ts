@@ -1,7 +1,7 @@
 import { AIMessage } from "@langchain/core/messages";
 import { AgentState } from "./state.js";
 import { notifyMaster, sendIntermediateMessage, connectToWhatsApp, disconnectFromWhatsApp, isWhatsAppConnected } from "../transport/whatsapp.js";
-import { addTrustedChat, removeTrustedChat, isTrustedChat, listTrustedChats, MASTER_NUMBER, MASTER_JIDS, createMessageApprovalToken } from "../memory/security.js";
+import { addTrustedChat, removeTrustedChat, isTrustedChat, listTrustedChats, MASTER_NUMBER, MASTER_JIDS, createMessageApprovalToken, addAutoReplyChat, removeAutoReplyChat, listAutoReplyChats } from "../memory/security.js";
 import { addIgnoredGroup, removeIgnoredGroup, getAllIgnoredGroups, normalizeText } from "../config/ignoredGroups.js";
 import { logger } from "../utils/logger.js";
 import { modelFlash as model } from "../llm/model.js";
@@ -17,7 +17,7 @@ function formatJidForUser(jid?: string): string {
 }
 
 // Tools for the master to manage trusted chats
-const addTrustedChatTool = tool(
+export const addTrustedChatTool = tool(
   async ({ jid }) => {
     try {
       await addTrustedChat(jid);
@@ -42,7 +42,7 @@ const addTrustedChatTool = tool(
   }
 );
 
-const removeTrustedChatTool = tool(
+export const removeTrustedChatTool = tool(
   async ({ jid }) => {
     try {
       await removeTrustedChat(jid);
@@ -60,7 +60,7 @@ const removeTrustedChatTool = tool(
   }
 );
 
-const checkTrustTool = tool(
+export const checkTrustTool = tool(
   async ({ jid }) => {
     try {
       const isTrusted = await isTrustedChat(jid);
@@ -79,7 +79,7 @@ const checkTrustTool = tool(
   }
 );
 
-const listTrustedChatsTool = tool(
+export const listTrustedChatsTool = tool(
   async () => {
     try {
       const chats = await listTrustedChats();
@@ -99,7 +99,7 @@ const listTrustedChatsTool = tool(
   }
 );
 
-const getMasterInfoTool = tool(
+export const getMasterInfoTool = tool(
   async () => {
     return `O número Master (administrador) configurado no sistema é: ${formatJidForUser(MASTER_NUMBER)}`;
   },
@@ -110,7 +110,7 @@ const getMasterInfoTool = tool(
   }
 );
 
-const connectPersonalAccountTool = tool(
+export const connectPersonalAccountTool = tool(
   async () => {
     try {
       if (isWhatsAppConnected('personal')) {
@@ -133,7 +133,7 @@ const connectPersonalAccountTool = tool(
   }
 );
 
-const disconnectPersonalAccountTool = tool(
+export const disconnectPersonalAccountTool = tool(
   async () => {
     try {
       if (!isWhatsAppConnected('personal')) {
@@ -153,7 +153,7 @@ const disconnectPersonalAccountTool = tool(
   }
 );
 
-const checkPersonalAccountStatusTool = tool(
+export const checkPersonalAccountStatusTool = tool(
   async () => {
     try {
       if (isWhatsAppConnected('personal')) {
@@ -172,7 +172,7 @@ const checkPersonalAccountStatusTool = tool(
   }
 );
 
-const ignoreGroupTool = tool(
+export const ignoreGroupTool = tool(
   async ({ target, name }, config) => {
     try {
       const state = config.configurable as any;
@@ -245,7 +245,7 @@ const ignoreGroupTool = tool(
   }
 );
 
-const unignoreGroupTool = tool(
+export const unignoreGroupTool = tool(
   async ({ target }, config) => {
     try {
       const state = config.configurable as any;
@@ -301,7 +301,7 @@ const unignoreGroupTool = tool(
   }
 );
 
-const listIgnoredGroupsTool = tool(
+export const listIgnoredGroupsTool = tool(
   async () => {
     try {
       const groups = getAllIgnoredGroups();
@@ -321,6 +321,63 @@ const listIgnoredGroupsTool = tool(
   }
 );
 
+export const enableAutoReplyTool = tool(
+  async ({ jid, name }) => {
+    try {
+      await addAutoReplyChat(jid);
+      return `O número/grupo ${name || formatJidForUser(jid)} (${jid}) foi adicionado à lista de contatos habilitados. Bia poderá enviar mensagens pela conta pessoal sem aprovação explícita.`;
+    } catch (e: any) {
+      return `Erro ao adicionar contato habilitado: ${e.message}`;
+    }
+  },
+  {
+    name: "enable_auto_reply",
+    description: "Adiciona um número ou grupo (JID) à lista de contatos habilitados para bypass de segurança. A Bia poderá enviar e responder mensagens na conta pessoal para este chat IMEDIATAMENTE, sem pedir aprovação explícita (token) do administrador.",
+    schema: z.object({
+      jid: z.string().describe("O JID do WhatsApp a ser adicionado (ex: 5511999999999@s.whatsapp.net ou 120363xxx@g.us)"),
+      name: z.string().optional().describe("Nome amigável do contato/grupo (apenas para ficar legível na resposta)."),
+    }),
+  }
+);
+
+export const disableAutoReplyTool = tool(
+  async ({ jid }) => {
+    try {
+      await removeAutoReplyChat(jid);
+      return `O número/grupo ${formatJidForUser(jid)} foi removido da lista de contatos habilitados. A Bia precisará de aprovação (token) para enviar mensagens pela conta pessoal para este chat.`;
+    } catch (e: any) {
+      return `Erro ao remover contato habilitado: ${e.message}`;
+    }
+  },
+  {
+    name: "disable_auto_reply",
+    description: "Remove um número ou grupo (JID) da lista de contatos habilitados para bypass de aprovação de mensagens.",
+    schema: z.object({
+      jid: z.string().describe("O JID do WhatsApp a ser removido da lista."),
+    }),
+  }
+);
+
+export const listAutoReplyChatsTool = tool(
+  async () => {
+    try {
+      const chats = await listAutoReplyChats();
+      if (chats.length === 0) {
+        return "Atualmente não há nenhum contato na lista de habilitados para envio de mensagens sem aprovação.";
+      }
+      const list = chats.map(c => `- ${formatJidForUser(c.jid)} (Adicionado em: ${new Date(c.addedAt).toLocaleString('pt-BR')})`).join('\n');
+      return `Contatos habilitados para envio sem aprovação (bypass) atuais:\n${list}`;
+    } catch (e: any) {
+      return `Erro ao listar contatos habilitados: ${e.message}`;
+    }
+  },
+  {
+    name: "list_auto_reply_chats",
+    description: "Lista todos os números (JIDs) que estão atualmente na lista de contatos habilitados (auto-reply / bypass de aprovação de mensagens).",
+    schema: z.object({}),
+  }
+);
+
 const securityTools = [
   addTrustedChatTool, 
   removeTrustedChatTool, 
@@ -332,7 +389,10 @@ const securityTools = [
   checkPersonalAccountStatusTool,
   ignoreGroupTool,
   unignoreGroupTool,
-  listIgnoredGroupsTool
+  listIgnoredGroupsTool,
+  enableAutoReplyTool,
+  disableAutoReplyTool,
+  listAutoReplyChatsTool
 ];
 
 import { getSkill } from "../skills/registry.js";

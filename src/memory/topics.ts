@@ -37,10 +37,10 @@ export function initTopicsTable(): Promise<void> {
   });
 }
 
-export function getRecentTopics(chatJid: string, limit = 5): Promise<Topic[]> {
+export function getRecentTopics(chatJid: string, limit = 20): Promise<Topic[]> {
   return new Promise((resolve, reject) => {
     db.all(
-      `SELECT * FROM topics WHERE chatJid = ? AND status = 'active' ORDER BY lastActive DESC LIMIT ?`,
+      `SELECT * FROM topics WHERE (chatJid = ? OR chatJid = 'global') AND status = 'active' ORDER BY lastActive DESC LIMIT ?`,
       [chatJid, limit],
       (err, rows) => {
         if (err) {
@@ -85,6 +85,28 @@ export function createTopic(chatJid: string, title: string): Promise<Topic> {
         }
         logger.info(`[TOPICS DB] Novo tópico criado: "${title}" (ID: ${id}) para chat ${chatJid}`);
         resolve({ id, chatJid, title, lastActive, status });
+      }
+    );
+  });
+}
+
+export function getOrCreateTopicByTitle(chatJid: string, title: string): Promise<Topic> {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM topics WHERE chatJid = ? AND title = ? COLLATE NOCASE AND status = 'active'`,
+      [chatJid, title],
+      async (err, row) => {
+        if (err) return reject(err);
+        if (row) {
+          resolve(row as Topic);
+        } else {
+          try {
+            const newTopic = await createTopic(chatJid, title);
+            resolve(newTopic);
+          } catch (e) {
+            reject(e);
+          }
+        }
       }
     );
   });

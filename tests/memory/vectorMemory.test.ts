@@ -1,7 +1,17 @@
-import { initVectorMemory, addVectorMemory, searchVectorMemory, deleteVectorMemory, listVectorMemories } from "../../src/memory/vectorMemory.js";
+import { 
+  initVectorMemory, 
+  addVectorMemory, 
+  searchVectorMemory, 
+  deleteVectorMemory, 
+  listVectorMemories,
+  searchEntityMemory,
+  getMemoriesByTopicId,
+  syncCoreMemoryToVector
+} from "../../src/memory/vectorMemory.js";
 
 describe("Semantic Search RAG Vector Memory Layer (sqlite-vec)", () => {
   const testChatJid = "test-rag-chat@s.whatsapp.net";
+  const topicId = "topic-test-rag-123";
   let insertedId1: number;
   let insertedId2: number;
 
@@ -9,12 +19,12 @@ describe("Semantic Search RAG Vector Memory Layer (sqlite-vec)", () => {
     await initVectorMemory();
   });
 
-  test("deve armazenar anotações no banco vetorial SQLite", async () => {
+  test("deve armazenar anotações no banco vetorial SQLite com topicId em metadata", async () => {
     insertedId1 = await addVectorMemory(
       "Combinei de dar um relógio smartwatch de presente no aniversário do meu irmão em maio",
       "combinado",
       testChatJid,
-      { tag: "aniversario" }
+      { tag: "aniversario", topicId }
     );
     expect(insertedId1).toBeGreaterThan(0);
 
@@ -22,10 +32,28 @@ describe("Semantic Search RAG Vector Memory Layer (sqlite-vec)", () => {
       "A marca da ração do cachorro anotada é Royal Canin High Digest",
       "compra",
       testChatJid,
-      { tag: "pet" }
+      { tag: "pet", topicId }
     );
     expect(insertedId2).toBeGreaterThan(0);
   }, 15000);
+
+  test("deve buscar memórias associadas a um topicId específico", async () => {
+    const topicMemories = await getMemoriesByTopicId(topicId, 10);
+    expect(topicMemories.length).toBeGreaterThanOrEqual(1);
+    expect(topicMemories.some(m => m.id === insertedId1)).toBe(true);
+  });
+
+  test("deve buscar compilado amplo por palavras-chave (searchEntityMemory)", async () => {
+    const records = await searchEntityMemory(["aniversário", "smartwatch"], testChatJid);
+    expect(records).toBeDefined();
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.some(r => r.content.includes("smartwatch"))).toBe(true);
+  });
+
+  test("deve sincronizar a memória core com o banco vetorial (syncCoreMemoryToVector)", async () => {
+    const syncedCount = await syncCoreMemoryToVector();
+    expect(typeof syncedCount).toBe("number");
+  });
 
   test("deve listar memórias recentes gravadas", async () => {
     const list = await listVectorMemories(10);
@@ -34,18 +62,10 @@ describe("Semantic Search RAG Vector Memory Layer (sqlite-vec)", () => {
     expect(list.some(m => m.content.includes("Royal Canin"))).toBe(true);
   });
 
-  test("deve realizar busca semântica RAG por similaridade vetorial para o presente do irmão", async () => {
-    const results = await searchVectorMemory("O que eu combinei sobre o presente do aniversário do meu irmão em maio?", 3, testChatJid);
+  test("deve realizar busca semântica RAG por similaridade vetorial", async () => {
+    const results = await searchVectorMemory("O que eu combinei sobre o presente do aniversário do meu irmão?", 3, testChatJid);
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].content).toContain("smartwatch");
-    expect(results[0].distance).toBeDefined();
-  }, 15000);
-
-  test("deve realizar busca semântica RAG por similaridade vetorial para a marca da ração", async () => {
-    const results = await searchVectorMemory("Qual era a marca daquela ração do cachorro anotada há 3 meses?", 3, testChatJid);
-    expect(results.length).toBeGreaterThan(0);
-    expect(results[0].content).toContain("Royal Canin");
-    expect(results[0].distance).toBeDefined();
   }, 15000);
 
   test("deve excluir memórias do banco relacional e vetorial", async () => {

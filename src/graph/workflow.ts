@@ -20,7 +20,7 @@ import { checkpointer } from "../memory/checkpointer.js";
 import { logger } from "../utils/logger.js";
 
 // Routes from supervisor to specialist agents based on supervisor's decision
-function routeFromSupervisor(state: typeof AgentState.State) {
+export function routeFromSupervisor(state: typeof AgentState.State) {
   const next = state.nextAgent;
   logger.info(`[ROUTING] Supervisor decision routes to: "${next}"`);
   if (next === "searchAgent") return "searchAgent";
@@ -40,10 +40,7 @@ function routeFromSupervisor(state: typeof AgentState.State) {
   return "__end__";
 }
 
-// Routes from a specialist agent back to supervisor (to continue multi-step plans)
-// or directly to __end__ if the agent signaled FINISH (single-step tasks like chitchat).
-// This respects the agent's own decision and avoids unnecessary supervisor re-invocations.
-function routeFromSpecialist(state: typeof AgentState.State) {
+export function routeFromSpecialist(state: typeof AgentState.State) {
   if (state.nextAgent === "FINISH") {
     logger.info(`[ROUTING] Specialist signaled FINISH. Going to __end__ directly.`);
     return "__end__";

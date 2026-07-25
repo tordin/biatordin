@@ -9,14 +9,15 @@ import { logger } from "../utils/logger.js";
 import { saveRoutine, getRoutinesForChat, deactivateRoutine, deleteRoutine } from "../memory/routines.js";
 import { scheduleRoutine, descheduleRoutine } from "../utils/routineManager.js";
 
-const createRoutineTool = tool(
+export const createRoutineTool = tool(
   async ({ cronExpression, prompt }, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat (thread_id ausente).";
     const chatJid = threadId.includes('_') ? threadId.split('_')[0] : threadId;
+    const topicId = config?.configurable?.contextData?.activeTopicId;
 
     try {
-        const routine = await saveRoutine(chatJid, cronExpression, prompt);
+        const routine = await saveRoutine(chatJid, cronExpression, prompt, topicId);
         scheduleRoutine(routine);
         return `Rotina criada com sucesso! ID: ${routine.id}. Cron: ${cronExpression}. Prompt: "${prompt}"`;
     } catch (err: any) {
@@ -34,7 +35,7 @@ const createRoutineTool = tool(
   }
 );
 
-const listRoutinesTool = tool(
+export const listRoutinesTool = tool(
   async ({}, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat.";
@@ -58,7 +59,7 @@ const listRoutinesTool = tool(
   }
 );
 
-const deleteRoutineTool = tool(
+export const deleteRoutineTool = tool(
   async ({ id }, config) => {
     try {
         await deactivateRoutine(id);

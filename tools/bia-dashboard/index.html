@@ -68,6 +68,17 @@
   .card.conv .num { color: var(--accent); }
   .card.ok .num { color: var(--green); }
   .card.warn .num { color: var(--orange); }
+  .card.tokens .num { color: #f59e0b; }
+
+  .turn-meta .tokens-badge {
+    background: rgba(245,158,11,.12);
+    color: #f59e0b;
+    border: 1px solid rgba(245,158,11,.25);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
 
   /* Controls */
   .controls {
@@ -387,6 +398,7 @@
   <div class="card conv"><div class="num" id="totalTurns">—</div><div class="label">Conversas</div></div>
   <div class="card ok"><div class="num" id="okCount">—</div><div class="label">Processadas</div></div>
   <div class="card error"><div class="num" id="errCount">—</div><div class="label">Com Erro</div></div>
+  <div class="card tokens"><div class="num" id="totalTokensSummary">—</div><div class="label">Tokens Est.</div></div>
   <div class="card"><div class="num" id="totalEvts">—</div><div class="label">Eventos</div></div>
   <div class="card"><div class="num" id="agentCount">—</div><div class="label">Agentes</div></div>
 </div>
@@ -487,6 +499,63 @@ function timeAgo(ts) {
   return `${Math.floor(diff/86400000)}d`;
 }
 
+function estimateTokens(text) {
+  if (!text) return 0;
+  const str = typeof text === 'string' ? text : JSON.stringify(text);
+  return Math.max(1, Math.round(str.length / 4));
+}
+
+function calcEvtInputTokens(evt) {
+  let inputTokens = 0;
+  if (evt.event === 'LLM_START') {
+    const msgs = evt.data?.messages || [];
+    const prompts = evt.data?.prompts || [];
+    if (msgs.length > 0) {
+      for (const m of msgs) {
+        inputTokens += estimateTokens(formatMessageContent(m.content)) + estimateTokens(m.role || '');
+      }
+    } else if (prompts.length > 0) {
+      for (const p of prompts) {
+        inputTokens += estimateTokens(p);
+      }
+    }
+  }
+  return inputTokens;
+}
+
+function calcEvtOutputTokens(evt) {
+  let outputTokens = 0;
+  if (evt.event === 'LLM_END') {
+    const gens = evt.data?.generations || [];
+    for (const genList of gens) {
+      for (const item of genList) {
+        if (item.type === 'message' || item.type === 'text') {
+          outputTokens += estimateTokens(item.content || item.text || '');
+        } else if (item.type === 'tool_calls') {
+          outputTokens += estimateTokens(JSON.stringify(item.toolCalls || []));
+        }
+      }
+    }
+  }
+  return outputTokens;
+}
+
+function getTurnTokens(turn) {
+  if (turn.tokenStats) return turn.tokenStats;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let llmCalls = 0;
+  for (const evt of turn.events || []) {
+    if (evt.event === 'LLM_START') {
+      llmCalls++;
+      inputTokens += calcEvtInputTokens(evt);
+    } else if (evt.event === 'LLM_END') {
+      outputTokens += calcEvtOutputTokens(evt);
+    }
+  }
+  return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, llmCalls };
+}
+
 // ─── Data Loading ──────────────────────────────────────────
 async function loadSummary() {
   try {
@@ -495,6 +564,7 @@ async function loadSummary() {
     document.getElementById('totalTurns').textContent = d.totalTurns || 0;
     document.getElementById('okCount').textContent = (d.totalTurns || 0) - (d.turnsWithErrors || 0);
     document.getElementById('errCount').textContent = d.turnsWithErrors || 0;
+    document.getElementById('totalTokensSummary').textContent = d.totalTokens ? d.totalTokens.toLocaleString('pt-BR') : '—';
     document.getElementById('totalEvts').textContent = d.totalLines?.toLocaleString() || '—';
     document.getElementById('agentCount').textContent = d.agents?.length || '—';
   } catch {}
@@ -538,6 +608,8 @@ function renderTurns() {
       decisionLabel += ` · ${shortReason}${t.summary.length > 50 ? '…' : ''}`;
     }
     const chatTypeClass = (t.chatType || '').toLowerCase();
+    const tok = getTurnTokens(t);
+    const hasTokens = tok.totalTokens > 0;
 
     html += `<div class="turn ${t.hasError ? 'has-error' : ''}">
       <div class="turn-header">
@@ -547,6 +619,7 @@ function renderTurns() {
           ${t.senderName ? `<span class="topic">👤 ${escapeHtml(t.senderName)}</span>` : ''}
           ${t.accountName ? `<span class="topic">💼 ${escapeHtml(t.accountName)}</span>` : ''}
           ${t.topic ? `<span class="topic">📁 ${escapeHtml(t.topic)}</span>` : ''}
+          ${hasTokens ? `<span class="tokens-badge" title="Estimativa de tokens consumidos pelas chamadas de LLM neste grupo">⚡ ${tok.totalTokens.toLocaleString('pt-BR')} tokens <span style="opacity:0.75;font-weight:normal">(📥 ${tok.inputTokens.toLocaleString('pt-BR')} in · 📤 ${tok.outputTokens.toLocaleString('pt-BR')} out)</span></span>` : ''}
         </div>
         <div class="turn-decision ${decisionClass}">${decisionLabel}</div>
       </div>`;
@@ -703,14 +776,16 @@ function buildEventDetails(turn, turnIdx) {
     let summaryText = '';
     if (evt.event === 'LLM_START') {
       const count = evt.data?.messages?.length || evt.data?.prompts?.length || 0;
-      summaryText = `${count} ${count === 1 ? 'mensagem enviada' : 'mensagens enviadas'}`;
+      const inTok = calcEvtInputTokens(evt);
+      summaryText = `${count} ${count === 1 ? 'mensagem enviada' : 'mensagens enviadas'}` + (inTok ? ` (~${inTok.toLocaleString('pt-BR')} tokens in)` : '');
     } else if (evt.event === 'LLM_END') {
       const gens = evt.data?.generations || [];
+      const outTok = calcEvtOutputTokens(evt);
       const texts = gens.flat().map(g => {
         if (g.type === 'tool_calls') return `🔧 ${(g.toolCalls||[]).map(t=>t.name).join(', ')}`;
         return typeof g.content === 'string' ? g.content.slice(0, 80) : '';
       }).filter(Boolean);
-      summaryText = texts.join(' | ').slice(0, 100);
+      summaryText = (texts.join(' | ').slice(0, 80) || 'Resposta') + (outTok ? ` (~${outTok.toLocaleString('pt-BR')} tokens out)` : '');
     } else if (evt.event === 'AGENT_DECISION') {
       summaryText = `→ ${evt.data?.nextAgent || '?'}` + (evt.data?.reason ? `: ${evt.data.reason.slice(0, 80)}` : '');
     } else if (evt.event === 'TOOL_START') {
@@ -732,7 +807,7 @@ function buildEventDetails(turn, turnIdx) {
           ${agent ? `<span style="color:var(--pink)"> [${escapeHtml(agent)}]</span>` : ''}
           ${summaryText ? `<span class="evt-summary">${escapeHtml(summaryText)}</span>` : ''}
         </div>
-        <span class="evt-hint">${isEvtExpanded ? 'Recolher' : '🔍 Ver mensagens / detalhes'}</span>
+        ${isEvtExpanded ? '<span class="evt-hint">Recolher</span>' : ''}
       </div>`;
 
     if (isEvtExpanded) {

@@ -9,7 +9,11 @@ import { logger } from "../utils/logger.js";
 
 const googleShoppingTool = tool(
   async ({ query }) => {
-    const apiKey = process.env.SERPAPI_API_KEY || "a8523c463b6d667e0cc91aebff2988039bb5cf7397fd13fa063a42d7155fa95a";
+    const apiKey = process.env.SERPAPI_API_KEY;
+    if (!apiKey) {
+      logger.error("[GOOGLE SHOPPING] SERPAPI_API_KEY não definida nas variáveis de ambiente.");
+      return JSON.stringify({ error: "SERPAPI_API_KEY não configurada." });
+    }
     try {
       logger.info(`[GOOGLE SHOPPING] Buscando por: "${query}"`);
       const url = `https://serpapi.com/search.json?engine=google_shopping&q=${encodeURIComponent(query)}&gl=br&hl=pt&api_key=${apiKey}`;

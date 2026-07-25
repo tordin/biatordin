@@ -6,7 +6,7 @@ import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { agent } from '../graph/workflow.js';
 import { logger, generateTriggerId, setActiveTrigger, clearActiveTrigger, getActiveTrigger, runWithTriggerContext } from '../utils/logger.js';
 import { resolveTopicForMessage } from '../utils/topicBroker.js';
-import { isTrustedChat, MASTER_NUMBER, MASTER_JIDS, consumeApprovalToken, addTrustedChat, consumeMessageApprovalToken } from '../memory/security.js';
+import { isTrustedChat, MASTER_NUMBER, MASTER_JIDS, consumeApprovalToken, addTrustedChat, consumeMessageApprovalToken, isAutoReplyChat, createMessageApprovalToken } from '../memory/security.js';
 import { isGroupIgnored, addIgnoredGroup, removeIgnoredGroup, isGroupManagementCommand } from '../config/ignoredGroups.js';
 import { appendMessageToHistory } from '../memory/chatHistory.js';
 import { savePendingMessage, clearPendingMessagesForQueue, getAllPendingMessages } from '../memory/pendingQueue.js';
@@ -61,6 +61,7 @@ const rateLimitTimestamps = new Map<string, number[]>();
 const RATE_LIMIT_MAX = 5;
 const RATE_LIMIT_WINDOW_MS = 30_000;
 const groupNameCache = new Map<string, string>();
+const subscribedPresenceJids = new Set<string>();
 
 async function recoverPendingMessagesOnStartup(accountName: string, sock: any) {
     try {
@@ -103,10 +104,11 @@ async function getChatName(sock: any, chatJid: string, accountName: string): Pro
     if (groupNameCache.has(key)) return groupNameCache.get(key)!;
     try {
         const meta = await sock.groupMetadata(chatJid);
-        const name = meta.subject;
+        const name = meta?.subject || "";
         groupNameCache.set(key, name);
         return name;
     } catch {
+        groupNameCache.set(key, "");
         return "";
     }
 }
@@ -192,10 +194,18 @@ export function isMessageFromBia(userJid: string): boolean {
     return false;
 }
 
+let lastMainGroupRefresh = 0;
+
 /**
  * Atualiza a lista de grupos em que a conta main da Bia participa.
+ * Utiliza um throttle de 5 minutos para evitar rate limit do WhatsApp.
  */
-export async function refreshMainGroupJids(): Promise<Set<string>> {
+export async function refreshMainGroupJids(force = false): Promise<Set<string>> {
+    const now = Date.now();
+    if (!force && now - lastMainGroupRefresh < 5 * 60 * 1000) {
+        return mainGroupJids;
+    }
+
     const mainSock = sockets.get('main') || globalSock;
     if (mainSock) {
         try {
@@ -203,30 +213,12 @@ export async function refreshMainGroupJids(): Promise<Set<string>> {
             for (const gId of Object.keys(groups)) {
                 mainGroupJids.add(gId);
             }
+            lastMainGroupRefresh = now;
         } catch (e) {
             logger.error('[WHATSAPP] Erro ao atualizar grupos da conta main:', e);
         }
     }
     return mainGroupJids;
-}
-
-/**
- * Verifica se a conta main (Bia) é participante de um determinado grupo.
- */
-export async function isMainAccountInGroup(groupJid: string): Promise<boolean> {
-    if (!groupJid || !groupJid.endsWith('@g.us')) return false;
-    if (mainGroupJids.has(groupJid)) return true;
-
-    const mainSock = sockets.get('main') || globalSock;
-    if (mainSock) {
-        try {
-            await refreshMainGroupJids();
-            if (mainGroupJids.has(groupJid)) return true;
-        } catch (e) {
-            logger.error(`[WHATSAPP] Erro ao verificar se a conta main participa do grupo ${groupJid}:`, e);
-        }
-    }
-    return false;
 }
 
 
@@ -379,8 +371,19 @@ async function processChatQueue(queueKey: string, sock: any) {
 
             // Bloqueio de segurança para a conta pessoal
             if (accountName === 'personal') {
-                logger.info(`[SECURITY] Resposta direta bloqueada na conta pessoal. Chat: ${chatJid}`);
-                responseText = ''; // Força o silêncio absoluto. Mensagens na personal apenas via interceptador algorítmico.
+                const isAutoReply = await isAutoReplyChat(chatJid);
+                if (isAutoReply) {
+                    logger.info(`[SECURITY] Resposta direta permitida na conta pessoal (auto-reply habilitado). Chat: ${chatJid}`);
+                } else {
+                    logger.info(`[SECURITY] Resposta retida na conta pessoal para aprovação. Chat: ${chatJid}`);
+                    if (responseText && responseText.trim().toUpperCase() !== '[SILENT]') {
+                        const token = createMessageApprovalToken(chatJid, responseText);
+                        const chatNameForNotice = chatName && chatName !== chatJid ? chatName : chatJid.split('@')[0];
+                        const notificationText = `🚨 *Autorização de Envio Automático*\n\nA Bia sugere enviar a seguinte resposta para *${chatNameForNotice}*:\n\n"${responseText}"\n\nPara autorizar e enviar imediatamente, responda com:\n*ENVIAR ${token}*`;
+                        await notifyMaster(notificationText);
+                    }
+                    responseText = ''; // Força o silêncio absoluto no fluxo direto, pois já geramos o token.
+                }
             }
 
             // Se a resposta for '[SILENT]' ou vazia/não-AIMessage, não enviamos nenhuma mensagem de volta
@@ -607,6 +610,22 @@ export async function sendIntermediateMessage(chatJidOrThreadId: string, text: s
     });
 }
 
+export async function sendPersonalMessageNow(targetJid: string, message: string): Promise<boolean> {
+    const personalSock = sockets.get('personal');
+    if (!personalSock) {
+        logger.error(`[SEND PERSONAL] Socket for personal account is not connected.`);
+        return false;
+    }
+    try {
+        await personalSock.sendMessage(targetJid, { text: message });
+        logger.info(`[SEND PERSONAL] Mensagem enviada diretamente para ${targetJid} (auto-reply habilitado).`);
+        return true;
+    } catch (e: any) {
+        logger.error(`[SEND PERSONAL] Erro ao enviar mensagem para ${targetJid}:`, e);
+        return false;
+    }
+}
+
 export async function notifyMaster(text: string) {
     if (!globalSock) {
         logger.error("[NOTIFY MASTER] globalSock is not initialized.");
@@ -659,25 +678,28 @@ export async function getAllGroups(accountName?: string): Promise<{jid: string, 
     for (const [key, name] of groupNameCache.entries()) {
         const [acc, jid] = key.split(':');
         if (!accountName || acc === accountName) {
-            groupMap.set(jid, name);
+            if (name) groupMap.set(jid, name);
         }
     }
 
-    // 2. Coleta das conexões ativas do Baileys
-    const targetAccounts = accountName ? [accountName] : ['main', 'personal'];
-    for (const acc of targetAccounts) {
-        const sock = sockets.get(acc) || (acc === 'main' ? globalSock : null);
-        if (sock) {
-            try {
-                const groups = await sock.groupFetchAllParticipating();
-                for (const g of Object.values(groups) as any[]) {
-                    if (g && g.id && g.subject) {
-                        groupMap.set(g.id, g.subject);
-                        groupNameCache.set(`${acc}:${g.id}`, g.subject);
+    // 2. Se o cache estiver vazio para esta conta, busca uma única vez nas conexões ativas
+    if (groupMap.size === 0) {
+        const targetAccounts = accountName ? [accountName] : ['main', 'personal'];
+        for (const acc of targetAccounts) {
+            const sock = sockets.get(acc) || (acc === 'main' ? globalSock : null);
+            if (sock) {
+                try {
+                    const groups = await sock.groupFetchAllParticipating();
+                    for (const g of Object.values(groups) as any[]) {
+                        if (g && g.id && g.subject) {
+                            groupMap.set(g.id, g.subject);
+                            groupNameCache.set(`${acc}:${g.id}`, g.subject);
+                            if (acc === 'main') mainGroupJids.add(g.id);
+                        }
                     }
+                } catch (e) {
+                    logger.error(`Erro ao buscar grupos de ${acc}:`, e);
                 }
-            } catch (e) {
-                logger.error(`Erro ao buscar grupos de ${acc}:`, e);
             }
         }
     }
@@ -851,7 +873,7 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
 
             // ===== GRUPOS DA CONTA MAIN NA PERSONAL: Ignora no personal grupos que a Bia (main) já participa =====
             if (accountName === 'personal' && isGroup) {
-                if (mainGroupJids.has(chatJid) || (await isMainAccountInGroup(chatJid))) {
+                if (mainGroupJids.has(chatJid)) {
                     logger.info(`[IGNORED] Mensagem do grupo ${chatJid} ignorada na conta personal pois a Bia (main) já faz parte do grupo.`);
                     continue;
                 }
@@ -1140,11 +1162,15 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
             }
             // ----------------------------------------------
 
-            // Subscreve para receber atualizações de presença deste chat
-            try {
-                await sock.presenceSubscribe(chatJid);
-            } catch (err) {
-                console.warn(`[DEBOUNCE] Erro ao assinar presença para ${chatJid}:`, err);
+            // Subscreve para receber atualizações de presença deste chat (uma única vez por chat/sessão)
+            const presenceKey = `${accountName}:${chatJid}`;
+            if (!subscribedPresenceJids.has(presenceKey)) {
+                try {
+                    await sock.presenceSubscribe(chatJid);
+                    subscribedPresenceJids.add(presenceKey);
+                } catch (err) {
+                    console.warn(`[DEBOUNCE] Erro ao assinar presença para ${chatJid}:`, err);
+                }
             }
 
             try {
@@ -1245,6 +1271,44 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
     }
 }
 
+    sock.ev.on('groups.upsert', (groups) => {
+        for (const group of groups) {
+            if (accountName === 'main') {
+                mainGroupJids.add(group.id);
+            }
+            if (group.subject) {
+                groupNameCache.set(`${accountName}:${group.id}`, group.subject);
+            }
+        }
+    });
+
+    sock.ev.on('groups.update', (updates) => {
+        for (const update of updates) {
+            if (update.id && update.subject) {
+                groupNameCache.set(`${accountName}:${update.id}`, update.subject);
+            }
+        }
+    });
+
+    sock.ev.on('group-participants.update', (update) => {
+        if (accountName === 'main') {
+            const myJid = botJids.get('main');
+            const myLid = botLids.get('main');
+            const isMe = update.participants.some(p => {
+                const pJid = typeof p === 'string' ? p : (p as any)?.id;
+                return pJid === myJid || pJid === myLid;
+            });
+            
+            if (isMe) {
+                if (update.action === 'add' || update.action === 'promote') {
+                    mainGroupJids.add(update.id);
+                } else if (update.action === 'remove') {
+                    mainGroupJids.delete(update.id);
+                }
+            }
+        }
+    });
+
     sock.ev.on('messages.upsert', async m => {
         if (m.type !== 'notify') return;
 
@@ -1276,7 +1340,7 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
 
                 // 2. Se for grupo e a conta MAIN já fizer parte desse grupo, a conta personal ignora!
                 if (chatJid.endsWith('@g.us')) {
-                    if (mainGroupJids.has(chatJid) || (await isMainAccountInGroup(chatJid))) {
+                    if (mainGroupJids.has(chatJid)) {
                         logger.info(`[IGNORED] Mensagem de grupo (${chatJid}) ignorada na conta personal pois a Bia (main) já faz parte do grupo.`);
                         continue;
                     }

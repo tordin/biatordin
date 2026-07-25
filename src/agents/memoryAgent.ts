@@ -9,6 +9,7 @@ import { logger } from "../utils/logger.js";
 import { getMemory, updateMemory } from "../memory/coreMemory.js";
 import { searchVectorMemory, addVectorMemory, listVectorMemories, searchEntityMemory } from "../memory/vectorMemory.js";
 import { getTasksForChat } from "../memory/tasks.js";
+import { invokeStructuredWithFallback } from "../utils/structuredOutput.js";
 
 import { getSkill } from "../skills/registry.js";
 
@@ -181,7 +182,8 @@ export async function memoryAgentNode(state: typeof AgentState.State, config?: R
 
           logger.info(`[MEMORY_AGENT] Salvando nova memória semântica RAG: "${content}"`);
 
-          const memId = await addVectorMemory(content, category, chatJid);
+          const metadata = state.contextData.activeTopicId ? { topicId: state.contextData.activeTopicId } : undefined;
+          const memId = await addVectorMemory(content, category, chatJid, metadata);
 
           toolResultMsgs.push(new ToolMessage({
             content: `Memória semântica gravada com sucesso no SQLite (ID: ${memId}).`,
@@ -261,58 +263,49 @@ export async function memoryAgentNode(state: typeof AgentState.State, config?: R
         ? cleanMarkdownForWhatsApp(followUpResponse.content)
         : primarySearchSummary || "Operação de memória concluída.";
 
-      if (isStoreMemory) {
-        return {
-          messages: [new ToolMessage({
-            content: `Memória salva com sucesso no banco RAG. Mensagem de confirmação:\n\n${finalResponse}`,
-            name: "memoryAgent",
-            tool_call_id: response.tool_calls[0].id || "store_semantic"
-          })],
-          nextAgent: "supervisor",
-          contextData: { newExecution: "memoryAgent" }
-        };
-      }
-
       return {
         messages: [new AIMessage(finalResponse)],
-        nextAgent: "supervisor",
+        nextAgent: "FINISH",
         contextData: { newExecution: "memoryAgent" }
       };
     }
 
     // Se nenhuma ferramenta foi chamada, procede para a atualização estruturada de perfil (escreve no Markdown e sincroniza no RAG)
-    const structuredModel = modelFlashStructured.withStructuredOutput(z.object({
+    const memorySchema = z.object({
       newMemoryContent: z.string().describe("O conteúdo atualizado completo da memória de perfil em markdown"),
       responseToUser: z.string().describe("Mensagem de confirmação para o usuário")
-    }), { name: "MemoryAgentDecision" });
-
-    const parsed = await structuredModel.invoke(messagesForModel, {
-      metadata: { agentName: "memoryAgent", threadId, step: "write" }
     });
+
+    const parsed = await invokeStructuredWithFallback(
+      modelFlashStructured,
+      memorySchema,
+      messagesForModel,
+      {
+        name: "MemoryAgentDecision",
+        metadata: { agentName: "memoryAgent", threadId, step: "write" }
+      }
+    );
 
     let memoryChanged = false;
 
-    if (parsed.newMemoryContent.trim() !== currentMemory.trim()) {
+    if (parsed.newMemoryContent && parsed.newMemoryContent.trim() !== currentMemory.trim()) {
       updateMemory(chatJid, isTrustedChat, parsed.newMemoryContent);
       logger.info("[MEMORY_AGENT] Memória alterada. Gravando no disco.");
       memoryChanged = true;
     } else if (parsed.responseToUser && parsed.responseToUser.trim()) {
       // Fallback: conteúdo inalterado mas LLM gerou resposta — salva no RAG como anotação
-      await addVectorMemory(parsed.responseToUser, "anotacao", chatJid);
+      const metadata = state.contextData.activeTopicId ? { topicId: state.contextData.activeTopicId } : undefined;
+      await addVectorMemory(parsed.responseToUser, "anotacao", chatJid, metadata);
       logger.info("[MEMORY_AGENT] Memória inalterada, mas resposta do usuário salva como anotação RAG.");
     } else {
       logger.info("[MEMORY_AGENT] Memória inalterada. Pulando gravação.");
     }
 
-    const finalResponse = cleanMarkdownForWhatsApp(parsed.responseToUser);
+    const finalResponse = cleanMarkdownForWhatsApp(parsed.responseToUser || "Anotado!");
 
     return {
-      messages: [new ToolMessage({
-        content: `A memória foi atualizada com sucesso. Mensagem sugerida para o usuário:\n\n${finalResponse}`,
-        name: "memoryAgent",
-        tool_call_id: "memory"
-      })],
-      nextAgent: "supervisor",
+      messages: [new AIMessage(finalResponse)],
+      nextAgent: "FINISH",
       contextData: { newExecution: "memoryAgent" }
     };
   } catch (error: any) {

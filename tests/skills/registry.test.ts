@@ -1,9 +1,9 @@
 import { SKILL_DEFINITIONS, getSkill, getAllSkills, getSkillCatalogSummary } from "../../src/skills/registry.js";
 
 describe("Skills Registry & Directory Catalog", () => {
-  test("deve conter exatamente 13 habilidades cadastradas", () => {
+  test("deve conter exatamente 14 habilidades cadastradas", () => {
     const skills = getAllSkills();
-    expect(skills.length).toBe(13);
+    expect(skills.length).toBe(14);
   });
 
   test("deve recuperar uma skill específica pelo ID", () => {
@@ -28,6 +28,6 @@ describe("Skills Registry & Directory Catalog", () => {
     expect(summary).toBeDefined();
     expect(summary).toContain("1. searchAgent: Especialista em pesquisas na web.");
     expect(summary).toContain("2. chitchat: Especialista em conversa geral");
-    expect(summary).toContain("13. reasoningAgent: Especialista em resolver problemas complexos");
+    expect(summary).toContain("reasoningAgent: Especialista em resolver problemas complexos");
   });
 });

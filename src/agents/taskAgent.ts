@@ -9,14 +9,15 @@ import { logger } from "../utils/logger.js";
 import { saveTask, getTasksForChat, markTaskCompleted, deleteTask } from "../memory/tasks.js";
 import { getSkill } from "../skills/registry.js";
 
-const addTaskTool = tool(
+export const addTaskTool = tool(
   async ({ title, category, urgency, dueDate }, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat (thread_id ausente).";
     const chatJid = threadId.includes('_') ? threadId.split('_')[0] : threadId;
+    const topicId = config?.configurable?.contextData?.activeTopicId;
 
     try {
-      const task = await saveTask(chatJid, title, category || "Geral", urgency || "Média", dueDate);
+      const task = await saveTask(chatJid, title, category || "Geral", urgency || "Média", dueDate, topicId);
       return `✅ Tarefa criada com sucesso! ID: ${task.id} | Título: "${task.title}" | Categoria: ${task.category} | Urgência: ${task.urgency}${task.dueDate ? ` | Prazo: ${task.dueDate}` : ""}`;
     } catch (err: any) {
       logger.error("Erro ao adicionar tarefa:", err);
@@ -35,7 +36,7 @@ const addTaskTool = tool(
   }
 );
 
-const listTasksTool = tool(
+export const listTasksTool = tool(
   async ({ status, category }, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat.";
@@ -67,7 +68,7 @@ const listTasksTool = tool(
   }
 );
 
-const completeTaskTool = tool(
+export const completeTaskTool = tool(
   async ({ id }, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat.";
@@ -94,7 +95,7 @@ const completeTaskTool = tool(
   }
 );
 
-const deleteTaskTool = tool(
+export const deleteTaskTool = tool(
   async ({ id }, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat.";

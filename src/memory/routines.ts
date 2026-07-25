@@ -14,31 +14,47 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS routines (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       chatJid TEXT NOT NULL,
+      topicId TEXT,
       cronExpression TEXT NOT NULL,
       prompt TEXT NOT NULL,
       isActive BOOLEAN NOT NULL DEFAULT 1
     )
   `);
+
+  // Migrate existing table to add topicId if it doesn't exist
+  db.all("PRAGMA table_info(routines)", (err, rows: any[]) => {
+    if (!err && rows) {
+      const hasTopicId = rows.some(row => row.name === 'topicId');
+      if (!hasTopicId) {
+        db.run("ALTER TABLE routines ADD COLUMN topicId TEXT", (alterErr) => {
+          if (alterErr) logger.error("[ROUTINES DB] Erro ao adicionar coluna topicId:", alterErr);
+          else logger.info("[ROUTINES DB] Coluna topicId adicionada com sucesso.");
+        });
+      }
+    }
+  });
 });
 
 export interface Routine {
   id: number;
   chatJid: string;
+  topicId?: string;
   cronExpression: string;
   prompt: string;
   isActive: boolean;
 }
 
-export function saveRoutine(chatJid: string, cronExpression: string, prompt: string): Promise<Routine> {
+export function saveRoutine(chatJid: string, cronExpression: string, prompt: string, topicId?: string): Promise<Routine> {
   return new Promise((resolve, reject) => {
     db.run(
-      `INSERT INTO routines (chatJid, cronExpression, prompt, isActive) VALUES (?, ?, ?, ?)`,
-      [chatJid, cronExpression, prompt, 1],
+      `INSERT INTO routines (chatJid, topicId, cronExpression, prompt, isActive) VALUES (?, ?, ?, ?, ?)`,
+      [chatJid, topicId || null, cronExpression, prompt, 1],
       function (err) {
         if (err) return reject(err);
         resolve({
           id: this.lastID,
           chatJid,
+          topicId,
           cronExpression,
           prompt,
           isActive: true
@@ -57,9 +73,17 @@ export function getAllActiveRoutines(): Promise<Routine[]> {
   });
 }
 
-export function getRoutinesForChat(chatJid: string): Promise<Routine[]> {
+export function getRoutinesForChat(chatJid: string, topicId?: string): Promise<Routine[]> {
   return new Promise((resolve, reject) => {
-    db.all(`SELECT * FROM routines WHERE chatJid = ? AND isActive = 1`, [chatJid], (err, rows) => {
+    let sql = `SELECT * FROM routines WHERE chatJid = ? AND isActive = 1`;
+    const params: any[] = [chatJid];
+    
+    if (topicId) {
+      sql += ` AND topicId = ?`;
+      params.push(topicId);
+    }
+    
+    db.all(sql, params, (err, rows) => {
       if (err) return reject(err);
       resolve(rows as Routine[]);
     });

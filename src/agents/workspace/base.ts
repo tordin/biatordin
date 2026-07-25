@@ -84,7 +84,15 @@ export async function safeAgentNode(
     const response = await Promise.race([
       agentInstance.invoke(
         { messages: messagesWithTime },
-        { metadata: { agentName: name, threadId } }
+        { 
+          ...config, 
+          configurable: { 
+            ...config?.configurable, 
+            contextData: state.contextData, 
+            agentName: name, 
+            threadId 
+          } 
+        }
       ),
       timeoutPromise
     ]) as any;

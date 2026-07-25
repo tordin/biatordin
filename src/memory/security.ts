@@ -59,18 +59,33 @@ export function consumeMessageApprovalToken(token: string): PendingMessage | nul
 
 export function initSecurityTable(): Promise<void> {
   return new Promise((resolve, reject) => {
-    db.run(`
-      CREATE TABLE IF NOT EXISTS trusted_chats (
-        jid TEXT PRIMARY KEY,
-        addedAt INTEGER NOT NULL
-      )
-    `, (err) => {
-      if (err) {
-        logger.error("[SECURITY DB] Erro ao criar tabela de chats de confiança:", err);
-        return reject(err);
-      }
-      logger.info("[SECURITY DB] Tabela de chats de confiança inicializada.");
-      resolve();
+    db.serialize(() => {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS trusted_chats (
+          jid TEXT PRIMARY KEY,
+          addedAt INTEGER NOT NULL
+        )
+      `, (err) => {
+        if (err) {
+          logger.error("[SECURITY DB] Erro ao criar tabela de chats de confiança:", err);
+          return reject(err);
+        }
+        logger.info("[SECURITY DB] Tabela de chats de confiança inicializada.");
+      });
+
+      db.run(`
+        CREATE TABLE IF NOT EXISTS auto_reply_chats (
+          jid TEXT PRIMARY KEY,
+          addedAt INTEGER NOT NULL
+        )
+      `, (err) => {
+        if (err) {
+          logger.error("[SECURITY DB] Erro ao criar tabela auto_reply_chats:", err);
+          return reject(err);
+        }
+        logger.info("[SECURITY DB] Tabela de chats de auto-resposta inicializada.");
+        resolve();
+      });
     });
   });
 }
@@ -135,6 +150,74 @@ export function listTrustedChats(): Promise<{ jid: string; addedAt: number }[]> 
       (err, rows) => {
         if (err) {
           logger.error("[SECURITY DB] Erro ao listar chats de confiança:", err);
+          return reject(err);
+        }
+        resolve(rows as { jid: string; addedAt: number }[]);
+      }
+    );
+  });
+}
+
+export function isAutoReplyChat(jid: string): Promise<boolean> {
+  if (MASTER_JIDS.includes(jid)) return Promise.resolve(true);
+  
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT 1 FROM auto_reply_chats WHERE jid = ?`,
+      [jid],
+      (err, row) => {
+        if (err) {
+          logger.error("[SECURITY DB] Erro ao verificar chat de auto-resposta:", err);
+          return reject(err);
+        }
+        resolve(!!row);
+      }
+    );
+  });
+}
+
+export function addAutoReplyChat(jid: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const addedAt = Date.now();
+    db.run(
+      `INSERT OR IGNORE INTO auto_reply_chats (jid, addedAt) VALUES (?, ?)`,
+      [jid, addedAt],
+      (err) => {
+        if (err) {
+          logger.error("[SECURITY DB] Erro ao adicionar chat de auto-resposta:", err);
+          return reject(err);
+        }
+        logger.info(`[SECURITY DB] Chat ${jid} adicionado aos de auto-resposta.`);
+        resolve();
+      }
+    );
+  });
+}
+
+export function removeAutoReplyChat(jid: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `DELETE FROM auto_reply_chats WHERE jid = ?`,
+      [jid],
+      (err) => {
+        if (err) {
+          logger.error("[SECURITY DB] Erro ao remover chat de auto-resposta:", err);
+          return reject(err);
+        }
+        logger.info(`[SECURITY DB] Chat ${jid} removido dos de auto-resposta.`);
+        resolve();
+      }
+    );
+  });
+}
+
+export function listAutoReplyChats(): Promise<{ jid: string; addedAt: number }[]> {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT jid, addedAt FROM auto_reply_chats`,
+      (err, rows) => {
+        if (err) {
+          logger.error("[SECURITY DB] Erro ao listar chats de auto-resposta:", err);
           return reject(err);
         }
         resolve(rows as { jid: string; addedAt: number }[]);

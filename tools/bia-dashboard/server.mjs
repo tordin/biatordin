@@ -292,12 +292,61 @@ function buildTurns(entries) {
     finalTurns.push(t);
   }
 
-  // Sort events inside each turn chronologically
+  // Sort events inside each turn chronologically & compute token stats
   for (const t of finalTurns) {
     t.events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    t.tokenStats = computeTurnTokenStats(t);
   }
 
   return finalTurns;
+}
+
+function estimateTokensFromText(text) {
+  if (!text) return 0;
+  const str = typeof text === 'string' ? text : JSON.stringify(text);
+  return Math.max(1, Math.round(str.length / 4));
+}
+
+function computeTurnTokenStats(turn) {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let llmCalls = 0;
+
+  for (const evt of turn.events || []) {
+    const data = evt.data || {};
+    if (evt.event === 'LLM_START') {
+      llmCalls++;
+      if (data.messages && Array.isArray(data.messages)) {
+        for (const msg of data.messages) {
+          const cStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '');
+          inputTokens += estimateTokensFromText(cStr) + estimateTokensFromText(msg.role || '');
+        }
+      } else if (data.prompts && Array.isArray(data.prompts)) {
+        for (const p of data.prompts) {
+          inputTokens += estimateTokensFromText(p);
+        }
+      }
+    } else if (evt.event === 'LLM_END') {
+      const gens = data.generations || [];
+      for (const genList of gens) {
+        for (const item of genList) {
+          if (item.type === 'message' || item.type === 'text') {
+            const content = item.content || item.text || '';
+            outputTokens += estimateTokensFromText(content);
+          } else if (item.type === 'tool_calls') {
+            outputTokens += estimateTokensFromText(JSON.stringify(item.toolCalls || []));
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    llmCalls
+  };
 }
 
 // ─── Request Handlers ──────────────────────────────────────
@@ -395,13 +444,24 @@ function handleSummary(req, res) {
       if (d.agentName) agents.add(d.agentName);
       events[d.event] = (events[d.event] || 0) + 1;
     }
-    // Count turns
+    // Count turns and total tokens
     const turns = buildTurns(entries);
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    for (const t of turns) {
+      if (t.tokenStats) {
+        totalInputTokens += t.tokenStats.inputTokens || 0;
+        totalOutputTokens += t.tokenStats.outputTokens || 0;
+      }
+    }
 
     res.end(JSON.stringify({
       totalLines: entries.length,
       totalTurns: turns.length,
       turnsWithErrors: turns.filter(t => t.hasError).length,
+      totalTokens: totalInputTokens + totalOutputTokens,
+      totalInputTokens,
+      totalOutputTokens,
       agents: [...agents].sort(),
       events,
     }));

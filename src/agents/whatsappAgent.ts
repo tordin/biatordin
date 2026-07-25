@@ -237,8 +237,8 @@ export async function whatsappAgentNode(state: typeof AgentState.State, config?:
               continue;
             }
             
-            const { isWhatsAppConnected, notifyMaster } = await import("../transport/whatsapp.js");
-            const { createMessageApprovalToken } = await import("../memory/security.js");
+            const { isWhatsAppConnected, notifyMaster, sendPersonalMessageNow } = await import("../transport/whatsapp.js");
+            const { createMessageApprovalToken, isAutoReplyChat } = await import("../memory/security.js");
             
             if (!isWhatsAppConnected('personal')) {
               currentMessages.push(new ToolMessage({
@@ -249,8 +249,36 @@ export async function whatsappAgentNode(state: typeof AgentState.State, config?:
               continue;
             }
 
+            const isAutoReply = await isAutoReplyChat(targetJid);
+
+            if (isAutoReply) {
+              const success = await sendPersonalMessageNow(targetJid, message as string);
+              if (success) {
+                currentMessages.push(new ToolMessage({
+                  tool_call_id: call.id || "",
+                  content: "Sucesso. A mensagem foi enviada IMEDIATAMENTE (bypass por whitelist) na conta pessoal. Sua tarefa de envio está totalmente CONCLUÍDA.",
+                  name: call.name
+                }));
+              } else {
+                currentMessages.push(new ToolMessage({
+                  tool_call_id: call.id || "",
+                  content: "FALHA ao enviar a mensagem via bypass (socket desconectado ou erro).",
+                  name: call.name
+                }));
+              }
+              continue;
+            }
+
             const token = createMessageApprovalToken(targetJid, message as string);
-            const notificationText = `🚨 *Autorização de Envio na Conta Pessoal*\n\nA Bia deseja enviar a seguinte mensagem para *${targetName || targetJid}*:\n\n"${message}"\n\nPara autorizar e enviar imediatamente, responda com:\n*ENVIAR ${token}*`;
+            const isIncomingPersonal = accountName === 'personal';
+            const headerTitle = isIncomingPersonal 
+              ? "💡 *Sugestão de Resposta na Conta Pessoal*" 
+              : "🚨 *Autorização de Envio na Conta Pessoal*";
+            const introText = isIncomingPersonal
+              ? `A Bia sugere enviar a seguinte resposta para *${targetName || targetJid}*:`
+              : `A Bia deseja enviar a seguinte mensagem para *${targetName || targetJid}*:`;
+
+            const notificationText = `${headerTitle}\n\n${introText}\n\n"${message}"\n\nPara autorizar e enviar imediatamente, responda com:\n*ENVIAR ${token}*`;
             
             await notifyMaster(notificationText);
             
