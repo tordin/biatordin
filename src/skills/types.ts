@@ -6,4 +6,5 @@ export interface SkillDefinition {
   summary: string;
   detailedPrompt: string;
   category: SkillCategory;
+  tools?: string[];
 }

@@ -8,7 +8,6 @@ describe("LangGraph Workflow System & Routing Edges", () => {
 
   test("deve rotear corretamente a partir das decisões do supervisor", () => {
     expect(routeFromSupervisor({ nextAgent: "searchAgent" } as any)).toBe("searchAgent");
-    expect(routeFromSupervisor({ nextAgent: "chitchat" } as any)).toBe("chitchat");
     expect(routeFromSupervisor({ nextAgent: "taskAgent" } as any)).toBe("taskAgent");
     expect(routeFromSupervisor({ nextAgent: "routineAgent" } as any)).toBe("routineAgent");
     expect(routeFromSupervisor({ nextAgent: "memoryAgent" } as any)).toBe("memoryAgent");

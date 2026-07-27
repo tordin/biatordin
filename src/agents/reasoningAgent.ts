@@ -33,7 +33,7 @@ export async function reasoningAgentNode(state: typeof AgentState.State, config?
     
     return {
       messages: [response],
-      nextAgent: "supervisor",
+      nextAgent: "FINISH",
       contextData: { newExecution: "reasoningAgent" }
     };
   } catch (error: any) {
@@ -44,7 +44,7 @@ export async function reasoningAgentNode(state: typeof AgentState.State, config?
     });
     return {
       messages: [new AIMessage(dynamicMsg)],
-      nextAgent: "supervisor",
+      nextAgent: "FINISH",
       contextData: { newExecution: "reasoningAgent" }
     };
   }

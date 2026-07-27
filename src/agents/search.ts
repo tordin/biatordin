@@ -103,7 +103,7 @@ function wrapUntrustedWebContent(content: string, source: string): string {
     `\n</untrusted_web_content>`;
 }
 
-const googleSearchTool = tool(
+export const googleSearchTool = tool(
   async ({ query, timeframe }) => {
     // 1. Try Serper with retry + backoff
     const serperResult = await serperSearch(query, timeframe);
@@ -137,7 +137,7 @@ const googleSearchTool = tool(
   }
 );
 
-const openWebpageTool = tool(
+export const openWebpageTool = tool(
   async ({ url }) => {
     logger.info(`[OPEN WEBPAGE] Lendo conteúdo da URL via Jina Reader: ${url}`);
     try {

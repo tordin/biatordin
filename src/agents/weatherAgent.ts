@@ -87,7 +87,7 @@ function formatWeatherResponse(data: OpenMeteoResponse, cityName: string): strin
   return parts.join("\n");
 }
 
-const weatherTool = tool(
+export const weatherTool = tool(
   async ({ latitude, longitude, cityName }) => {
     logger.info(`[WEATHER] Consultando OpenMeteo para ${cityName} (${latitude}, ${longitude})`);
     

@@ -12,6 +12,34 @@ import { getOrCreateTopicByTitle, getRecentTopics } from "../memory/topics.js";
 import { invokeStructuredWithFallback } from "../utils/structuredOutput.js";
 import { getSkillCatalogSummary } from "../skills/registry.js";
 import { generateDynamicErrorResponse } from "../utils/dynamicErrorResponse.js";
+import { addTaskTool, listTasksTool, completeTaskTool, deleteTaskTool } from "./taskAgent.js";
+import { googleSearchTool, openWebpageTool } from "./search.js";
+import { weatherTool } from "./weatherAgent.js";
+import { googleShoppingTool } from "./shopping.js";
+import { createRoutineTool, listRoutinesTool, deleteRoutineTool } from "./routineAgent.js";
+import {
+  addTrustedChatTool, removeTrustedChatTool, checkTrustTool, listTrustedChatsTool,
+  getMasterInfoTool, connectPersonalAccountTool, disconnectPersonalAccountTool,
+  checkPersonalAccountStatusTool, ignoreGroupTool, unignoreGroupTool,
+  listIgnoredGroupsTool, enableAutoReplyTool, disableAutoReplyTool, listAutoReplyChatsTool
+} from "./securityAgent.js";
+import { listRecentChatsTool, getChatHistoryTool, searchChatByNameTool, searchGroupsTool, sendPersonalMessageTool } from "./whatsappAgent.js";
+import { readMemoryTool, searchSemanticMemoryTool, storeSemanticMemoryTool, searchEventSummaryTool } from "./memoryAgent.js";
+
+// Dynamic Tool Binding: all tools the supervisor can directly call
+const availableTools = [
+  addTaskTool, listTasksTool, completeTaskTool, deleteTaskTool,
+  googleSearchTool, openWebpageTool,
+  weatherTool,
+  googleShoppingTool,
+  createRoutineTool, listRoutinesTool, deleteRoutineTool,
+  addTrustedChatTool, removeTrustedChatTool, checkTrustTool, listTrustedChatsTool,
+  getMasterInfoTool, connectPersonalAccountTool, disconnectPersonalAccountTool,
+  checkPersonalAccountStatusTool, ignoreGroupTool, unignoreGroupTool,
+  listIgnoredGroupsTool, enableAutoReplyTool, disableAutoReplyTool, listAutoReplyChatsTool,
+  listRecentChatsTool, getChatHistoryTool, searchChatByNameTool, searchGroupsTool, sendPersonalMessageTool,
+  readMemoryTool, searchSemanticMemoryTool, storeSemanticMemoryTool, searchEventSummaryTool,
+];
 
 const SUPERVISOR_PROMPT = 
   "Você é a Bia, uma assistente virtual no WhatsApp, atuando como a Supervisora Inteligente de uma arquitetura multiagentes.\n" +
@@ -216,7 +244,7 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
   // Schema da decisão da Supervisora
   const supervisorSchema = z.object({
     plan: z.array(z.string()).optional().describe("Array com os agentes planejados para serem executados, em ordem"),
-    nextAgent: z.enum(["searchAgent", "chitchat", "calendarAgent", "gmailAgent", "sheetsAgent", "docsAgent", "routineAgent", "memoryAgent", "taskAgent", "securityAgent", "shoppingAgent", "whatsappAgent", "reasoningAgent", "weatherAgent", "FINISH"]),
+    nextAgent: z.enum(["searchAgent", "calendarAgent", "gmailAgent", "sheetsAgent", "docsAgent", "routineAgent", "memoryAgent", "taskAgent", "securityAgent", "shoppingAgent", "whatsappAgent", "reasoningAgent", "weatherAgent", "FINISH"]),
     reason: z.string().optional(),
     response: z.string().optional(),
     intermediateMessage: z.string().optional(),
@@ -226,17 +254,101 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
   let parsed: z.infer<typeof supervisorSchema>;
 
   try {
-    parsed = await invokeStructuredWithFallback(
-      model,
-      supervisorSchema,
-      messagesForModel,
-      {
-        name: "SupervisorDecision",
-        metadata: { agentName: "supervisor", threadId }
+    // ── Dynamic Tool Binding: 1st pass with bindTools ──
+    const modelWithTools = model.bindTools(availableTools);
+    const aiResponse = await modelWithTools.invoke(messagesForModel, {
+      metadata: { agentName: "supervisor", threadId }
+    });
+
+    // Check if the model decided to call tools
+    const toolCalls: Array<{ name: string; args: Record<string, unknown>; id?: string }> =
+      (aiResponse as AIMessage).tool_calls as any;
+
+    if (toolCalls && Array.isArray(toolCalls) && toolCalls.length > 0) {
+      logger.info(`[SUPERVISOR] Model requested ${toolCalls.length} tool call(s): ${toolCalls.map(tc => tc.name).join(", ")}`);
+
+      // Execute each tool and build ToolMessages
+      const toolMessages: ToolMessage[] = [];
+      for (const tc of toolCalls) {
+        const tool = availableTools.find(t => t.name === tc.name);
+        if (tool) {
+          try {
+            const result = await (tool as any).invoke(tc.args, config);
+            toolMessages.push(new ToolMessage({
+              tool_call_id: tc.id || `${tc.name}_${Date.now()}`,
+              content: typeof result === "string" ? result : JSON.stringify(result),
+              name: tc.name
+            }));
+          } catch (toolErr: any) {
+            logger.error(`[SUPERVISOR] Tool ${tc.name} failed:`, toolErr.message);
+            toolMessages.push(new ToolMessage({
+              tool_call_id: tc.id || `${tc.name}_${Date.now()}`,
+              content: `Error executing ${tc.name}: ${toolErr.message || String(toolErr)}`,
+              name: tc.name
+            }));
+          }
+        } else {
+          toolMessages.push(new ToolMessage({
+            tool_call_id: tc.id || `${tc.name}_${Date.now()}`,
+            content: `Tool "${tc.name}" not found in the available tool set.`,
+            name: tc.name
+          }));
+        }
       }
-    );
-  } catch (fallbackErr) {
-    logger.error("[SUPERVISOR] Falha total ao obter decisão estruturada. Forçando FINISH para evitar loop.", fallbackErr);
+
+      // ── 2nd pass: re-invoke model with ToolMessages for synthesis ──
+      const synthesisMessages = [...messagesForModel, aiResponse, ...toolMessages];
+      const synthesisResponse = await model.invoke(synthesisMessages, {
+        metadata: { agentName: "supervisor", threadId }
+      });
+
+      const synthesizedText = typeof synthesisResponse.content === "string"
+        ? synthesisResponse.content
+        : JSON.stringify(synthesisResponse.content);
+
+      parsed = {
+        nextAgent: "FINISH" as const,
+        reason: "Tools executed successfully, response synthesized.",
+        response: synthesizedText
+      };
+    } else {
+      // ── No tool_calls: parse routing decision from text ──
+      const content = typeof aiResponse.content === "string"
+        ? aiResponse.content
+        : JSON.stringify(aiResponse.content);
+
+      // Try direct JSON extraction first
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          parsed = supervisorSchema.parse(JSON.parse(jsonMatch[0]));
+        } catch (jsonErr: any) {
+          logger.info("[SUPERVISOR] Direct JSON parsing failed, falling back to structured output.", jsonErr.message);
+          parsed = await invokeStructuredWithFallback(
+            model,
+            supervisorSchema,
+            messagesForModel,
+            {
+              name: "SupervisorDecision",
+              metadata: { agentName: "supervisor", threadId }
+            }
+          );
+        }
+      } else {
+        // No JSON found — fall back to structured output
+        parsed = await invokeStructuredWithFallback(
+          model,
+          supervisorSchema,
+          messagesForModel,
+          {
+            name: "SupervisorDecision",
+            metadata: { agentName: "supervisor", threadId }
+          }
+        );
+      }
+    }
+  } catch (fallbackErr: any) {
+    logger.error("[SUPERVISOR] Falha total ao obter decisão. Forçando FINISH para evitar loop.", fallbackErr);
     const dynamicMsg = await generateDynamicErrorResponse({
       messages: state.messages,
       problemDescription: "Falha técnica no processamento da decisão de roteamento."

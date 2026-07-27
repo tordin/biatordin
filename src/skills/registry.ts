@@ -6,6 +6,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Busca na Web",
     summary: "Especialista em pesquisas na web. Use quando a mensagem do usuário pedir dados externos, fatos atuais, clima, notícias, cotações, etc.",
     category: "search",
+    tools: ["google_search", "open_webpage"],
     detailedPrompt:
       "Você é o Agente de Busca (Especialista em Busca do Google) da Bia.\n" +
       "Sua função principal é reunir fatos do mundo real, atualizados e precisos na internet usando a ferramenta `google_search`.\n" +
@@ -24,6 +25,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Google Calendar",
     summary: "Especialista em gerenciar o Google Calendar. Use quando a solicitação envolver criar eventos, ler a agenda, agendar reuniões ou compromissos.",
     category: "workspace",
+    tools: [],
     detailedPrompt:
       "Você é o Agente de Calendário da Bia.\n" +
       "Sua função principal é gerenciar o Google Calendar do usuário usando as ferramentas MCP fornecidas.\n" +
@@ -35,6 +37,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Gmail",
     summary: "Especialista em gerenciar o Gmail. Use quando a solicitação envolver ler, enviar, responder ou pesquisar e-mails na caixa de entrada.",
     category: "workspace",
+    tools: [],
     detailedPrompt:
       "Você é o Agente de Gmail da Bia.\n" +
       "Sua função principal é gerenciar o Gmail do usuário usando as ferramentas MCP fornecidas.\n" +
@@ -46,6 +49,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Google Planilhas",
     summary: "Especialista em gerenciar o Google Sheets. Use para criar arquivos de planilhas e escrever dados.",
     category: "workspace",
+    tools: [],
     detailedPrompt:
       "Você é o Agente de Google Planilhas da Bia.\n" +
       "Sua função principal é gerenciar as planilhas do Google do usuário usando as ferramentas nativas fornecidas.\n" +
@@ -57,6 +61,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Google Docs",
     summary: "Especialista em gerenciar o Google Docs e Drive. Use para ler arquivos ou criar documentos de texto básicos.",
     category: "workspace",
+    tools: [],
     detailedPrompt:
       "Você é o Agente de Google Docs da Bia.\n" +
       "Sua função principal é gerenciar, ler e editar os Google Docs do usuário usando as ferramentas MCP fornecidas.\n" +
@@ -68,6 +73,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Rotinas e Lembretes",
     summary: "Especialista em gerenciar agendamentos, rotinas e lembretes recorrentes ou para o futuro. Use quando o usuário pedir para ser lembrado de algo, quiser agendar cobranças proativas para tarefas com prazo, ou agendar rotinas (ex: 'me lembre de X', 'mande notícias às 9h', 'me cobre da tarefa Y amanhã').",
     category: "system",
+    tools: ["create_routine", "list_routines", "delete_routine"],
     detailedPrompt:
       "Você é o Routine Agent (Especialista em Agendamentos e Lembretes) da Bia.\n" +
       "Sua função é criar, listar e excluir rotinas agendadas usando expressões Cron.\n" +
@@ -83,6 +89,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Memória Interna e Busca Semântica RAG",
     summary: "Especialista em memória de longo prazo e busca semântica RAG (sqlite-vec em SQLite). Use quando o usuário perguntar sobre combinados passados, anotações antigas (ex: marcas de produtos, presentes de aniversário, acordos), guardar preferências/fatos, ou consultar o que está na memória.",
     category: "memory",
+    tools: ["readMemory", "searchSemanticMemory", "storeSemanticMemory", "searchEventSummary"],
     detailedPrompt:
       "Você é a Especialista em Memória Interna e Busca Semântica RAG.\n" +
       "Você tem acesso a duas camadas de memória:\n" +
@@ -106,6 +113,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Gestão de Tarefas (Task Manager)",
     summary: "Especialista em criar, consultar, listar, concluir e excluir tarefas, afazeres e listas do usuário. Use quando a solicitação envolver criar tarefas, listar pendências, marcar afazeres como concluídos ou gerenciar a lista de tarefas.",
     category: "memory",
+    tools: ["add_task", "list_tasks", "complete_task", "delete_task"],
     detailedPrompt:
       "Você é o Agente de Gestão de Tarefas (Task Manager) da Bia.\n" +
       "Sua função principal é adicionar, listar, concluir e excluir tarefas e listas de afazeres do usuário utilizando o banco de dados de tarefas.\n" +
@@ -117,6 +125,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Segurança e Permissões",
     summary: "Especialista em segurança, aprovações e gerenciamento de grupos. Use SEMPRE que um chat NÃO-CONFIÁVEL solicitar dados sensíveis da conta Google (acesso a agenda, emails, planilhas, docs). Use também SEMPRE que comandos de segurança ou gerenciamento forem solicitados, como: 'plugar minha conta pessoal', 'desplugar conta pessoal', 'adicione o numero X aos confiaveis', 'quais os chats de confianca', 'quem é o master', 'verifique se o chat X é confiavel', 'ignore este grupo', 'volte a responder neste grupo', 'quais grupos estão ignorados', ou 'habilite o número X para auto-resposta sem aprovação'.",
     category: "system",
+    tools: ["add_trusted_chat", "remove_trusted_chat", "check_trust", "list_trusted_chats", "get_master_info", "connect_personal_account", "disconnect_personal_account", "check_personal_account_status", "ignore_group", "unignore_group", "list_ignored_groups", "enable_auto_reply", "disable_auto_reply", "list_auto_reply_chats"],
     detailedPrompt:
       "Você é o agente de segurança da Bia. Sua função é gerenciar as permissões de acesso do sistema.\n" +
       "Você só tem permissão para atuar quando solicitado pelo Master (administrador).\n" +
@@ -131,6 +140,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Google Shopping",
     summary: "Especialista em buscar produtos, preços e lojas usando o Google Shopping. Use quando o usuário quiser procurar produtos para comprar, comparar preços, buscar um item específico no varejo (ex: tênis, celular, eletrodomésticos, etc).",
     category: "shopping",
+    tools: ["google_shopping"],
     detailedPrompt:
       "Você é o Agente de Compras (Especialista em Produtos e Preços) da Bia.\n" +
       "Sua função principal é buscar produtos, comparar preços e encontrar lojas usando a ferramenta `google_shopping`.\n" +
@@ -146,6 +156,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Histórico e Envio do WhatsApp",
     summary: "Especialista em ler o histórico de mensagens, listar conversas recentes e ENVIAR mensagens pelo WhatsApp. Use quando o usuário perguntar 'tem alguma mensagem pra mim?', quiser consultar o histórico, pedir para responder/enviar uma mensagem na conta pessoal, ou quando uma mensagem da conta pessoal precisar de uma sugestão de resposta.",
     category: "communication",
+    tools: ["listRecentChats", "getChatHistory", "searchChatByName", "searchGroups", "send_personal_message"],
     detailedPrompt:
       "Você atua como Especialista em Histórico e Envio do WhatsApp (Backoffice).\n" +
       "Sua função é consultar o histórico local de conversas do WhatsApp (da conta personal ou main), entender mensagens recebidas, ou formular sugestões de respostas para a conta pessoal do Luiz.\n" +
@@ -179,6 +190,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Raciocínio Complexo (DeepSeek Pro Thinking)",
     summary: "Especialista em resolver problemas complexos, lógica avançada, análise de cenários, matemática, estratégias, tomadas de decisão e reflexão profunda usando raciocínio intensivo (DeepSeek Pro Thinking Mode). Use para dilemas, enigmas, análises comparativas profundas, desatar nós lógicos ou problemas difíceis que não exigem ferramentas externas.",
     category: "reasoning",
+    tools: [],
     detailedPrompt:
       "Você é o Especialista em Raciocínio Complexo e Resolução de Problemas (Deep Reasoning Specialist).\n" +
       "Sua missão é resolver problemas difíceis, analisar cenários complexos, desatar nós lógicos, resolver enigmas, matemática e análises críticas usando raciocínio intensivo e reflexão profunda.\n\n" +
@@ -192,6 +204,7 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
     name: "Agente de Previsão do Tempo",
     summary: "Especialista em previsão do tempo e clima. Use quando o usuário perguntar sobre temperatura, se vai chover, previsão para os próximos dias, condições climáticas de uma cidade específica. Suporta Campinas, São Paulo e qualquer cidade do mundo (consulta por latitude/longitude).",
     category: "search",
+    tools: ["get_weather"],
     detailedPrompt:
       "Você é o Agente de Previsão do Tempo (Weather Specialist).\n" +
       "Sua função é consultar a previsão do tempo atual e para os próximos dias usando a ferramenta `get_weather`.\n\n" +
@@ -220,4 +233,42 @@ export function getAllSkills(): SkillDefinition[] {
  */
 export function getSkillCatalogSummary(): string {
   return SKILL_DEFINITIONS.map((skill, idx) => `${idx + 1}. ${skill.id}: ${skill.summary}`).join("\n");
+}
+
+/**
+ * Retorna os nomes das ferramentas associadas a uma skill específica.
+ */
+export function getSkillTools(skillId: string): string[] {
+  const skill = SKILL_DEFINITIONS.find(s => s.id === skillId);
+  return skill?.tools ?? [];
+}
+
+/**
+ * Retorna os nomes de todas as ferramentas de skills pertencentes às categorias informadas.
+ */
+export function getToolsForCategories(categories: SkillCategory[]): string[] {
+  const tools = new Set<string>();
+  for (const skill of SKILL_DEFINITIONS) {
+    if (categories.includes(skill.category) && skill.tools) {
+      for (const toolName of skill.tools) {
+        tools.add(toolName);
+      }
+    }
+  }
+  return Array.from(tools).sort();
+}
+
+/**
+ * Retorna todos os nomes de ferramentas disponíveis em todas as skills.
+ */
+export function getAllTools(): string[] {
+  const tools = new Set<string>();
+  for (const skill of SKILL_DEFINITIONS) {
+    if (skill.tools) {
+      for (const toolName of skill.tools) {
+        tools.add(toolName);
+      }
+    }
+  }
+  return Array.from(tools).sort();
 }

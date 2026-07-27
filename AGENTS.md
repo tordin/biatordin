@@ -56,3 +56,11 @@ A memória da Bia é dividida rigorosamente entre **Memória de Perfil (Core)** 
   3. Adicionar o enum correspondente em `src/agents/supervisor.ts`.
   4. Conectar o nó e as arestas condicionais em `src/graph/workflow.ts`.
   5. Criar testes unitários correspondentes em `tests/`.
+- Quando uma Skill é removida, desfazer os 5 passos acima E remover `tests/agents/<skill>.test.ts` se existir.
+
+## 5. Setup de Build e Testes
+
+- **Build:** `npm run build` (executa `tsc`). TypeScript strict mode.
+- **Testes:** `npm test` usa `node --experimental-vm-modules node_modules/jest/bin/jest.js` (Jest com ESM).
+- `package.json` tem `"type": "module"` — todos os imports usam extensão `.js`.
+- Testes que precisam de `DEEPSEEK_API_KEY` ou Google Cloud credentials falham em CI sem essas variáveis de ambiente.

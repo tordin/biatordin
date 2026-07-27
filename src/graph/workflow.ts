@@ -38,6 +38,15 @@ export function routeFromSupervisor(state: typeof AgentState.State) {
   return "__end__";
 }
 
+// Routes from specialist agents: allow FINISH → __end__ or back to supervisor
+export function routeFromSpecialist(state: typeof AgentState.State) {
+  const next = state.nextAgent;
+  logger.info(`[ROUTING] Specialist routes to: "${next}"`);
+  if (next === "FINISH") return "__end__";
+  if (next === "supervisor") return "supervisor";
+  return "supervisor";
+}
+
 
 const workflow = new StateGraph(AgentState)
   .addNode("summarizer", summarizerNode)
@@ -76,18 +85,18 @@ const workflow = new StateGraph(AgentState)
     weatherAgent: "weatherAgent",
     __end__: "__end__",
   })
-  .addEdge("searchAgent", "supervisor")
-  .addEdge("calendarAgent", "supervisor")
-  .addEdge("gmailAgent", "supervisor")
-  .addEdge("sheetsAgent", "supervisor")
-  .addEdge("docsAgent", "supervisor")
-  .addEdge("routineAgent", "supervisor")
-  .addEdge("memoryAgent", "supervisor")
-  .addEdge("taskAgent", "supervisor")
-  .addEdge("securityAgent", "supervisor")
-  .addEdge("shoppingAgent", "supervisor")
-  .addEdge("whatsappAgent", "supervisor")
-  .addEdge("reasoningAgent", "supervisor")
-  .addEdge("weatherAgent", "supervisor");
+  .addConditionalEdges("searchAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("calendarAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("gmailAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("sheetsAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("docsAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("routineAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("memoryAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("taskAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("securityAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("shoppingAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("whatsappAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("reasoningAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
+  .addConditionalEdges("weatherAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" });
 
 export const agent = workflow.compile({ checkpointer });

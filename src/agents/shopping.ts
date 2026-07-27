@@ -7,7 +7,7 @@ import { modelFlash as model } from "../llm/model.js";
 import { AgentState } from "./state.js";
 import { logger } from "../utils/logger.js";
 
-const googleShoppingTool = tool(
+export const googleShoppingTool = tool(
   async ({ query }) => {
     const apiKey = process.env.SERPAPI_API_KEY;
     if (!apiKey) {
