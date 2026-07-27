@@ -5,6 +5,7 @@ import { AgentState } from "./state.js";
 import { modelFlash as model, modelFlashStructured } from "../llm/model.js";
 import { sanitizeMessagesForModel, buildRecencyAnchoredHistory } from "../utils/sanitize.js";
 import { cleanMarkdownForWhatsApp } from "../transport/formatters.js";
+import { generateDynamicErrorResponse } from "../utils/dynamicErrorResponse.js";
 import { logger } from "../utils/logger.js";
 import { getMemory, updateMemory } from "../memory/coreMemory.js";
 import { searchVectorMemory, addVectorMemory, listVectorMemories, searchEntityMemory } from "../memory/vectorMemory.js";
@@ -265,7 +266,7 @@ export async function memoryAgentNode(state: typeof AgentState.State, config?: R
 
       return {
         messages: [new AIMessage(finalResponse)],
-        nextAgent: "FINISH",
+        nextAgent: "supervisor",
         contextData: { newExecution: "memoryAgent" }
       };
     }
@@ -305,13 +306,17 @@ export async function memoryAgentNode(state: typeof AgentState.State, config?: R
 
     return {
       messages: [new AIMessage(finalResponse)],
-      nextAgent: "FINISH",
+      nextAgent: "supervisor",
       contextData: { newExecution: "memoryAgent" }
     };
   } catch (error: any) {
     logger.error("[MEMORY_AGENT ERROR]", error);
+    const dynamicMsg = await generateDynamicErrorResponse({
+      messages: state.messages,
+      problemDescription: `Falha no especialista de memória: ${error.message || 'erro desconhecido'}`
+    });
     return {
-      messages: [new AIMessage("Desculpe, tive um probleminha ao tentar acessar minhas anotações. Pode tentar novamente?")],
+      messages: [new AIMessage(dynamicMsg)],
       nextAgent: "supervisor",
       contextData: { newExecution: "memoryAgent" }
     };

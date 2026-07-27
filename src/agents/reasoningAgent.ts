@@ -6,6 +6,7 @@ import { sanitizeMessagesForModel, buildRecencyAnchoredHistory } from "../utils/
 import { cleanMarkdownForWhatsApp } from "../transport/formatters.js";
 import { logger } from "../utils/logger.js";
 import { getSkill } from "../skills/registry.js";
+import { generateDynamicErrorResponse } from "../utils/dynamicErrorResponse.js";
 
 const REASONING_PROMPT = getSkill("reasoningAgent")?.detailedPrompt || "";
 
@@ -32,14 +33,18 @@ export async function reasoningAgentNode(state: typeof AgentState.State, config?
     
     return {
       messages: [response],
-      nextAgent: "FINISH",
+      nextAgent: "supervisor",
       contextData: { newExecution: "reasoningAgent" }
     };
   } catch (error: any) {
     logger.error("[REASONING AGENT ERROR]", error.message || error);
+    const dynamicMsg = await generateDynamicErrorResponse({
+      messages: state.messages,
+      problemDescription: `Falha ao processar raciocínio complexo: ${error.message || 'erro desconhecido'}`
+    });
     return {
-      messages: [new AIMessage("Tive um problema ao processar esse raciocínio complexo. Pode reformular a pergunta?")],
-      nextAgent: "FINISH",
+      messages: [new AIMessage(dynamicMsg)],
+      nextAgent: "supervisor",
       contextData: { newExecution: "reasoningAgent" }
     };
   }

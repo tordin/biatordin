@@ -2,6 +2,7 @@ import { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import { AIMessage, SystemMessage, RemoveMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { sanitizeMessagesForModel, buildRecencyAnchoredHistory } from "../../utils/sanitize.js";
+import { generateDynamicErrorResponse } from "../../utils/dynamicErrorResponse.js";
 import { AgentState } from "../state.js";
 import { logger } from "../../utils/logger.js";
 import dotenv from "dotenv";
@@ -108,11 +109,16 @@ export async function safeAgentNode(
     logger.error(`[${name.toUpperCase()} ERROR]`, error.message || error);
     
     const isTimeout = error.message?.includes("Timeout");
-    const userFriendlyNotice = isTimeout
+    const problemDescription = isTimeout
       ? `A consulta pelo agente especialista ${name} excedeu o limite de tempo.`
-      : `Ocorreu uma oscilação temporária na execução do especialista ${name}.`;
+      : `Ocorreu uma oscilação temporária na execução do especialista ${name}: ${error.message || 'erro desconhecido'}`;
 
-    const errorMessage = new AIMessage(userFriendlyNotice);
+    const userNotice = await generateDynamicErrorResponse({
+      messages: state.messages,
+      problemDescription
+    });
+
+    const errorMessage = new AIMessage(userNotice);
     
     return {
       messages: [errorMessage],

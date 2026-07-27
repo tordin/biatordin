@@ -455,7 +455,7 @@ export async function securityAgentNode(state: typeof AgentState.State) {
 
   return {
     messages: [new AIMessage(responseText)],
-    nextAgent: "FINISH",
+    nextAgent: "supervisor",
     contextData: { newExecution: "securityAgent" }
   };
 }

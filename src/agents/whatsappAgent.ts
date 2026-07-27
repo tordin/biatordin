@@ -5,6 +5,7 @@ import { modelFlash as model } from "../llm/model.js";
 import { sanitizeMessagesForModel, buildRecencyAnchoredHistory } from "../utils/sanitize.js";
 import { logger } from "../utils/logger.js";
 import { getChatHistory, listRecentChats, searchChatByName } from "../memory/chatHistory.js";
+import { generateDynamicErrorResponse } from "../utils/dynamicErrorResponse.js";
 
 import { getSkill } from "../skills/registry.js";
 
@@ -300,8 +301,12 @@ export async function whatsappAgentNode(state: typeof AgentState.State, config?:
       iterations++;
     } catch (err: any) {
       logger.error("[WHATSAPP_AGENT ERROR]", err);
+      const dynamicMsg = await generateDynamicErrorResponse({
+        messages: state.messages,
+        problemDescription: `Falha ao acessar o histórico ou mensagens do WhatsApp: ${err.message || 'erro desconhecido'}`
+      });
       return {
-        messages: [new AIMessage("Desculpe, tive um problema ao acessar o histórico do WhatsApp. Podemos tentar de novo?")],
+        messages: [new AIMessage(dynamicMsg)],
         nextAgent: "supervisor",
         contextData: { newExecution: "whatsappAgent" }
       };

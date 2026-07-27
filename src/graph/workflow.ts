@@ -2,7 +2,6 @@ import { StateGraph } from "@langchain/langgraph";
 import { AgentState } from "../agents/state.js";
 import { supervisorNode } from "../agents/supervisor.js";
 import { summarizerNode, shouldSummarize } from "../agents/summarizer.js";
-import { chitchatNode } from "../agents/chitchat.js";
 import { searchAgentNode } from "../agents/search.js";
 import { calendarAgentNode } from "../agents/workspace/calendar.js";
 import { gmailAgentNode } from "../agents/workspace/gmail.js";
@@ -24,7 +23,6 @@ export function routeFromSupervisor(state: typeof AgentState.State) {
   const next = state.nextAgent;
   logger.info(`[ROUTING] Supervisor decision routes to: "${next}"`);
   if (next === "searchAgent") return "searchAgent";
-  if (next === "chitchat") return "chitchat";
   if (next === "calendarAgent") return "calendarAgent";
   if (next === "gmailAgent") return "gmailAgent";
   if (next === "sheetsAgent") return "sheetsAgent";
@@ -40,20 +38,11 @@ export function routeFromSupervisor(state: typeof AgentState.State) {
   return "__end__";
 }
 
-export function routeFromSpecialist(state: typeof AgentState.State) {
-  if (state.nextAgent === "FINISH") {
-    logger.info(`[ROUTING] Specialist signaled FINISH. Going to __end__ directly.`);
-    return "__end__";
-  }
-  logger.info(`[ROUTING] Specialist signaled continuation. Returning to supervisor.`);
-  return "supervisor";
-}
 
 const workflow = new StateGraph(AgentState)
   .addNode("summarizer", summarizerNode)
   .addNode("supervisor", supervisorNode)
   .addNode("searchAgent", searchAgentNode)
-  .addNode("chitchat", chitchatNode)
   .addNode("calendarAgent", calendarAgentNode)
   .addNode("gmailAgent", gmailAgentNode)
   .addNode("sheetsAgent", sheetsAgentNode)
@@ -73,7 +62,6 @@ const workflow = new StateGraph(AgentState)
   .addEdge("summarizer", "supervisor")
   .addConditionalEdges("supervisor", routeFromSupervisor, {
     searchAgent: "searchAgent",
-    chitchat: "chitchat",
     calendarAgent: "calendarAgent",
     gmailAgent: "gmailAgent",
     sheetsAgent: "sheetsAgent",
@@ -88,19 +76,18 @@ const workflow = new StateGraph(AgentState)
     weatherAgent: "weatherAgent",
     __end__: "__end__",
   })
-  .addConditionalEdges("searchAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("chitchat", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("calendarAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("gmailAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("sheetsAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("docsAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("routineAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("memoryAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("taskAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("securityAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("shoppingAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("whatsappAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("reasoningAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("weatherAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" });
+  .addEdge("searchAgent", "supervisor")
+  .addEdge("calendarAgent", "supervisor")
+  .addEdge("gmailAgent", "supervisor")
+  .addEdge("sheetsAgent", "supervisor")
+  .addEdge("docsAgent", "supervisor")
+  .addEdge("routineAgent", "supervisor")
+  .addEdge("memoryAgent", "supervisor")
+  .addEdge("taskAgent", "supervisor")
+  .addEdge("securityAgent", "supervisor")
+  .addEdge("shoppingAgent", "supervisor")
+  .addEdge("whatsappAgent", "supervisor")
+  .addEdge("reasoningAgent", "supervisor")
+  .addEdge("weatherAgent", "supervisor");
 
 export const agent = workflow.compile({ checkpointer });

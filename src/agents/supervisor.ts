@@ -11,6 +11,7 @@ import { compileActiveTopicContext } from "../memory/topicCompiler.js";
 import { getOrCreateTopicByTitle, getRecentTopics } from "../memory/topics.js";
 import { invokeStructuredWithFallback } from "../utils/structuredOutput.js";
 import { getSkillCatalogSummary } from "../skills/registry.js";
+import { generateDynamicErrorResponse } from "../utils/dynamicErrorResponse.js";
 
 const SUPERVISOR_PROMPT = 
   "Você é a Bia, uma assistente virtual no WhatsApp, atuando como a Supervisora Inteligente de uma arquitetura multiagentes.\n" +
@@ -51,12 +52,12 @@ const SUPERVISOR_PROMPT =
   "REGRAS DE CONTEXTO E ROTEAMENTO (LEIA COM ATENÇÃO):\n" +
   "- Você receberá os dados de execução no objeto `contextData`, incluindo `executionLog` (agentes já chamados neste turno) e `activePlan` (seu plano atual, se houver).\n" +
   "- PLANEJAMENTO E LOOPS: Você PODE planejar chamar múltiplos agentes em sequência (ex: 2 buscas, depois agenda). Use o campo `plan` na saída estruturada para definir ou atualizar o seu plano (ex: [\"searchAgent\", \"calendarAgent\"]).\n" +
-  "- CUMPRA SEU PLANO OBRIGATORIAMENTE: Se você definiu um plano com agentes na sequência (ex: ['weatherAgent', 'calendarAgent', 'taskAgent', 'FINISH']), você DEVE executar CADA UM deles na ordem definida. Não pule agentes do seu plano. A ÚNICA exceção é se um agente retornar uma FALHA explícita (um erro ou exceção). FALTA DE ACESSO ou LIMITAÇÃO TÉCNICA não é desculpa para pular um agente — deixe o próprio agente tentar e falhar, não desista antes de chamá-lo.\n" +
-  "- Você PODE chamar o mesmo agente mais de uma vez na mesma rodada (ex: para duas pesquisas diferentes), mas avalie o `executionLog` rigorosamente para garantir que não está num LOOP INFINITO fazendo a mesma coisa repetidamente.\n" +
-  "- PREVENÇÃO DE LOOP DE ERRO: Se um agente falhar ao completar uma tarefa (ex: 'FALHA:', 'não encontrei') e pedir para você encerrar a tarefa (FINISH), VOCÊ DEVE OBEDECER IMEDIATAMENTE. Defina nextAgent = 'FINISH', repasse a mensagem de erro para o usuário de forma amigável, e JAMAIS chame o agente novamente para a mesma tentativa.\n" +
+  "- CUMPRA SEU PLANO OBRIGATORIAMENTE: Se você definiu um plano com agentes na sequência, você DEVE executar CADA UM deles na ordem definida. Não pule agentes do seu plano. A ÚNICA exceção é se um agente retornar uma FALHA explícita.\n" +
+  "- Você PODE chamar o mesmo agente mais de uma vez na mesma rodada, mas avalie o `executionLog` rigorosamente para evitar LOOP INFINITO.\n" +
+  "- PREVENÇÃO DE LOOP DE ERRO: Se um agente falhar, VOCÊ DEVE OBEDECER IMEDIATAMENTE. Defina nextAgent = 'FINISH', repasse a mensagem de erro para o usuário de forma amigável, e JAMAIS chame o agente novamente para a mesma tentativa.\n" +
   "- Se o usuário fez múltiplos pedidos, continue roteando até que TODAS as partes do pedido original sejam concluídas.\n" +
-  "- Se os agentes já executaram as tarefas e não há mais nada a fazer, você DEVE formular a resposta final amigável com os resultados obtidos, definir nextAgent = 'FINISH' e colocar essa resposta no campo response. Antes de declarar FINISH, verifique seu `activePlan`: se ainda há agentes pendentes no plano, chame o PRÓXIMO agente do plano. Só vá para FINISH quando TODOS os agentes do plano tiverem sido executados ou o executionLog mostrar que todos já passaram.\n" +
-  "- IMPORTANTE: Para agentes como `chitchat`, `memoryAgent` ou `whatsappAgent`, caso encerrem o assunto ou façam uma pergunta/esclarecimento diretamente ao usuário no histórico, você DEVE definir `nextAgent = 'FINISH'` e deixar o campo `response` vazio (pois eles mesmos já responderam ao usuário). Nunca crie loops insistindo na mesma tarefa se o especialista já pediu ajuda ao usuário.\n" +
+  "- VOCÊ É A ÚNICA QUE FALA COM O USUÁRIO: Os agentes especialistas NÃO respondem ao usuário. Eles escrevem resumos e dados crus no histórico. Sua obrigação é ler os dados deixados pelos especialistas e compilar uma resposta amigável final. Se não há mais nada a fazer, defina nextAgent = 'FINISH' e escreva sua resposta no campo response.\n" +
+  "- Antes de declarar FINISH, verifique seu `activePlan`: se ainda há agentes pendentes no plano, chame o PRÓXIMO agente do plano.\n" +
   "- MENSAGENS INTERMEDIÁRIAS: Use o campo `intermediateMessage` de forma natural para avisar o usuário do que você está prestes a fazer (ex: 'Buscando as datas...'). NÃO seja robótica.\n" +
   "- MENSAGENS SOBREPOSTAS: Se a última mensagem contiver '[⚠️ Mensagem enviada enquanto você formulava a resposta anterior]' e for apenas 'Bia' ou 'ei', ignore definindo nextAgent='FINISH' e response='[SILENT]'.\n" +
   "- IGNORAR TOKENS: Se houver mensagens no histórico contendo apenas 'ENVIAR 1234' ou 'AUTORIZAR 1234' (com 4 dígitos), ignore-as completamente. Elas são processadas por outro sistema. Não roteie para nenhum agente por causa delas.\n\n" +
@@ -70,7 +71,7 @@ const SUPERVISOR_PROMPT =
   "Responda APENAS com um objeto JSON estrito com o formato abaixo. Não adicione nenhuma explicação ou formatação markdown (sem ```json) fora dele:\n" +
   "{\n" +
   "  \\\"plan\\\": [\\\"searchAgent\\\", \\\"calendarAgent\\\"], // Seu plano de agentes. Opcional.\\n" +
-  "  \\\"nextAgent\\\": \\\"searchAgent\\\" | \\\"chitchat\\\" | \\\"calendarAgent\\\" | \\\"gmailAgent\\\" | \\\"sheetsAgent\\\" | \\\"docsAgent\\\" | \\\"routineAgent\\\" | \\\"memoryAgent\\\" | \\\"taskAgent\\\" | \\\"securityAgent\\\" | \\\"shoppingAgent\\\" | \\\"whatsappAgent\\\" | \\\"reasoningAgent\\\" | \\\"weatherAgent\\\" | \\\"FINISH\\\",\\n" +
+  "  \\\"nextAgent\\\": \\\"searchAgent\\\" | \\\"calendarAgent\\\" | \\\"gmailAgent\\\" | \\\"sheetsAgent\\\" | \\\"docsAgent\\\" | \\\"routineAgent\\\" | \\\"memoryAgent\\\" | \\\"taskAgent\\\" | \\\"securityAgent\\\" | \\\"shoppingAgent\\\" | \\\"whatsappAgent\\\" | \\\"reasoningAgent\\\" | \\\"weatherAgent\\\" | \\\"FINISH\\\",\\n" +
   "  \\\"reason\\\": \\\"Breve explicação do porquê desta decisão\\\",\\n" +
   "  \"response\": \"Sua resposta final compilada para o usuário caso decida por FINISH, ou vazia se for delegar\",\n" +
   "  \"intermediateMessage\": \"Mensagem proativa caso você decida avisar o que está fazendo antes de delegar (ex: 'Buscando as datas...')\",\n" +
@@ -236,10 +237,14 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
     );
   } catch (fallbackErr) {
     logger.error("[SUPERVISOR] Falha total ao obter decisão estruturada. Forçando FINISH para evitar loop.", fallbackErr);
+    const dynamicMsg = await generateDynamicErrorResponse({
+      messages: state.messages,
+      problemDescription: "Falha técnica no processamento da decisão de roteamento."
+    });
     parsed = {
       nextAgent: "FINISH",
       reason: "Falha na decodificação de decisão da supervisora.",
-      response: "Desculpe, tive um problema temporário ao processar essa mensagem. Pode tentar novamente?"
+      response: dynamicMsg
     };
   }
 
@@ -289,12 +294,14 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
     logger.warn(`Loop detectado: ${updates.nextAgent} chamado repetidamente. Forçando FINISH.`);
     updates.nextAgent = "FINISH";
     if (!parsed.response) {
-      parsed.response = "Deixa que já anotei isso! Se precisar de mais alguma coisa é só falar.";
+      parsed.response = "[SILENT]";
     }
   } else if (updates.nextAgent !== "FINISH" && currentExecutions >= maxAgentCalls) {
     logger.warn(`Max agent calls (${maxAgentCalls}) atingido. Forçando FINISH.`);
     updates.nextAgent = "FINISH";
-    if (!parsed.response) parsed.response = "Desculpe, tive que interromper pois estava demorando muito. Pode repetir de forma mais direta?";
+    if (!parsed.response) {
+      parsed.response = "[SILENT]";
+    }
   }
   
   // If the model populated response but didn't output FINISH. Forcing FINISH.
@@ -307,25 +314,6 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
     const messagesToRemove: RemoveMessage[] = [];
     let finalResponseText = parsed.response;
 
-    // Fallback: Se a resposta do supervisor estiver vazia ou for [SILENT], mas um especialista executou,
-    // pegamos a última mensagem do especialista para limpar e enviar
-    const hasSpecialistExecuted = (currentContext.executionLog || []).length > 0;
-    const isResponseEmptyOrSilent = !finalResponseText || finalResponseText.trim() === "" || finalResponseText.trim().toUpperCase() === "[SILENT]";
-    if (isResponseEmptyOrSilent && hasSpecialistExecuted) {
-      let lastAiMessage: AIMessage | null = null;
-      for (let i = state.messages.length - 1; i >= 0; i--) {
-        const msg = state.messages[i];
-        if (msg instanceof AIMessage) {
-          lastAiMessage = msg;
-          break;
-        }
-      }
-      if (lastAiMessage && typeof lastAiMessage.content === "string") {
-        logger.info(`[SUPERVISOR] Usando mensagem do especialista como fallback para limpeza.`);
-        finalResponseText = lastAiMessage.content;
-      }
-    }
-
     // Clean up ALL intermediate messages from this turn to prevent state bloat and loops
     let lastHumanIdx = -1;
     for (let i = state.messages.length - 1; i >= 0; i--) {
@@ -335,12 +323,28 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
       }
     }
 
+    // Remove todas as AIMessages geradas por especialistas neste turno para não poluir o state visível (já foram lidas)
     if (lastHumanIdx !== -1) {
       for (let i = lastHumanIdx + 1; i < state.messages.length; i++) {
         const msg = state.messages[i];
         if (msg.id) {
           messagesToRemove.push(new RemoveMessage({ id: msg.id }));
         }
+      }
+    }
+
+    const supervisorText = parsed.response ? parsed.response.trim() : "";
+    if (supervisorText && supervisorText.toUpperCase() !== "[SILENT]") {
+      finalResponseText = supervisorText;
+    } else {
+      // Se não houver resposta (e não for [SILENT]), falhou em gerar, fallback de segurança.
+      if (!parsed.response) {
+        finalResponseText = await generateDynamicErrorResponse({
+          messages: state.messages,
+          problemDescription: "A supervisora interrompeu o fluxo e precisa pedir esclarecimentos ao usuário."
+        });
+      } else {
+        finalResponseText = "[SILENT]";
       }
     }
 

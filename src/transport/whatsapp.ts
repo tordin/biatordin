@@ -9,7 +9,8 @@ import { resolveTopicForMessage } from '../utils/topicBroker.js';
 import { isTrustedChat, MASTER_NUMBER, MASTER_JIDS, consumeApprovalToken, addTrustedChat, consumeMessageApprovalToken, isAutoReplyChat, createMessageApprovalToken } from '../memory/security.js';
 import { isGroupIgnored, addIgnoredGroup, removeIgnoredGroup, isGroupManagementCommand } from '../config/ignoredGroups.js';
 import { appendMessageToHistory } from '../memory/chatHistory.js';
-import { savePendingMessage, clearPendingMessagesForQueue, getAllPendingMessages } from '../memory/pendingQueue.js';
+import { isCommand, handleCommand, getChatModelOverride } from '../commands/commandRouter.js';
+import { savePendingMessage, getAllPendingMessages, clearPendingMessagesForQueue } from '../memory/pendingQueue.js';
 import OpenAI, { toFile } from 'openai';
 
 const groqClient = new OpenAI({
@@ -24,6 +25,7 @@ const sockets = new Map<string, any>();
 const botJids = new Map<string, string | null>();
 const botLids = new Map<string, string | null>();
 const reconnectAttempts = new Map<string, number>();
+const consecutiveConflicts = new Map<string, number>();
 
 // Conjunto para rastrear mensagens enviadas pelo bot e evitar loops infinitos
 const botSentMessageIds = new Set<string>();
@@ -708,6 +710,11 @@ export async function getAllGroups(accountName?: string): Promise<{jid: string, 
 }
 
 export async function connectToWhatsApp(accountName: string = 'main') {
+    if (process.env.NODE_ENV === 'test') {
+        logger.info(`[WHATSAPP] Ambiente de teste detectado (NODE_ENV=test). Conexão real ignorada.`);
+        return;
+    }
+
     const folderName = `auth_info_baileys_${accountName}`;
     // If it was the original one, we might want to migrate it or just keep auth_info_baileys for main
     const authFolder = accountName === 'main' ? 'auth_info_baileys' : folderName;
@@ -737,10 +744,26 @@ export async function connectToWhatsApp(accountName: string = 'main') {
         if (connection === 'close') {
             const lastDisconnectError = lastDisconnect?.error as any;
             const statusCode = lastDisconnectError?.output?.statusCode;
+            const isConflict = statusCode === DisconnectReason.connectionReplaced ||
+                               lastDisconnectError?.data?.tag === 'conflict' ||
+                               lastDisconnectError?.reasonNode?.tag === 'conflict';
+
             logger.error(`[WATCHDOG DEBUG] Disconnect error para ${accountName}:`, lastDisconnectError);
             logger.error(`[WATCHDOG DEBUG] statusCode: ${statusCode}, DisconnectReason.loggedOut: ${DisconnectReason.loggedOut}`);
             
             const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+
+            if (isConflict) {
+                const conflicts = (consecutiveConflicts.get(accountName) || 0) + 1;
+                consecutiveConflicts.set(accountName, conflicts);
+                logger.warn(`[WATCHDOG] Conflito de sessão detectado para '${accountName}' (tentativa ${conflicts}). Outro processo ou sessão do WhatsApp Web conectou.`);
+
+                if (conflicts >= 2) {
+                    logger.error(`[WATCHDOG] Parando reconexão automática da conta '${accountName}' após ${conflicts} conflitos seguidos para evitar loop infinito. Encerrando outra instância ou liberando a sessão.`);
+                    return;
+                }
+            }
+
             const shouldReconnect = !isLoggedOut;
             
             logger.info(`Conexão fechada (${accountName}). Logged out: ${isLoggedOut}. Reconectando imediatamente: ${shouldReconnect}`);
@@ -750,7 +773,10 @@ export async function connectToWhatsApp(accountName: string = 'main') {
                 reconnectAttempts.set(accountName, attempts);
 
                 // Exponential backoff com jitter: base 2s, fator 1.5, teto em 30s + jitter (0-1000ms)
-                const baseDelay = Math.min(2000 * Math.pow(1.5, attempts - 1), 30000);
+                // Em caso de conflito na 1ª tentativa, dá uma pausa maior de 10s para estabilização
+                const baseDelay = isConflict 
+                    ? 10000 
+                    : Math.min(2000 * Math.pow(1.5, attempts - 1), 30000);
                 const jitter = Math.floor(Math.random() * 1000);
                 const delayMs = Math.round(baseDelay + jitter);
 
@@ -760,6 +786,7 @@ export async function connectToWhatsApp(accountName: string = 'main') {
                 }, delayMs);
             } else {
                 reconnectAttempts.delete(accountName);
+                consecutiveConflicts.delete(accountName);
                 logger.warn(`[WATCHDOG] Sessão de ${accountName} expirou ou foi desconectada pelo usuário. Limpando credenciais e reiniciando...`);
                 // Se foi a principal, avisa o Luiz pelo personal para que ele saiba o que aconteceu
                 if (accountName === 'main') {
@@ -793,6 +820,7 @@ export async function connectToWhatsApp(accountName: string = 'main') {
         } else if (connection === 'open') {
             logger.info(`WhatsApp (${accountName}) conectado com sucesso!`);
             reconnectAttempts.set(accountName, 0);
+            consecutiveConflicts.set(accountName, 0);
             botJids.set(accountName, normalizeJid(sock.user?.id));
             botLids.set(accountName, normalizeJid(sock.user?.lid));
 
@@ -1158,6 +1186,26 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                     removeIgnoredGroup(chatJid);
                     await sock.sendMessage(chatJid, { text: '✅ Pronto! Voltei a prestar atenção neste grupo. 😊' });
                     continue;
+                }
+            }
+            // ----------------------------------------------
+
+            // --- PROCESSAMENTO DE COMANDOS DETERMINÍSTICOS (/comando) ---
+            if (isCommand(text)) {
+                const handled = await handleCommand({
+                    text,
+                    chatJid,
+                    userJid,
+                    accountName,
+                    isGroup,
+                    sock,
+                    clearQueue: () => {
+                        const q = chatQueues.get(queueKey);
+                        if (q) q.messages = [];
+                    }
+                });
+                if (handled) {
+                    continue; // Ignora enfileiramento e invocação da IA
                 }
             }
             // ----------------------------------------------
