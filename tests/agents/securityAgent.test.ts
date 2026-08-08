@@ -11,10 +11,7 @@ import {
   checkPersonalAccountStatusTool,
   ignoreGroupTool,
   unignoreGroupTool,
-  listIgnoredGroupsTool,
-  enableAutoReplyTool,
-  disableAutoReplyTool,
-  listAutoReplyChatsTool
+  listIgnoredGroupsTool
 } from "../../src/agents/securityAgent.js";
 
 describe("Security Agent Node & Tool Handlers Direct Invocation", () => {
@@ -66,17 +63,6 @@ describe("Security Agent Node & Tool Handlers Direct Invocation", () => {
     expect(unignoreRes).toContain("removido da lista");
   });
 
-  test("deve testar ferramentas de auto-resposta", async () => {
-    const enableRes = await enableAutoReplyTool.invoke({ jid: dummyJid });
-    expect(enableRes).toContain("adicionado à lista de contatos habilitados");
-
-    const listAuto = await listAutoReplyChatsTool.invoke({});
-    expect(listAuto).toContain("Contatos habilitados para envio sem aprovação");
-
-    const disableRes = await disableAutoReplyTool.invoke({ jid: dummyJid });
-    expect(disableRes).toContain("removido da lista");
-  });
-
   test("deve responder pelo agente completo", async () => {
     const { modelFlash } = await import("../../src/llm/model.js");
     const { jest } = await import("@jest/globals");
@@ -87,7 +73,7 @@ describe("Security Agent Node & Tool Handlers Direct Invocation", () => {
       contextData: { chatJid: masterJid, isTrustedChat: true }
     };
 
-    const result = await securityAgentNode(initialState, { configurable: { thread_id: "test-thread-sec-node" } });
+    const result = await securityAgentNode(initialState as any);
     expect(result).toBeDefined();
     expect(result.messages.length).toBeGreaterThan(0);
   }, 30000);

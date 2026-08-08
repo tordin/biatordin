@@ -7,4 +7,5 @@ export interface SkillDefinition {
   detailedPrompt: string;
   category: SkillCategory;
   tools?: string[];
+  requiresTrusted?: boolean;
 }

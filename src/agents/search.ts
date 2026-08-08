@@ -6,6 +6,7 @@ import { safeAgentNode } from "./workspace/base.js";
 import { modelFlash as model } from "../llm/model.js";
 import { AgentState } from "./state.js";
 import { logger } from "../utils/logger.js";
+import { extractRelevantContent } from "../utils/contentExtractor.js";
 
 async function serperSearch(query: string, timeframe?: string): Promise<string | null> {
   const serperKey = process.env.SERPER_API_KEY;
@@ -152,8 +153,8 @@ export const openWebpageTool = tool(
       if (response.ok) {
         let content = await response.text();
         // Limit the content length so we don't blow up the LLM context window
-        if (content.length > 20000) {
-          content = content.substring(0, 20000) + "\n\n...[Conteúdo truncado por ser muito longo]...";
+        if (content.length > 8000) {
+          content = content.substring(0, 8000) + "\n\n...[Conteúdo truncado por ser muito longo]...";
         }
         return wrapUntrustedWebContent(content, url);
       } else {

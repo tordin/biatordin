@@ -52,7 +52,7 @@ export const listTasksTool = tool(
         `ID: ${t.id} | [${t.isCompleted ? 'x' : ' '}] ${t.title} (${t.category}, Urgência: ${t.urgency}${t.dueDate ? `, Prazo: ${t.dueDate}` : ''})`
       ).join("\n");
 
-      return `Lista de Tarefas:\n${formattedList}`;
+      return `<RAW_TOOL_OUTPUT source="sqlite:tasks">\nLista de Tarefas:\n${formattedList}\n</RAW_TOOL_OUTPUT>`;
     } catch (err: any) {
       logger.error("Erro ao listar tarefas:", err);
       return `Erro ao consultar tarefas no banco de dados: ${err.message}`;

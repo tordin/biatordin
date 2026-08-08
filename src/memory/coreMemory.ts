@@ -54,7 +54,8 @@ export function getMemory(chatJid: string, isTrustedChat: boolean): string {
       const chatMemFile = path.join(SANDBOX_DIR, safeJid, 'bia_memory.md');
       if (fs.existsSync(chatMemFile)) {
         const sandboxContent = fs.readFileSync(chatMemFile, 'utf-8').trim();
-        if (sandboxContent) {
+        const isDefault = sandboxContent === `# Memória e Arquivos Isolados (${chatJid})\n\nNenhuma anotação por enquanto.`;
+        if (sandboxContent && !isDefault) {
           globalMemory += `\n\n--- ANOTAÇÕES DESTE CHAT (${chatJid}) ---\n${sandboxContent}`;
         }
       }
@@ -117,6 +118,40 @@ export function updateMemory(chatJid: string, isTrustedChat: boolean, newContent
   } catch (error) {
     logger.error('Failed to update memory file:', error);
     throw new Error('Não foi possível salvar a memória.');
+  }
+}
+
+/**
+ * Deletes a specific string/content from Bia's memory.
+ * Trusted chats remove from the global memory. Untrusted chats remove from their sandbox.
+ */
+export function deleteFromMemory(chatJid: string, isTrustedChat: boolean, textToRemove: string): boolean {
+  try {
+    const targetFile = (!isTrustedChat && chatJid) ? getSandboxFile(chatJid) : MEMORY_FILE;
+    
+    let currentContent = fs.readFileSync(targetFile, 'utf-8');
+    
+    if (currentContent.includes(textToRemove)) {
+      // Remove o texto exato
+      const newContent = currentContent.replace(textToRemove, '').replace(/\n{3,}/g, '\n\n');
+      fs.writeFileSync(targetFile, newContent, 'utf-8');
+      
+      logger.info(`[MEMORY] Texto removido com sucesso de ${targetFile}`);
+      
+      // Sincroniza em segundo plano no banco vetorial RAG (apenas para core)
+      if (isTrustedChat || targetFile === MEMORY_FILE) {
+        syncCoreMemoryToVector().catch(err => {
+          logger.error('[MEMORY] Falha ao sincronizar exclusão da memória para o vetor RAG:', err);
+        });
+      }
+      return true;
+    }
+    
+    logger.warn(`[MEMORY] Texto não encontrado para exclusão em ${targetFile}`);
+    return false;
+  } catch (error) {
+    logger.error('Failed to delete from memory file:', error);
+    return false;
   }
 }
 

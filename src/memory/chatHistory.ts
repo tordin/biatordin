@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger.js';
+import { canonicalJid } from '../utils/jidResolver.js';
 
 const HISTORY_DIR = path.join(process.cwd(), 'data', 'history');
 
@@ -21,7 +22,22 @@ export function appendMessageToHistory(accountName: string, chatJid: string, mes
     fs.mkdirSync(accountDir, { recursive: true });
   }
 
-  const filePath = path.join(accountDir, `${chatJid}.json`);
+  // Unifica histórico por chave canônica (número) para evitar fragmentação LID vs número
+  const canonicalKey = canonicalJid(chatJid);
+  const filePath = path.join(accountDir, `${canonicalKey}.json`);
+
+  // Se existir um arquivo legado no formato não-canônico (LID), faz merge uma única vez
+  if (canonicalKey !== chatJid) {
+    const legacyPath = path.join(accountDir, `${chatJid}.json`);
+    if (fs.existsSync(legacyPath) && !fs.existsSync(filePath)) {
+      try {
+        fs.renameSync(legacyPath, filePath);
+      } catch (e) {
+        logger.error(`[CHAT HISTORY] Falha ao migrar histórico de ${chatJid} -> ${canonicalKey}:`, e);
+      }
+    }
+  }
+
   let history: ChatMessage[] = [];
 
   if (fs.existsSync(filePath)) {
@@ -29,7 +45,7 @@ export function appendMessageToHistory(accountName: string, chatJid: string, mes
       const data = fs.readFileSync(filePath, 'utf-8');
       history = JSON.parse(data);
     } catch (e) {
-      logger.error(`[CHAT HISTORY] Falha ao ler histórico de ${chatJid}:`, e);
+      logger.error(`[CHAT HISTORY] Falha ao ler histórico de ${canonicalKey}:`, e);
     }
   }
 
@@ -52,13 +68,18 @@ export function appendMessageToHistory(accountName: string, chatJid: string, mes
   try {
     fs.writeFileSync(filePath, JSON.stringify(history, null, 2));
   } catch (e) {
-    logger.error(`[CHAT HISTORY] Falha ao escrever histórico de ${chatJid}:`, e);
+    logger.error(`[CHAT HISTORY] Falha ao escrever histórico de ${canonicalKey}:`, e);
   }
 }
 
 export function getChatHistory(accountName: string, chatJid: string, limit: number = 50): ChatMessage[] {
-  const filePath = path.join(HISTORY_DIR, accountName, `${chatJid}.json`);
-  if (!fs.existsSync(filePath)) {
+  // Lê pela chave canônica (número); se o arquivo legado (LID) ainda não foi migrado, tenta ele
+  const canonicalKey = canonicalJid(chatJid);
+  const canonicalPath = path.join(HISTORY_DIR, accountName, `${canonicalKey}.json`);
+  const legacyPath = chatJid !== canonicalKey ? path.join(HISTORY_DIR, accountName, `${chatJid}.json`) : null;
+
+  const filePath = fs.existsSync(canonicalPath) ? canonicalPath : (legacyPath && fs.existsSync(legacyPath) ? legacyPath : null);
+  if (!filePath) {
     return [];
   }
 
@@ -140,3 +161,44 @@ export function searchChatByName(accountName: string, queryName: string): { chat
   } catch(e) {}
   return results;
 }
+
+export function getMessagesForGroups(jids: string[], hours: number = 24): { chatJid: string, groupName: string, messages: ChatMessage[] }[] {
+  const cutoffTime = Date.now() - (hours * 60 * 60 * 1000);
+  const result: { chatJid: string, groupName: string, messages: ChatMessage[] }[] = [];
+
+  for (const jid of jids) {
+    let groupMessages: ChatMessage[] = [];
+    let groupName = jid;
+    
+    // Procura na conta 'main' e 'personal'
+    for (const account of ['main', 'personal']) {
+      const filePath = path.join(HISTORY_DIR, account, `${jid}.json`);
+      if (fs.existsSync(filePath)) {
+        try {
+          const data = fs.readFileSync(filePath, 'utf-8');
+          const history: ChatMessage[] = JSON.parse(data);
+          
+          const recent = history.filter(m => m.timestamp >= cutoffTime);
+          if (recent.length > 0) {
+             groupMessages = groupMessages.concat(recent);
+             const lastWithChatName = history.slice().reverse().find(m => m.chatName);
+             if (lastWithChatName?.chatName) {
+               groupName = lastWithChatName.chatName;
+             }
+          }
+        } catch (e) {
+          logger.error(`[CHAT HISTORY] Falha ao ler histórico de ${jid} na conta ${account}:`, e);
+        }
+      }
+    }
+    
+    if (groupMessages.length > 0) {
+      // Ordena por timestamp crescente
+      groupMessages.sort((a, b) => a.timestamp - b.timestamp);
+      result.push({ chatJid: jid, groupName, messages: groupMessages });
+    }
+  }
+
+  return result;
+}
+

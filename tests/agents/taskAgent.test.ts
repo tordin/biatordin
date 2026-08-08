@@ -10,18 +10,18 @@ describe("Task Agent Node & Tool Handlers", () => {
 
     // Teste de add_task sem thread_id
     const errAdd = await addTaskTool.invoke({ title: "Sem chat" }, {} as any);
-    expect(errAdd).toContain("Erro");
+    expect(String(errAdd)).toContain("Erro");
 
     // Adicionar tarefa com sucesso
     const addRes = await addTaskTool.invoke({ title: "Comprar lâmpadas LED", category: "Casa", urgency: "Alta" }, config);
-    expect(addRes).toContain("✅ Tarefa criada com sucesso!");
-    const match = addRes.match(/ID: (\d+)/);
+    expect(String(addRes)).toContain("✅ Tarefa criada com sucesso!");
+    const match = String(addRes).match(/ID: (\d+)/);
     expect(match).not.toBeNull();
     createdTaskId = parseInt(match![1]);
 
     // Listar tarefas
     const listRes = await listTasksTool.invoke({ status: "pending" }, config);
-    expect(listRes).toContain("Comprar lâmpadas LED");
+    expect(String(listRes)).toContain("Comprar lâmpadas LED");
 
     // Concluir tarefa
     const completeRes = await completeTaskTool.invoke({ id: createdTaskId }, config);

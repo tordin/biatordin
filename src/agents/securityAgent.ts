@@ -1,7 +1,8 @@
 import { AIMessage } from "@langchain/core/messages";
 import { AgentState } from "./state.js";
 import { notifyMaster, sendIntermediateMessage, connectToWhatsApp, disconnectFromWhatsApp, isWhatsAppConnected } from "../transport/whatsapp.js";
-import { addTrustedChat, removeTrustedChat, isTrustedChat, listTrustedChats, MASTER_NUMBER, MASTER_JIDS, createMessageApprovalToken, addAutoReplyChat, removeAutoReplyChat, listAutoReplyChats } from "../memory/security.js";
+import { addTrustedChat, removeTrustedChat, isTrustedChat, listTrustedChats, MASTER_NUMBER, MASTER_JIDS } from "../memory/security.js";
+import { saveRoutine, getAllActiveRoutines } from "../memory/routines.js";
 import { addIgnoredGroup, removeIgnoredGroup, getAllIgnoredGroups, normalizeText } from "../config/ignoredGroups.js";
 import { logger } from "../utils/logger.js";
 import { modelFlash as model } from "../llm/model.js";
@@ -35,9 +36,9 @@ export const addTrustedChatTool = tool(
   },
   {
     name: "add_trusted_chat",
-    description: "Adiciona um número (JID) à lista de chats de confiança, permitindo que a Bia acesse dados sensíveis para este usuário/grupo. O JID normalmente termina em @s.whatsapp.net ou @g.us.",
+    description: "Adiciona um número de usuário ou JID à lista de chats de CONFIANÇA (concede permissão para o usuário consultar agenda, e-mails e dados sensíveis). ATENÇÃO: NUNCA use esta ferramenta quando o usuário pedir para monitorar ou acompanhar grupos para resumos diários! Para isso, use add_daily_summary_group.",
     schema: z.object({
-      jid: z.string().describe("O JID do WhatsApp a ser adicionado (ex: 5511999999999@s.whatsapp.net)"),
+      jid: z.string().describe("O JID do WhatsApp a ser adicionado à lista de confiança (ex: 5511999999999@s.whatsapp.net)"),
     }),
   }
 );
@@ -321,63 +322,6 @@ export const listIgnoredGroupsTool = tool(
   }
 );
 
-export const enableAutoReplyTool = tool(
-  async ({ jid, name }) => {
-    try {
-      await addAutoReplyChat(jid);
-      return `O número/grupo ${name || formatJidForUser(jid)} (${jid}) foi adicionado à lista de contatos habilitados. Bia poderá enviar mensagens pela conta pessoal sem aprovação explícita.`;
-    } catch (e: any) {
-      return `Erro ao adicionar contato habilitado: ${e.message}`;
-    }
-  },
-  {
-    name: "enable_auto_reply",
-    description: "Adiciona um número ou grupo (JID) à lista de contatos habilitados para bypass de segurança. A Bia poderá enviar e responder mensagens na conta pessoal para este chat IMEDIATAMENTE, sem pedir aprovação explícita (token) do administrador.",
-    schema: z.object({
-      jid: z.string().describe("O JID do WhatsApp a ser adicionado (ex: 5511999999999@s.whatsapp.net ou 120363xxx@g.us)"),
-      name: z.string().optional().describe("Nome amigável do contato/grupo (apenas para ficar legível na resposta)."),
-    }),
-  }
-);
-
-export const disableAutoReplyTool = tool(
-  async ({ jid }) => {
-    try {
-      await removeAutoReplyChat(jid);
-      return `O número/grupo ${formatJidForUser(jid)} foi removido da lista de contatos habilitados. A Bia precisará de aprovação (token) para enviar mensagens pela conta pessoal para este chat.`;
-    } catch (e: any) {
-      return `Erro ao remover contato habilitado: ${e.message}`;
-    }
-  },
-  {
-    name: "disable_auto_reply",
-    description: "Remove um número ou grupo (JID) da lista de contatos habilitados para bypass de aprovação de mensagens.",
-    schema: z.object({
-      jid: z.string().describe("O JID do WhatsApp a ser removido da lista."),
-    }),
-  }
-);
-
-export const listAutoReplyChatsTool = tool(
-  async () => {
-    try {
-      const chats = await listAutoReplyChats();
-      if (chats.length === 0) {
-        return "Atualmente não há nenhum contato na lista de habilitados para envio de mensagens sem aprovação.";
-      }
-      const list = chats.map(c => `- ${formatJidForUser(c.jid)} (Adicionado em: ${new Date(c.addedAt).toLocaleString('pt-BR')})`).join('\n');
-      return `Contatos habilitados para envio sem aprovação (bypass) atuais:\n${list}`;
-    } catch (e: any) {
-      return `Erro ao listar contatos habilitados: ${e.message}`;
-    }
-  },
-  {
-    name: "list_auto_reply_chats",
-    description: "Lista todos os números (JIDs) que estão atualmente na lista de contatos habilitados (auto-reply / bypass de aprovação de mensagens).",
-    schema: z.object({}),
-  }
-);
-
 const securityTools = [
   addTrustedChatTool, 
   removeTrustedChatTool, 
@@ -389,10 +333,7 @@ const securityTools = [
   checkPersonalAccountStatusTool,
   ignoreGroupTool,
   unignoreGroupTool,
-  listIgnoredGroupsTool,
-  enableAutoReplyTool,
-  disableAutoReplyTool,
-  listAutoReplyChatsTool
+  listIgnoredGroupsTool
 ];
 
 import { getSkill } from "../skills/registry.js";

@@ -3,8 +3,10 @@ import { BaseMessage } from "@langchain/core/messages";
 
 export interface ContextData {
   executionLog?: string[];
+  executedTools?: string[];
   activePlan?: string[];
   newExecution?: string;
+  newExecutedTools?: string[];
   lastError?: string;
   lastInteractionTimestamp?: number;
   isTrustedChat?: boolean;
@@ -13,6 +15,7 @@ export interface ContextData {
   senderJid?: string;
   senderName?: string;
   masterNumber?: string;
+  specialistTask?: string;
   [key: string]: any;
 }
 
@@ -38,6 +41,12 @@ export const AgentState = Annotation.Root({
       if (y && y.newExecution) {
         newState.executionLog = [...(x.executionLog || []), y.newExecution];
         delete newState.newExecution;
+      }
+      
+      // Se ferramentas foram executadas na rodada, faz o append no log de ferramentas
+      if (y && y.newExecutedTools) {
+        newState.executedTools = [...(x.executedTools || []), ...y.newExecutedTools];
+        delete newState.newExecutedTools;
       }
       
       return newState;

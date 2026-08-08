@@ -12,7 +12,7 @@ describe("Structured Output Fallback Utility", () => {
   test("deve invocar o modelo com structured output com sucesso", async () => {
     const mockModel = {
       withStructuredOutput: jest.fn().mockReturnValue({
-        invoke: jest.fn().mockResolvedValue({ greeting: "Olá!", confidence: 0.95 })
+        invoke: jest.fn<any>().mockResolvedValue({ greeting: "Olá!", confidence: 0.95 })
       })
     };
 
@@ -28,12 +28,12 @@ describe("Structured Output Fallback Utility", () => {
 
   test("deve acionar o fallback regex quando o parser nativo falhar", async () => {
     const mockStructuredModel = {
-      invoke: jest.fn().mockRejectedValue(new Error("Parser failed"))
+      invoke: jest.fn<any>().mockRejectedValue(new Error("Parser failed"))
     };
 
     const mockModel = {
       withStructuredOutput: jest.fn().mockReturnValue(mockStructuredModel),
-      invoke: jest.fn().mockResolvedValue({
+      invoke: jest.fn<any>().mockResolvedValue({
         content: "```json\n{\n  \"greeting\": \"Olá via Fallback!\",\n  \"confidence\": 0.88\n}\n```"
       })
     };
@@ -50,12 +50,12 @@ describe("Structured Output Fallback Utility", () => {
 
   test("deve lançar erro se o fallback também falhar", async () => {
     const mockStructuredModel = {
-      invoke: jest.fn().mockRejectedValue(new Error("Parser failed"))
+      invoke: jest.fn<any>().mockRejectedValue(new Error("Parser failed"))
     };
 
     const mockModel = {
       withStructuredOutput: jest.fn().mockReturnValue(mockStructuredModel),
-      invoke: jest.fn().mockResolvedValue({
+      invoke: jest.fn<any>().mockResolvedValue({
         content: "Resposta sem nenhum JSON válido"
       })
     };

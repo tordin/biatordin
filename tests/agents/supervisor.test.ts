@@ -1,5 +1,5 @@
 import { HumanMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
-import { supervisorNode } from "../../src/agents/supervisor.js";
+import { supervisorNode, cleanDsmlTags } from "../../src/agents/supervisor.js";
 
 describe("Supervisor Node Decision Engine", () => {
   test("deve analisar mensagem do usuário e tomar decisão de roteamento válida", async () => {
@@ -202,3 +202,13 @@ describe("Supervisor — Dynamic Tool Binding (bindTools)", () => {
     expect(validAgents).toContain(result.nextAgent);
   }, 30000);
 });
+
+describe("cleanDsmlTags", () => {
+  test("deve remover bloco completo de DSML tool_calls do texto", () => {
+    const input = 'Deixa eu ver os chats recentes da sua conta pessoal pra achar o grupo "Família"!\n\n<｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name="listRecentChats">\n<｜｜DSML｜｜parameter name="accountName" string="true">personal</｜｜DSML｜｜parameter>\n<｜｜DSML｜｜parameter name="limit" string="false">20</｜｜DSML｜｜parameter>\n</｜｜DSML｜｜invoke>\n</｜｜DSML｜｜tool_calls>';
+    const cleaned = cleanDsmlTags(input);
+    expect(cleaned).toBe('Deixa eu ver os chats recentes da sua conta pessoal pra achar o grupo "Família"!');
+    expect(cleaned).not.toContain("<｜｜DSML｜｜tool_calls>");
+  });
+});
+

@@ -10,22 +10,22 @@ describe("Routine Agent Node & Tool Handlers", () => {
 
     // Erro por falta de thread_id
     const errRes = await createRoutineTool.invoke({ cronExpression: "0 9 * * *", prompt: "Teste" }, {} as any);
-    expect(errRes).toContain("Erro");
+    expect(String(errRes)).toContain("Erro");
 
     // Criar rotina
     const createRes = await createRoutineTool.invoke({ cronExpression: "0 9 * * *", prompt: "Verificar tarefas" }, config);
-    expect(createRes).toContain("Rotina criada com sucesso!");
-    const match = createRes.match(/ID: (\d+)/);
+    expect(String(createRes)).toContain("Rotina criada com sucesso!");
+    const match = String(createRes).match(/ID: (\d+)/);
     expect(match).not.toBeNull();
     createdRoutineId = parseInt(match![1]);
 
     // Listar rotinas
     const listRes = await listRoutinesTool.invoke({}, config);
-    expect(listRes).toContain("Verificar tarefas");
+    expect(String(listRes)).toContain("Verificar tarefas");
 
     // Excluir rotina
     const deleteRes = await deleteRoutineTool.invoke({ id: createdRoutineId }, config);
-    expect(deleteRes).toContain("cancelada com sucesso");
+    expect(String(deleteRes)).toContain("cancelada com sucesso");
   });
 
   test("deve criar uma rotina agendada via agente", async () => {

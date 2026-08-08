@@ -46,7 +46,7 @@ export const listRoutinesTool = tool(
         if (routines.length === 0) return "Nenhuma rotina ativa encontrada para este usuário.";
         
         const list = routines.map(r => `ID: ${r.id} | Cron: ${r.cronExpression} | Prompt: ${r.prompt}`).join("\n");
-        return `Rotinas ativas:\n${list}`;
+        return `<RAW_TOOL_OUTPUT source="sqlite:routines">\nRotinas ativas:\n${list}\n</RAW_TOOL_OUTPUT>`;
     } catch (err: any) {
         logger.error("Erro ao listar rotinas:", err);
         return `Erro ao listar rotinas: ${err.message}`;

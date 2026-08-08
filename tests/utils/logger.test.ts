@@ -37,6 +37,6 @@ describe("Logger & Trigger Tracking System", () => {
     expect(() => logger.info("Teste de mensagem informativa")).not.toThrow();
     expect(() => logger.warn("Teste de aviso")).not.toThrow();
     expect(() => logger.error("Teste de erro", new Error("Erro teste"))).not.toThrow();
-    expect(() => logger.logAgentStart("testAgent", threadId)).not.toThrow();
+    expect(() => logger.logAgentStart("testAgent", threadId, {})).not.toThrow();
   });
 });

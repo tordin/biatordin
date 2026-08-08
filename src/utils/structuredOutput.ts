@@ -52,7 +52,16 @@ export async function invokeStructuredWithFallback<T>(
 
       if (firstBrace !== -1 && lastBrace !== -1 && lastBrace >= firstBrace) {
         const jsonSubstring = cleaned.substring(firstBrace, lastBrace + 1);
-        const parsed = JSON.parse(jsonSubstring);
+        let parsed: any;
+        try {
+          parsed = JSON.parse(jsonSubstring);
+        } catch (parseErr) {
+          // Sanitize raw unescaped newlines/tabs within quotes
+          const sanitized = jsonSubstring.replace(/"([^"\\]*(?:\\.[^"\\]*)*)"/g, (match: string) => {
+            return match.replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
+          });
+          parsed = JSON.parse(sanitized);
+        }
         const validated = schema.parse(parsed);
         return validated;
       }

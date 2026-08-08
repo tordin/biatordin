@@ -1,4 +1,6 @@
 import dotenv from 'dotenv';
+import { initDbMonitor } from './utils/dbMonitor.js';
+import { initServer } from './api/server.js';
 import { connectToWhatsApp } from './transport/whatsapp.js';
 import { logger } from './utils/logger.js';
 import { checkpointer } from './memory/checkpointer.js';
@@ -29,6 +31,8 @@ async function gracefulShutdown(signal: string) {
 
 import { initTopicsTable } from './memory/topics.js';
 import { initSecurityTable } from './memory/security.js';
+import { initializeDailySummaryDB } from './memory/dailySummary.js';
+import { loadLidMappings } from './utils/jidResolver.js';
 
 // Captura sinais de terminação
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
@@ -36,8 +40,16 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 async function bootstrap() {
   try {
+    initDbMonitor();
+    initServer();
+    
     await initTopicsTable();
     await initSecurityTable();
+    await initializeDailySummaryDB();
+
+    // Carrega mapeamentos LID↔número antes de qualquer processamento de mensagens
+    // (essencial para missões: alvo responde via @lid, missões salvas com número)
+    loadLidMappings();
     
     connectToWhatsApp('main').catch((err) => {
       logger.error('Falha ao iniciar o WhatsApp Bot (main):', err);

@@ -1,5 +1,5 @@
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import { AIMessage } from "@langchain/core/messages";
+import { AIMessage, SystemMessage, HumanMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
@@ -7,7 +7,7 @@ import { safeAgentNode } from "./workspace/base.js";
 import { modelFlash as model } from "../llm/model.js";
 import { AgentState } from "./state.js";
 import { logger } from "../utils/logger.js";
-import { getMemory } from "../memory/coreMemory.js";
+import { getMemory, deleteFromMemory } from "../memory/coreMemory.js";
 import { searchVectorMemory, addVectorMemory, searchEntityMemory } from "../memory/vectorMemory.js";
 import { getTasksForChat } from "../memory/tasks.js";
 import { getSkill } from "../skills/registry.js";
@@ -27,7 +27,8 @@ export const readMemoryTool = tool(
   async (_params, config) => {
     const { chatJid, isTrustedChat } = getChatContext(config);
     logger.info("[MEMORY_AGENT] Tool readMemory chamada.");
-    return getMemory(chatJid, isTrustedChat);
+    const content = getMemory(chatJid, isTrustedChat);
+    return `<RAW_TOOL_OUTPUT>\n${content}\n</RAW_TOOL_OUTPUT>`;
   },
   {
     name: "readMemory",
@@ -36,13 +37,34 @@ export const readMemoryTool = tool(
   }
 );
 
+export const deleteFromCoreMemoryTool = tool(
+  async ({ exactTextToRemove }, config) => {
+    const { chatJid, isTrustedChat } = getChatContext(config);
+    logger.info(`[MEMORY_AGENT] Tool deleteFromCoreMemory chamada para o texto: "${exactTextToRemove.substring(0, 30)}..."`);
+    
+    const success = deleteFromMemory(chatJid, isTrustedChat, exactTextToRemove);
+    if (success) {
+      return `<RAW_TOOL_OUTPUT>\nTexto removido da memória core com sucesso.\n</RAW_TOOL_OUTPUT>`;
+    } else {
+      return `<RAW_TOOL_OUTPUT>\nTexto não encontrado na memória core. Verifique se o trecho exato foi fornecido.\n</RAW_TOOL_OUTPUT>`;
+    }
+  },
+  {
+    name: "deleteFromCoreMemory",
+    description: "Apaga um trecho de texto exato da memória core (bia_memory.md). Você deve ler a memória antes para copiar o texto exato.",
+    schema: z.object({
+      exactTextToRemove: z.string().describe("O texto EXATO a ser removido da memória, exatamente como retornado por readMemory.")
+    }),
+  }
+);
+
 export const searchSemanticMemoryTool = tool(
-  async ({ query }, config) => {
+  async ({ query, objective }, config) => {
     const { chatJid, isTrustedChat } = getChatContext(config);
     logger.info(`[MEMORY_AGENT] Executando busca semântica RAG para a query: "${query}"`);
 
     const results = await searchVectorMemory(query, 5, chatJid, isTrustedChat);
-    const searchSummary =
+    let searchSummary =
       results.length > 0
         ? results
             .map(
@@ -52,7 +74,25 @@ export const searchSemanticMemoryTool = tool(
             .join("\n")
         : "Nenhuma memória semântica correspondente foi encontrada no banco.";
 
-    return `Resultados da busca semântica RAG:\n\n${searchSummary}`;
+    if (objective && results.length > 0) {
+      try {
+        const filterResponse = await model.invoke([
+          new SystemMessage(
+            `Você é um extrator de informações de memória.\n` +
+            `Extraia e formate qualquer trecho das MEMÓRIAS BRUTAS que responda ou se relacione com o seguinte TEMA/OBJETIVO: "${objective}".\n` +
+            `Se houver memórias que tratem do assunto (mesmo que com palavras ligeiramente diferentes ou de forma parcial), MANTENHA-AS.\n` +
+            `Descarte apenas assuntos completamente alheios ou irrelevantes.\n` +
+            `Se nenhuma memória tiver qualquer relação com o objetivo, responda apenas: "Nenhuma informação relevante para o objetivo encontrada."`
+          ),
+          new HumanMessage(`MEMÓRIAS BRUTAS:\n${searchSummary}`)
+        ]);
+        searchSummary = typeof filterResponse.content === 'string' ? filterResponse.content : JSON.stringify(filterResponse.content);
+      } catch (err: any) {
+        logger.error(`[LLM Filter Error] searchSemanticMemoryTool: ${err.message}`);
+      }
+    }
+
+    return `<RAW_TOOL_OUTPUT>\nResultados da busca semântica RAG:\n\n${searchSummary}\n</RAW_TOOL_OUTPUT>`;
   },
   {
     name: "searchSemanticMemory",
@@ -63,6 +103,11 @@ export const searchSemanticMemoryTool = tool(
         .string()
         .describe(
           "A pergunta ou os termos-chave contextuais para a busca semântica (ex: 'presente aniversario irmao maio', 'marca racao cachorro', 'combinado viagem')"
+        ),
+      objective: z
+        .string()
+        .describe(
+          "OBRIGATÓRIO: O tema, a pergunta ou o fato desejado a ser extraído destas memórias (ex: 'moedor JMax ajuste espresso', 'tamanho sapato cecilia'). Evite metalinguagem ou perguntas sobre a localização da gravação."
         ),
     }),
   }
@@ -215,7 +260,7 @@ export const searchEventSummaryTool = tool(
       );
     }
 
-    return `MEMÓRIAS ENCONTRADAS:\n\n${memorySummary}${semanticExtra}${tasksSummary}`;
+    return `<RAW_TOOL_OUTPUT>\nMEMÓRIAS ENCONTRADAS:\n\n${memorySummary}${semanticExtra}${tasksSummary}\n</RAW_TOOL_OUTPUT>`;
   },
   {
     name: "searchEventSummary",
@@ -235,6 +280,7 @@ const memoryAgent = createReactAgent({
   llm: model,
   tools: [
     readMemoryTool,
+    deleteFromCoreMemoryTool,
     searchSemanticMemoryTool,
     storeSemanticMemoryTool,
     searchEventSummaryTool,

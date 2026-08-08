@@ -5,6 +5,7 @@ import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import { Serialized } from "@langchain/core/load/serializable";
 import { LLMResult } from "@langchain/core/outputs";
 import { BaseMessage } from "@langchain/core/messages";
+import { biaEvents } from "./events.js";
 
 const LOG_FILE = path.resolve(process.cwd(), 'data/bia_detailed.jsonl');
 
@@ -160,6 +161,7 @@ function writeDetailedLog(
 
   try {
     fs.appendFileSync(LOG_FILE, JSON.stringify(logEntry) + '\n', 'utf-8');
+    biaEvents.emit('log', logEntry);
   } catch (err) {
     console.error("Failed to write to detailed log file:", err);
   }
@@ -168,6 +170,100 @@ function writeDetailedLog(
 /* ============================================================
    LANGCHAIN CALLBACK HANDLER
    ============================================================ */
+
+const runToThreadMap = new Map<string, string>();
+
+/* ============================================================
+   LLM_START / LLM_END DEDUPLICATION BY RUN ID
+   O handler de callbacks é anexado em dois níveis (model e graph),
+   então handleChatModelStart + handleLLMStart (e handleLLMEnd)
+   disparam DUAS vezes para a mesma chamada, com o MESMO runId.
+   Para não poluir o JSONL e o debugger com nós duplicados:
+   - LLM_START: bufferiza por runId e emite UM evento mesclado
+     (messages do chat-model + prompts do LLM).
+   - LLM_END: emite apenas o primeiro evento por runId.
+   ============================================================ */
+interface PendingLlmStart {
+  threadId?: string;
+  agentName?: string;
+  data: Record<string, any>;
+  timer?: NodeJS.Timeout;
+}
+const pendingLlmStarts = new Map<string, PendingLlmStart>();
+const writtenLlmEndRunIds = new Set<string>();
+const MAX_TRACKED_RUN_IDS = 2000;
+
+function queueLlmStart(
+  runId: string,
+  threadId: string | undefined,
+  agentName: string | undefined,
+  data: Record<string, any>
+) {
+  if (!runId) {
+    // Sem runId (legado): escreve imediatamente
+    writeDetailedLog("LLM_START", threadId, agentName, data);
+    return;
+  }
+
+  let entry = pendingLlmStarts.get(runId);
+  if (!entry) {
+    entry = { threadId, agentName, data: {} };
+    pendingLlmStarts.set(runId, entry);
+    const newEntry = entry;
+    newEntry.timer = setTimeout(() => {
+      pendingLlmStarts.delete(runId);
+      writeDetailedLog("LLM_START", newEntry.threadId, newEntry.agentName, { ...newEntry.data, runId });
+    }, 30);
+
+    // Evita crescimento sem limite caso o callback gêmeo nunca chegue
+    if (pendingLlmStarts.size > MAX_TRACKED_RUN_IDS) {
+      const firstKey = pendingLlmStarts.keys().next().value;
+      const oldest = typeof firstKey === 'string' ? pendingLlmStarts.get(firstKey) : undefined;
+      if (oldest && typeof firstKey === 'string') {
+        if (oldest.timer) clearTimeout(oldest.timer);
+        pendingLlmStarts.delete(firstKey);
+        writeDetailedLog("LLM_START", oldest.threadId, oldest.agentName, { ...oldest.data, runId: firstKey });
+      }
+    }
+  }
+
+  // Mescla dados dos dois callbacks (messages do chat-model, prompts do LLM)
+  if (data.messages) entry.data.messages = data.messages;
+  if (data.prompts) entry.data.prompts = data.prompts;
+}
+
+function isDuplicateLlmEnd(runId: string): boolean {
+  if (!runId) return false;
+  if (writtenLlmEndRunIds.has(runId)) return true;
+  writtenLlmEndRunIds.add(runId);
+  if (writtenLlmEndRunIds.size > MAX_TRACKED_RUN_IDS) {
+    const oldestRunId = writtenLlmEndRunIds.values().next().value;
+    if (oldestRunId) writtenLlmEndRunIds.delete(oldestRunId);
+  }
+  return false;
+}
+
+function resolveThreadId(runId: string, parentRunId?: string, tags?: string[], metadata?: any): string | undefined {
+    let threadId = metadata?.threadId || metadata?.configurable?.thread_id;
+    
+    if (!threadId && tags) {
+        const threadTag = tags.find(t => t.startsWith("thread_id:"));
+        if (threadTag) threadId = threadTag.split(":")[1];
+    }
+    
+    if (threadId) {
+        runToThreadMap.set(runId, threadId);
+        return threadId;
+    }
+    
+    if (parentRunId && runToThreadMap.has(parentRunId)) {
+        threadId = runToThreadMap.get(parentRunId);
+        if (threadId) runToThreadMap.set(runId, threadId);
+        return threadId;
+    }
+    
+    return undefined;
+}
 
 export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
   name = "detailed_logging_callback_handler";
@@ -181,7 +277,7 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
     tags?: string[],
     metadata?: Record<string, any>
   ) {
-    const threadId = metadata?.threadId;
+    const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
     const agentName = metadata?.agentName;
 
     let structuredMessages: any[] = [];
@@ -197,7 +293,9 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
       });
     }
 
-    writeDetailedLog("LLM_START", threadId, agentName, { messages: structuredMessages });
+    // Usa queueLlmStart para mesclar com handleLLMStart (mesmo runId)
+    // e evitar eventos duplicados no JSONL/debugger.
+    queueLlmStart(runId, threadId, agentName, { messages: structuredMessages });
   }
 
   handleLLMStart(
@@ -209,9 +307,9 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
     tags?: string[],
     metadata?: Record<string, any>
   ) {
-    const threadId = metadata?.threadId;
+    const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
     const agentName = metadata?.agentName;
-    writeDetailedLog("LLM_START", threadId, agentName, { prompts });
+    queueLlmStart(runId, threadId, agentName, { prompts });
   }
 
   handleLLMEnd(
@@ -221,7 +319,7 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
     tags?: string[],
     metadata?: Record<string, any>
   ) {
-    const threadId = metadata?.threadId;
+    const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
     const agentName = metadata?.agentName;
 
     const generations = output.generations || [];
@@ -239,7 +337,8 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
       })
     );
 
-    writeDetailedLog("LLM_END", threadId, agentName, { generations: structuredGenerations });
+    if (isDuplicateLlmEnd(runId)) return;
+    writeDetailedLog("LLM_END", threadId, agentName, { generations: structuredGenerations, runId });
   }
 
   handleToolStart(
@@ -248,15 +347,25 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
     runId: string,
     parentRunId?: string,
     tags?: string[],
-    metadata?: Record<string, any>
+    metadata?: Record<string, any>,
+    runName?: string,
+    toolCallId?: string
   ) {
-    const threadId = metadata?.threadId;
+    const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
     const agentName = metadata?.agentName;
-    const toolName = tool.name || (tool.id && tool.id[tool.id.length - 1]) || "unknown_tool";
+    // O nome real da tool vem no runName (config.runName = tool.name). O objeto
+    // serializado (toJSON) de DynamicStructuredTool só expõe a classe genérica
+    // ("DynamicStructuredTool") e perde o nome real — por isso o fallback antigo
+    // poluía o debugger com "DynamicStructuredTool" para todas as ferramentas.
+    const toolName = runName
+      || (tool as any)?.kwargs?.name
+      || tool.name
+      || (tool.id && tool.id[tool.id.length - 1])
+      || "unknown_tool";
 
     console.log(`[🕒 ${new Date().toLocaleTimeString()}] [${agentName || 'SYSTEM'}] Calling tool: "${toolName}" with input: ${input}`);
 
-    writeDetailedLog("TOOL_START", threadId, agentName, { toolName, input });
+    writeDetailedLog("TOOL_START", threadId, agentName, { toolName, input, runId });
   }
 
   handleToolEnd(
@@ -266,12 +375,12 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
     tags?: string[],
     metadata?: Record<string, any>
   ) {
-    const threadId = metadata?.threadId;
+    const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
     const agentName = metadata?.agentName;
 
     console.log(`[🕒 ${new Date().toLocaleTimeString()}] [${agentName || 'SYSTEM'}] Tool execution finished.`);
 
-    writeDetailedLog("TOOL_END", threadId, agentName, { output });
+    writeDetailedLog("TOOL_END", threadId, agentName, { output, runId });
   }
 }
 
@@ -308,23 +417,43 @@ export const logger = {
     writeDetailedLog("DEBUG", undefined, undefined, { message, args: args.length ? args : undefined });
   },
 
-  logAgentStart: (agentName: string, threadId: string, contextData: any) => {
+  logAgentStart: (agentName: string, threadId: string, contextData: any, messages?: any[]) => {
     const cleanMsg = `[🕒 ${new Date().toLocaleTimeString()}] [${agentName.toUpperCase()}] Starting execution...`;
     console.log(cleanMsg);
-    writeDetailedLog("AGENT_START", threadId, agentName, { contextData });
+    
+    let structuredMessages;
+    if (messages) {
+      structuredMessages = messages.map(msg => {
+        let role = "Unknown";
+        if (msg._getType) {
+          const type = msg._getType();
+          if (type === "system") role = "SYSTEM";
+          else if (type === "human") role = "HUMAN";
+          else if (type === "ai") role = "AI";
+          else if (type === "tool") role = "TOOL";
+        } else if (msg.constructor) {
+          if (msg.constructor.name === "SystemMessage") role = "SYSTEM";
+          else if (msg.constructor.name === "HumanMessage") role = "HUMAN";
+          else if (msg.constructor.name === "AIMessage") role = "AI";
+          else if (msg.constructor.name === "ToolMessage") role = "TOOL";
+        }
+        return { role, content: msg.content, name: msg.name, tool_calls: msg.tool_calls };
+      });
+    }
+
+    writeDetailedLog("AGENT_START", threadId, agentName, { contextData, messages: structuredMessages });
   },
 
   logAgentDecision: (
     agentName: string,
     threadId: string,
-    nextAgent: string,
-    reason: string,
-    response: string,
-    intermediateMessage: string
+    decision: any
   ) => {
+    const nextAgent = decision?.nextAgent || "unknown";
+    const reason = decision?.reason || "no reason provided";
     const cleanMsg = `[🕒 ${new Date().toLocaleTimeString()}] [${agentName.toUpperCase()}] Decided to route to: "${nextAgent}" (Reason: ${reason})`;
     console.log(cleanMsg);
-    writeDetailedLog("AGENT_DECISION", threadId, agentName, { nextAgent, reason, response, intermediateMessage });
+    writeDetailedLog("AGENT_DECISION", threadId, agentName, decision);
   },
 
   /**
@@ -393,6 +522,27 @@ export const logger = {
         error: outcome.error,
       },
       { triggerId: trigger.triggerId, triggerType: trigger.triggerType }
+    );
+  },
+
+  /**
+   * Logs an outbound message sent by Bia.
+   * Uses the active AsyncLocalStorage trigger context to tie the message to a root cause.
+   */
+  logOutboundMessage: (chatJid: string, text: string) => {
+    const trigger = triggerStorage.getStore() || (chatJid ? getActiveTrigger(chatJid) : undefined);
+    const cleanMsg = `[🕒 ${new Date().toLocaleTimeString()}] [OUTBOUND_MESSAGE] To=${chatJid} Text="${text.substring(0, 50).replace(/\n/g, ' ')}${text.length > 50 ? '...' : ''}"`;
+    console.log(cleanMsg);
+
+    writeDetailedLog(
+      "OUTBOUND_MESSAGE",
+      trigger?.threadId,
+      undefined,
+      {
+        chatJid,
+        text
+      },
+      trigger ? { triggerId: trigger.triggerId, triggerType: trigger.triggerType } : undefined
     );
   },
 };

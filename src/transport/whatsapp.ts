@@ -1,17 +1,21 @@
-import makeWASocket, { useMultiFileAuthState, DisconnectReason, downloadMediaMessage } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, Browsers } from '@whiskeysockets/baileys';
+import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import path from 'path';
 import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { agent } from '../graph/workflow.js';
-import { logger, generateTriggerId, setActiveTrigger, clearActiveTrigger, getActiveTrigger, runWithTriggerContext } from '../utils/logger.js';
+import { logger, generateTriggerId, setActiveTrigger, clearActiveTrigger, getActiveTrigger, runWithTriggerContext, loggerCallbackHandler, triggerStorage } from '../utils/logger.js';
 import { resolveTopicForMessage } from '../utils/topicBroker.js';
-import { isTrustedChat, MASTER_NUMBER, MASTER_JIDS, consumeApprovalToken, addTrustedChat, consumeMessageApprovalToken, isAutoReplyChat, createMessageApprovalToken } from '../memory/security.js';
+import { isTrustedChat, MASTER_NUMBER, MASTER_JIDS, consumeApprovalToken, addTrustedChat } from '../memory/security.js';
 import { isGroupIgnored, addIgnoredGroup, removeIgnoredGroup, isGroupManagementCommand } from '../config/ignoredGroups.js';
 import { appendMessageToHistory } from '../memory/chatHistory.js';
 import { isCommand, handleCommand, getChatModelOverride } from '../commands/commandRouter.js';
 import { savePendingMessage, getAllPendingMessages, clearPendingMessagesForQueue } from '../memory/pendingQueue.js';
+import { hasActiveMissionForTarget, getActiveMissionsForTarget, getActiveMissionsForChat, getRecentMissionsForChat } from '../memory/missions.js';
+import { loadLidMappings, registerLidMapping, jidsMatch } from '../utils/jidResolver.js';
 import OpenAI, { toFile } from 'openai';
+import { triggerSimulator } from '../utils/simulator.js';
 
 const groqClient = new OpenAI({
     apiKey: process.env.GROQ_API_KEY,
@@ -29,6 +33,45 @@ const consecutiveConflicts = new Map<string, number>();
 
 // Conjunto para rastrear mensagens enviadas pelo bot e evitar loops infinitos
 const botSentMessageIds = new Set<string>();
+
+interface SentMessageRecord {
+    normalizedText: string;
+    timestamp: number;
+}
+const recentOutboundMessages = new Map<string, SentMessageRecord[]>(); // Key is chatJid
+const OUTBOUND_DEDUP_TTL_MS = 60000;
+
+function normalizeText(text: string): string {
+    return text
+        .toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, "") // remove accents
+        .replace(/[^\w\s]|_/g, "") // remove punctuation and emojis
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+export function shouldBlockMessage(chatJid: string, text: string): boolean {
+    const normalized = normalizeText(text);
+    if (!normalized) return false; // Don't block empty/media-only
+
+    const now = Date.now();
+    const records = recentOutboundMessages.get(chatJid) || [];
+    
+    // Clean up old records
+    const validRecords = records.filter(r => now - r.timestamp < OUTBOUND_DEDUP_TTL_MS);
+    recentOutboundMessages.set(chatJid, validRecords);
+
+    // Check for duplicates
+    for (const record of validRecords) {
+        if (record.normalizedText === normalized) {
+            return true; // Duplicate found!
+        }
+    }
+
+    // Not a duplicate, add to history
+    validRecords.push({ normalizedText: normalized, timestamp: now });
+    return false;
+}
 
 export interface MessageMetadata {
     isGroup: boolean;
@@ -264,15 +307,17 @@ async function processChatQueue(queueKey: string, sock: any) {
 
     try {
         const isGroup = chatJid.endsWith('@g.us');
+        const isPersonalGroup = isGroup && accountName === 'personal';
 
         // Guardrail: Truncate combined text to 2000 characters
         let combinedText = messagesToProcess.map(m => {
             return isGroup ? `${m.displayName}: ${m.text}` : m.text;
         }).join("\n---\n");
 
-        if (combinedText.length > 2000) {
-            logger.warn(`[GUARDRAIL] Mensagem truncada de ${combinedText.length} para 2000 caracteres no chat ${chatJid}`);
-            combinedText = combinedText.substring(0, 2000);
+        const maxChars = isPersonalGroup ? 30000 : 2000;
+        if (combinedText.length > maxChars) {
+            logger.warn(`[GUARDRAIL] Mensagem truncada de ${combinedText.length} para ${maxChars} caracteres no chat ${chatJid}`);
+            combinedText = combinedText.substring(0, maxChars);
         }
 
         // Guardrail: Rate limiting — max 5 calls from same chat in 30s
@@ -294,12 +339,16 @@ async function processChatQueue(queueKey: string, sock: any) {
 
         logger.info(`[DEBOUNCE] Direcionando mensagens para o assunto: "${title}" (Thread: ${threadId})`);
 
+        let addedWarning = false;
         const humanMessages = messagesToProcess.map(
             m => {
                 const dateStr = new Date(m.timestamp).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
                 let msgContent = isGroup ? `${m.displayName}: ${m.text}` : m.text;
                 if (m.metadata?.wasReceivedWhileProcessing) {
-                    msgContent = `[⚠️ Mensagem enviada enquanto você formulava a resposta anterior] ${msgContent}`;
+                    if (!addedWarning) {
+                        msgContent = `[⚠️ As mensagens a seguir foram enviadas enquanto você formulava a resposta anterior]\n${msgContent}`;
+                        addedWarning = true;
+                    }
                 }
                 return new HumanMessage({ content: `[${dateStr}] ${msgContent}`, name: m.displayName });
             }
@@ -347,19 +396,29 @@ async function processChatQueue(queueKey: string, sock: any) {
         await runWithTriggerContext(triggerCtx, async () => {
             const config = { 
                 configurable: { thread_id: threadId },
-                metadata: { threadId: threadId, agentName: "graph" }
+                metadata: { threadId: threadId, agentName: "graph" },
+                callbacks: [loggerCallbackHandler],
+                recursionLimit: 25
             };
+            const activeMissions = await getActiveMissionsForChat(chatJid);
+            const recentMissions = await getRecentMissionsForChat(chatJid, 10);
             const result = await agent.invoke({
                 messages: humanMessages,
                 contextData: { 
                     active_topic_title: title,
                     isTrustedChat: isTrusted,
+                    isGroup: isGroup,
                     chatJid: chatJid,
                     chatName: chatName,
                     senderJid: lastMsgUserJid,
                     senderName: senderName,
                     masterNumber: MASTER_NUMBER,
-                    accountName: accountName
+                    accountName: accountName,
+                    activeMissions: activeMissions,
+                    recentMissions: recentMissions,
+                    executionLog: [],
+                    executedTools: [],
+                    activePlan: []
                 }
             }, config);
 
@@ -371,21 +430,34 @@ async function processChatQueue(queueKey: string, sock: any) {
             // Collect agents used from contextData executionLog
             const agentsUsed: string[] = result.contextData?.executionLog || [];
 
-            // Bloqueio de segurança para a conta pessoal
-            if (accountName === 'personal') {
-                const isAutoReply = await isAutoReplyChat(chatJid);
-                if (isAutoReply) {
-                    logger.info(`[SECURITY] Resposta direta permitida na conta pessoal (auto-reply habilitado). Chat: ${chatJid}`);
-                } else {
-                    logger.info(`[SECURITY] Resposta retida na conta pessoal para aprovação. Chat: ${chatJid}`);
-                    if (responseText && responseText.trim().toUpperCase() !== '[SILENT]') {
-                        const token = createMessageApprovalToken(chatJid, responseText);
-                        const chatNameForNotice = chatName && chatName !== chatJid ? chatName : chatJid.split('@')[0];
-                        const notificationText = `🚨 *Autorização de Envio Automático*\n\nA Bia sugere enviar a seguinte resposta para *${chatNameForNotice}*:\n\n"${responseText}"\n\nPara autorizar e enviar imediatamente, responda com:\n*ENVIAR ${token}*`;
-                        await notifyMaster(notificationText);
-                    }
-                    responseText = ''; // Força o silêncio absoluto no fluxo direto, pois já geramos o token.
+            // Correção de missões: evitar vazamentos para o chat do Target.
+            // Se o missionAgent atuou, verificamos se este é um chat de um alvo ativo.
+            // Comparação LID↔número: alvo responde via @lid, missões salvas com número.
+            const isTargetChat = (result.contextData?.activeMissions || []).some((m: any) => jidsMatch(m.targetJid, chatJid)) || 
+                                 (result.contextData?.recentMissions || []).some((m: any) => jidsMatch(m.targetJid, chatJid));
+            const missionToolsUsed = (result.contextData?.executedTools || []).some((t: string) =>
+                ['send_message_to_target', 'notify_master', 'start_mission'].includes(t)
+            );
+            
+            if (agentsUsed.includes("missionAgent") && isTargetChat) {
+                if (responseText && responseText.trim().toUpperCase() !== '[SILENT]') {
+                    logger.info(`[WHATSAPP] missionAgent atuou em chat de alvo. Suprimindo resposta textual bruta para evitar vazamentos (use send_message_to_target).`);
+                    responseText = '';
                 }
+            } else if (missionToolsUsed && responseText && responseText.trim().toUpperCase() !== '[SILENT]') {
+                logger.info(`[WHATSAPP] missionAgent já tratou a comunicação via tools. Suprimindo resposta do pipeline para ${chatJid}.`);
+                responseText = '';
+            }
+
+            // Bloqueio de segurança para a conta pessoal (READ-ONLY)
+            if (accountName === 'personal') {
+                if (responseText && responseText.trim().toUpperCase() !== '[SILENT]') {
+                    logger.info(`[SECURITY] IA tentou responder na conta pessoal. Redirecionando alerta para o Master. Chat: ${chatJid}`);
+                    const chatNameForNotice = chatName && chatName !== chatJid ? chatName : chatJid.split('@')[0];
+                    const notificationText = `🚨 *Bia Detectou Algo (Conta Pessoal)*\n\nNo chat com *${chatNameForNotice}*, eu decidi que você deveria saber disso/responder:\n\n"${responseText}"`;
+                    await notifyMaster(notificationText);
+                }
+                responseText = ''; // Força silêncio absoluto no socket da conta pessoal
             }
 
             // Se a resposta for '[SILENT]' ou vazia/não-AIMessage, não enviamos nenhuma mensagem de volta
@@ -418,19 +490,11 @@ async function processChatQueue(queueKey: string, sock: any) {
 
                     await sock.sendPresenceUpdate('paused', chatJid);
 
-                    const sentMsg = await sock.sendMessage(chatJid, { text: responseText });
-                    if (sentMsg?.key?.id) {
-                        botSentMessageIds.add(sentMsg.key.id);
-                        appendMessageToHistory(accountName, chatJid, {
-                            id: sentMsg.key.id,
-                            timestamp: Date.now(),
-                            sender: "bia",
-                            senderName: "Bia",
-                            chatName: chatName,
-                            content: responseText,
-                            isFromMe: true
-                        });
+                    if (shouldBlockMessage(chatJid, responseText)) {
+                        logger.warn(`[WHATSAPP] Resposta final barrada por deduplicação: "${responseText}"`);
+                        return;
                     }
+                    await sock.sendMessage(chatJid, { text: responseText });
                 });
             }
         });
@@ -553,20 +617,106 @@ export async function injectSystemMessage(
     }, delayTime);
 }
 
+export async function injectSimulatedTargetMessage(
+    targetJid: string,
+    text: string
+) {
+    const accountName = 'main';
+    const sock = sockets.get(accountName) || globalSock;
+    if (!sock) return;
+
+    const queueKey = `${accountName}:${targetJid}`;
+    let queue = chatQueues.get(queueKey);
+    if (!queue) {
+        queue = {
+            accountName: accountName,
+            messages: [],
+            timeoutId: null,
+            isProcessing: false,
+            firstMessageTime: Date.now()
+        };
+        chatQueues.set(queueKey, queue);
+    }
+    if (queue.messages.length === 0) {
+        queue.firstMessageTime = Date.now();
+    }
+
+    const msgId = "sim-" + Date.now();
+    const timestamp = Date.now();
+    const metadata = {
+        isGroup: false,
+        mentionsBia: false,
+        isReplyToBot: true,
+        wasReceivedWhileProcessing: false
+    };
+
+    const displayName = "Contato Simulado";
+
+    queue.messages.push({
+        text: text,
+        displayName: displayName,
+        messageId: msgId,
+        userJid: targetJid,
+        timestamp: timestamp,
+        metadata: metadata
+    });
+
+    savePendingMessage(msgId, queueKey, accountName, targetJid, text, displayName, targetJid, timestamp, metadata).catch(err => 
+        logger.error("[PENDING_QUEUE DB] Erro ao salvar msg simulada:", err)
+    );
+
+    if (queue.timeoutId) clearTimeout(queue.timeoutId);
+    
+    // Pequeno delay aleatório entre 2s e 5s para simular digitação
+    const delayTime = Math.floor(Math.random() * 3000) + 2000;
+    queue.timeoutId = setTimeout(() => {
+        processChatQueue(queueKey, sock);
+    }, delayTime);
+}
+
+export function isSimulatedJid(jid: string): boolean {
+    return jid.startsWith('5568') || jid.startsWith('68');
+}
+
+export function handleSimulatorIntercept(targetJid: string, text: string) {
+    logger.info(`[SIMULATOR] Mensagem interceptada para ${targetJid}: "${text}"`);
+    triggerSimulator(targetJid, text).then(async simResponses => {
+        for (const resp of simResponses) {
+            if (resp.delayMs > 0) {
+                await new Promise(r => setTimeout(r, resp.delayMs));
+            }
+            logger.info(`[SIMULATOR] Resposta gerada: "${resp.text}" (delayMs: ${resp.delayMs})`);
+            injectSimulatedTargetMessage(targetJid, resp.text);
+        }
+    }).catch(err => logger.error("[SIMULATOR] Falha no simulador:", err));
+}
+
 const sendQueues = new Map<string, Promise<any>>();
 
 export function queueMessageSend(queueKey: string, sendFn: () => Promise<any>): Promise<any> {
     const currentQueue = sendQueues.get(queueKey) || Promise.resolve();
+    const ctx = triggerStorage.getStore(); // Capture context
+    
     const nextQueue = currentQueue.then(async () => {
-        try {
-            await sendFn();
-        } catch (err) {
-            logger.error(`[SEND QUEUE ERROR] Error sending message for ${queueKey}:`, err);
+        const execute = async () => {
+            try {
+                await sendFn();
+            } catch (err) {
+                logger.error(`[SEND QUEUE ERROR] Error sending message for ${queueKey}:`, err);
+            }
+        };
+        
+        if (ctx) {
+            await triggerStorage.run(ctx, execute);
+        } else {
+            await execute();
         }
     });
     sendQueues.set(queueKey, nextQueue);
     return nextQueue;
 }
+
+const lastIntermediateTime = new Map<string, number>();
 
 export async function sendIntermediateMessage(chatJidOrThreadId: string, text: string, accountName: string = 'main') {
     const sock = sockets.get(accountName) || globalSock;
@@ -585,6 +735,21 @@ export async function sendIntermediateMessage(chatJidOrThreadId: string, text: s
         return;
     }
 
+    const now = Date.now();
+    const lastTime = lastIntermediateTime.get(chatJid) || 0;
+    if (now - lastTime < 10000) {
+        logger.info(`[INTERMEDIATE MSG] Bloqueado envio para ${chatJid} devido ao cooldown de 10s.`);
+        return;
+    }
+    
+    if (shouldBlockMessage(chatJid, text)) {
+        logger.info(`[INTERMEDIATE MSG] Bloqueado envio duplicado para ${chatJid}: "${text}"`);
+        return;
+    }
+    
+    // BEFORE queueMessageSend, update the timer so parallel calls block immediately
+    lastIntermediateTime.set(chatJid, now);
+
     return queueMessageSend(queueKey, async () => {
         logger.info(`[INTERMEDIATE MSG] Enviando mensagem intermediária no chat ${chatJid} (${accountName}): "${text}" (ID da Thread: ${chatJidOrThreadId})`);
         try {
@@ -593,19 +758,7 @@ export async function sendIntermediateMessage(chatJidOrThreadId: string, text: s
             await delay(typingTime);
             await sock.sendPresenceUpdate('paused', chatJid);
             
-            const sentMsg = await sock.sendMessage(chatJid, { text });
-            if (sentMsg?.key?.id) {
-                botSentMessageIds.add(sentMsg.key.id);
-                appendMessageToHistory(accountName, chatJid, {
-                    id: sentMsg.key.id,
-                    timestamp: Date.now(),
-                    sender: "bia",
-                    senderName: "Bia",
-                    chatName: "Bia (Intermediate)",
-                    content: text,
-                    isFromMe: true
-                });
-            }
+            await sock.sendMessage(chatJid, { text });
         } catch (error) {
             logger.error(`[INTERMEDIATE MSG] Erro ao enviar mensagem para ${chatJid}:`, error);
         }
@@ -618,12 +771,52 @@ export async function sendPersonalMessageNow(targetJid: string, message: string)
         logger.error(`[SEND PERSONAL] Socket for personal account is not connected.`);
         return false;
     }
+
+    if (shouldBlockMessage(targetJid, message)) {
+        logger.info(`[SEND PERSONAL] Bloqueada mensagem duplicada para ${targetJid}: "${message}"`);
+        return false;
+    }
+
+    if (isSimulatedJid(targetJid)) {
+        logger.info(`[SIMULATOR] Interceptado envio pessoal para ${targetJid}: "${message}"`);
+        handleSimulatorIntercept(targetJid, message);
+        return true;
+    }
+
     try {
         await personalSock.sendMessage(targetJid, { text: message });
         logger.info(`[SEND PERSONAL] Mensagem enviada diretamente para ${targetJid} (auto-reply habilitado).`);
         return true;
     } catch (e: any) {
         logger.error(`[SEND PERSONAL] Erro ao enviar mensagem para ${targetJid}:`, e);
+        return false;
+    }
+}
+
+export async function sendDirectMessage(accountName: string, targetJid: string, text: string) {
+    // Interceptar DDD 68 (ex: 5568999991234 ou 68999991234) para simulação local (Acre)
+    if (isSimulatedJid(targetJid)) {
+        handleSimulatorIntercept(targetJid, text);
+        return true;
+    }
+
+    const sock = accountName === 'personal' ? sockets.get('personal') : globalSock;
+    if (!sock) {
+        logger.error(`[SEND DIRECT] Socket para a conta ${accountName} não inicializado.`);
+        return false;
+    }
+
+    if (shouldBlockMessage(targetJid, text)) {
+        logger.info(`[SEND DIRECT] Bloqueada mensagem direta duplicada para ${targetJid}: "${text}"`);
+        return true;
+    }
+
+    try {
+        logger.info(`[SEND DIRECT] Enviando mensagem direta para ${targetJid} via ${accountName}`);
+        await sock.sendMessage(targetJid, { text });
+        return true;
+    } catch (error) {
+        logger.error(`[SEND DIRECT] Erro ao enviar mensagem direta para ${targetJid}:`, error);
         return false;
     }
 }
@@ -636,8 +829,13 @@ export async function notifyMaster(text: string) {
     
     // We send directly to the master number without queueing as a regular chat
     // to ensure it arrives reliably and immediately.
+    const masterJid = MASTER_NUMBER;
+    if (shouldBlockMessage(masterJid, text)) {
+        logger.info(`[NOTIFY MASTER] Bloqueada notificação duplicada: "${text}"`);
+        return;
+    }
+
     try {
-        const masterJid = MASTER_NUMBER;
         logger.info(`[NOTIFY MASTER] Enviando notificação para o master: "${text}"`);
         await globalSock.sendMessage(masterJid, { text });
     } catch (error) {
@@ -710,21 +908,87 @@ export async function getAllGroups(accountName?: string): Promise<{jid: string, 
 }
 
 export async function connectToWhatsApp(accountName: string = 'main') {
-    if (process.env.NODE_ENV === 'test') {
-        logger.info(`[WHATSAPP] Ambiente de teste detectado (NODE_ENV=test). Conexão real ignorada.`);
+    if (process.env.NODE_ENV === 'test' || process.env.DISABLE_WHATSAPP === 'true' || process.env.SKIP_WHATSAPP === 'true') {
+        logger.info(`[WHATSAPP] Conexão ignorada (NODE_ENV=${process.env.NODE_ENV}, DISABLE_WHATSAPP=${process.env.DISABLE_WHATSAPP}).`);
         return;
     }
+
+    // Carrega mapeamentos LID↔número persistidos (essencial para missões: alvo responde via LID)
+    loadLidMappings();
 
     const folderName = `auth_info_baileys_${accountName}`;
     // If it was the original one, we might want to migrate it or just keep auth_info_baileys for main
     const authFolder = accountName === 'main' ? 'auth_info_baileys' : folderName;
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
+    // Removido o fetchLatestBaileysVersion pois a versão mais recente da API Meta quebra o protobuf do rc13 gerando erro 428 Precondition Required.
+    // Utilizaremos a versão default do pacote e uma camuflagem de Browser que passa pelos filtros MD.
     const sock = makeWASocket({
         auth: state,
+        logger: pino({ level: 'error' }) as any,
         printQRInTerminal: false,
-        markOnlineOnConnect: accountName === 'main', // Avoid marking online for personal
+        markOnlineOnConnect: accountName === 'main',
+        browser: ['Ubuntu', 'Chrome', '110.0.0'], // Camuflagem sólida para MD
     });
+
+    // === TRAVA DE TRANSPORTE ABSOLUTA (VAZAMENTO ZERO) ===
+    // Garante que NENHUM tráfego de rede seja gerado para contatos simulados na camada base
+    const originalSendMessage = sock.sendMessage.bind(sock);
+    sock.sendMessage = async (jid: string, content: any, options?: any) => {
+        let sentMsg: any = null;
+        const text = content?.text || content?.caption || '[Arquivo/Mídia]';
+        
+        if (isSimulatedJid(jid)) {
+            logger.error(`[TRANSPORT LOCK ABSOLUTO] BLOQUEADO envio real (sendMessage) para ${jid}.`);
+            // Se o conteúdo for texto, repassamos pro simulador pra não travar o fluxo
+            if (content && typeof content.text === 'string') {
+                handleSimulatorIntercept(jid, content.text);
+            }
+            sentMsg = { 
+                key: { remoteJid: jid, fromMe: true, id: `sim-transport-${Date.now()}` }, 
+                message: content, 
+                messageTimestamp: Math.floor(Date.now() / 1000), 
+                status: 2 
+            } as any;
+        } else {
+            sentMsg = await originalSendMessage(jid, content, options);
+        }
+
+        // Log the outbound message to the debugger, automatically tied to current trigger context
+        logger.logOutboundMessage(jid, text);
+
+        // Adiciona ao histórico centralizadamente para que notifyMaster, start_mission, etc. nunca fiquem de fora
+        if (sentMsg?.key?.id) {
+            botSentMessageIds.add(sentMsg.key.id);
+            appendMessageToHistory(accountName, jid, {
+                id: sentMsg.key.id,
+                timestamp: Date.now(),
+                sender: "bia",
+                senderName: "Bia",
+                chatName: "Bia",
+                content: text,
+                isFromMe: true
+            });
+        }
+
+        return sentMsg;
+    };
+
+    const originalSendPresenceUpdate = sock.sendPresenceUpdate.bind(sock);
+    sock.sendPresenceUpdate = async (type: any, jid?: string) => {
+        if (jid && isSimulatedJid(jid)) {
+            logger.info(`[TRANSPORT LOCK ABSOLUTO] BLOQUEADO presenceUpdate (${type}) para ${jid}.`);
+            return;
+        }
+        return originalSendPresenceUpdate(type, jid);
+    };
+
+    const originalReadMessages = sock.readMessages.bind(sock);
+    sock.readMessages = async (keys: any[]) => {
+        const safeKeys = keys.filter(k => k.remoteJid && !isSimulatedJid(k.remoteJid));
+        if (safeKeys.length === 0) return;
+        return originalReadMessages(safeKeys);
+    };
 
     sockets.set(accountName, sock);
     if (accountName === 'main') {
@@ -732,6 +996,18 @@ export async function connectToWhatsApp(accountName: string = 'main') {
     }
 
     sock.ev.on('creds.update', saveCreds);
+
+    // Mantém o resolvedor LID↔número atualizado em runtime (Baileys emite quando descobre pares)
+    sock.ev.on('lid-mapping.update' as any, (data: any) => {
+        try {
+            if (data?.lid && data?.pn) {
+                registerLidMapping(data.lid, data.pn);
+                logger.debug(`[JID RESOLVER] Novo mapeamento LID↔número registrado: ${data.lid} <-> ${data.pn}`);
+            }
+        } catch (err) {
+            logger.error('[JID RESOLVER] Erro ao registrar mapeamento runtime:', err);
+        }
+    });
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
@@ -751,7 +1027,9 @@ export async function connectToWhatsApp(accountName: string = 'main') {
             logger.error(`[WATCHDOG DEBUG] Disconnect error para ${accountName}:`, lastDisconnectError);
             logger.error(`[WATCHDOG DEBUG] statusCode: ${statusCode}, DisconnectReason.loggedOut: ${DisconnectReason.loggedOut}`);
             
-            const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+            // O código 405 (Method Not Allowed) durante login/registro frequentemente indica rate-limit ou ban temporário do IP/sessão.
+            // O código 401 indica que o usuário deslogou a sessão pelo celular.
+            const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 405;
 
             if (isConflict) {
                 const conflicts = (consecutiveConflicts.get(accountName) || 0) + 1;
@@ -764,21 +1042,27 @@ export async function connectToWhatsApp(accountName: string = 'main') {
                 }
             }
 
+            const attempts = (reconnectAttempts.get(accountName) || 0) + 1;
+            
             const shouldReconnect = !isLoggedOut;
             
             logger.info(`Conexão fechada (${accountName}). Logged out: ${isLoggedOut}. Reconectando imediatamente: ${shouldReconnect}`);
             
             if (shouldReconnect) {
-                const attempts = (reconnectAttempts.get(accountName) || 0) + 1;
                 reconnectAttempts.set(accountName, attempts);
 
-                // Exponential backoff com jitter: base 2s, fator 1.5, teto em 30s + jitter (0-1000ms)
-                // Em caso de conflito na 1ª tentativa, dá uma pausa maior de 10s para estabilização
-                const baseDelay = isConflict 
-                    ? 10000 
-                    : Math.min(2000 * Math.pow(1.5, attempts - 1), 30000);
-                const jitter = Math.floor(Math.random() * 1000);
-                const delayMs = Math.round(baseDelay + jitter);
+                let delayMs: number;
+                if (statusCode === DisconnectReason.restartRequired) {
+                    logger.info(`[WATCHDOG] O WhatsApp solicitou um restart (515) para sincronizar. Reconectando rápido...`);
+                    delayMs = 2000; // 2 segundos, não podemos esperar muito aqui!
+                } else {
+                    // Exponential backoff super conservador: base 30s, fator 1.5, teto em 600s (10 minutos) + jitter (0-2000ms)
+                    const baseDelay = isConflict 
+                        ? 30000 
+                        : Math.min(30000 * Math.pow(1.5, attempts - 1), 600000);
+                    const jitter = Math.floor(Math.random() * 2000);
+                    delayMs = Math.round(baseDelay + jitter);
+                }
 
                 logger.info(`[WATCHDOG] Reconectando ${accountName} em ${Math.round(delayMs / 1000)}s (tentativa ${attempts})...`);
                 setTimeout(() => {
@@ -787,7 +1071,7 @@ export async function connectToWhatsApp(accountName: string = 'main') {
             } else {
                 reconnectAttempts.delete(accountName);
                 consecutiveConflicts.delete(accountName);
-                logger.warn(`[WATCHDOG] Sessão de ${accountName} expirou ou foi desconectada pelo usuário. Limpando credenciais e reiniciando...`);
+                logger.warn(`[WATCHDOG] Sessão de ${accountName} rejeitada criticamente (código ${statusCode}). Limpando credenciais e reiniciando...`);
                 // Se foi a principal, avisa o Luiz pelo personal para que ele saiba o que aconteceu
                 if (accountName === 'main') {
                     const personalSock = sockets.get('personal');
@@ -914,13 +1198,13 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                          msg.message?.videoMessage?.caption ||
                          docMsg?.caption;
 
-            // ===== GRUPOS IGNORADOS: Se for grupo e estiver na lista de ignorados, descarta =====
+            // ===== CHATS IGNORADOS: Se estiver na lista de ignorados, descarta =====
             let cachedGroupName = groupNameCache.get(`${accountName}:${chatJid}`);
             if (isGroup && !cachedGroupName) {
                 cachedGroupName = await getChatName(sock, chatJid, accountName);
             }
-            if (isGroup && isGroupIgnored(chatJid, cachedGroupName)) {
-                logger.info(`[IGNORED] Mensagem de grupo ignorado: ${chatJid} (${cachedGroupName || 'sem nome em cache'})`);
+            if (isGroupIgnored(chatJid, cachedGroupName)) {
+                logger.info(`[IGNORED] Mensagem de chat ignorado: ${chatJid} (${cachedGroupName || 'sem nome em cache'})`);
                 continue;
             }
 
@@ -1122,11 +1406,14 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
             // Se for mensagem enviada por mim
             if (msg.key.fromMe) {
                 const msgId = msg.key.id;
-                // Só processa se for auto-conversa E não for a mensagem que o bot acabou de enviar
-                if (!isSelf || (msgId && botSentMessageIds.has(msgId))) {
-                    if (msgId && botSentMessageIds.has(msgId)) {
-                        botSentMessageIds.delete(msgId);
-                    }
+                // Se foi a própria Bia que enviou, descarta
+                if (msgId && botSentMessageIds.has(msgId)) {
+                    botSentMessageIds.delete(msgId);
+                    continue;
+                }
+                // Na conta MAIN, ignoramos mensagens enviadas pelo próprio usuário (salvo auto-conversa)
+                // Na conta PERSONAL, queremos escutar o que o usuário digita para os outros.
+                if (accountName === 'main' && !isSelf) {
                     continue;
                 }
             }
@@ -1149,27 +1436,7 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                     continue; // Ignora o resto do pipeline da IA
                 }
 
-                const enviarMatch = text.trim().match(/^ENVIAR\s+(\d{4})$/i);
-                if (enviarMatch) {
-                    const token = enviarMatch[1];
-                    const pending = consumeMessageApprovalToken(token);
-                    if (pending) {
-                        const personalSock = sockets.get('personal');
-                        if (personalSock) {
-                            try {
-                                await personalSock.sendMessage(pending.targetJid, { text: pending.message });
-                                await sock.sendMessage(MASTER_NUMBER, { text: `✅ Mensagem enviada com sucesso na conta pessoal para o contato solicitado! (bypass determinístico)` });
-                            } catch (e: any) {
-                                await sock.sendMessage(MASTER_NUMBER, { text: `❌ Erro ao tentar disparar mensagem: ${e.message}` });
-                            }
-                        } else {
-                            await sock.sendMessage(MASTER_NUMBER, { text: `❌ Erro: Conta pessoal não está conectada.` });
-                        }
-                    } else {
-                        await sock.sendMessage(MASTER_NUMBER, { text: `❌ Token inválido ou expirado.` });
-                    }
-                    continue; // Ignora o resto do pipeline da IA
-                }
+
             }
             // ----------------------------------------------
 
@@ -1230,8 +1497,8 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                     normalizeJid(quotedParticipant) === myJid || 
                     normalizeJid(quotedParticipant) === myLid
                 );
-                // Verifica menções à Bia no texto (case-insensitive)
-                const mentionsBia = text.toLowerCase().includes('bia');
+                // Verifica menções à Bia no texto (case-insensitive) - na conta pessoal, NUNCA considera que foi mencionada
+                const mentionsBia = accountName === 'main' ? text.toLowerCase().includes('bia') : false;
 
                 logger.info(`[DEBUG] Recebido de ${chatJid} (${isGroup ? 'Grupo' : 'Privado'}): "${text}". Adicionando à fila.`);
 
@@ -1253,10 +1520,25 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                     queue.firstMessageTime = Date.now();
                 }
 
-                // Guardrail: Limit queue to max 20 messages per chat
-                if (queue.messages.length >= 20) {
-                    logger.warn(`[GUARDRAIL] Fila de mensagens atingiu o limite de 20 para ${queueKey}. Mensagem ignorada.`);
-                    continue;
+                const isPersonalAccount = accountName === 'personal';
+
+                // Guardrail baseado no volume de caracteres para estimar limite de tokens
+                const currentChars = queue.messages.reduce((acc, m) => acc + m.text.length, 0);
+                const charLimit = isPersonalAccount ? 15000 : 8000; // ~4000 tokens para a conta pessoal
+                
+                if (currentChars >= charLimit || (!isPersonalAccount && queue.messages.length >= 20)) {
+                    if (isPersonalAccount) {
+                        logger.warn(`[GUARDRAIL] Volume do chat pessoal atingiu ${currentChars} caracteres para ${queueKey}. Processando lote antecipadamente!`);
+                        if (queue.timeoutId) {
+                            clearTimeout(queue.timeoutId);
+                            queue.timeoutId = null;
+                        }
+                        processChatQueue(queueKey, sock);
+                        queue.firstMessageTime = Date.now();
+                    } else {
+                        logger.warn(`[GUARDRAIL] Fila de mensagens atingiu o limite para ${queueKey}. Mensagem ignorada.`);
+                        continue;
+                    }
                 }
 
                 const msgId = msg.key.id || `sys-${Date.now()}`;
@@ -1299,9 +1581,22 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                 queue.lastSilenceDelay = silenceDelay;
 
                 const timeElapsed = Date.now() - queue.firstMessageTime;
-                const delayTime = Math.max(0, Math.min(silenceDelay, MAX_WAIT_MS - timeElapsed));
+                let delayTime = 0;
 
-                logger.info(`[DEBOUNCE] Tempo decorrido desde a primeira mensagem: ${timeElapsed}ms. Reagendando fila em ${delayTime}ms. (Delay recomendado: ${silenceDelay}ms)`);
+                if (accountName === 'personal') {
+                    // Lógica regressiva baseada no tempo de duração da sessão
+                    let silenceThresholdMs = 30 * 60 * 1000; // Padrão: 30 minutos
+                    if (timeElapsed > 4 * 60 * 60 * 1000) {
+                        silenceThresholdMs = 5 * 60 * 1000; // > 4h: 5 minutos
+                    } else if (timeElapsed > 2 * 60 * 60 * 1000) {
+                        silenceThresholdMs = 15 * 60 * 1000; // > 2h: 15 minutos
+                    }
+                    delayTime = silenceThresholdMs;
+                    logger.info(`[DEBOUNCE] Chat pessoal ${queueKey}. Sessão ativa há ${Math.round(timeElapsed/60000)}min. Agendado para proc após silêncio de ${silenceThresholdMs/60000}min.`);
+                } else {
+                    delayTime = Math.max(0, Math.min(silenceDelay, MAX_WAIT_MS - timeElapsed));
+                    logger.info(`[DEBOUNCE] Tempo decorrido desde a primeira mensagem: ${timeElapsed}ms. Reagendando fila em ${delayTime}ms. (Delay recomendado: ${silenceDelay}ms)`);
+                }
 
                 queue.timeoutId = setTimeout(() => {
                     processChatQueue(queueKey, sock);
@@ -1410,4 +1705,19 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
             });
         }
     });
+}
+
+export function _setGlobalSockForTest(sock: any) {
+    globalSock = sock;
+}
+
+export function _popSimulatedMessages() {
+    const messages: any[] = [];
+    for (const [key, queue] of chatQueues.entries()) {
+        if (queue.messages.length > 0) {
+            messages.push(...queue.messages);
+            queue.messages = [];
+        }
+    }
+    return messages;
 }

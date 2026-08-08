@@ -6,7 +6,7 @@ describe('Command Router System', () => {
 
   beforeEach(() => {
     mockSock = {
-      sendMessage: jest.fn().mockResolvedValue({})
+      sendMessage: jest.fn<any>().mockResolvedValue({})
     };
   });
 
@@ -156,6 +156,26 @@ describe('Command Router System', () => {
       'test@s.whatsapp.net',
       expect.objectContaining({
         text: expect.stringContaining('Menu de Comandos da Bia')
+      })
+    );
+  });
+
+  test('handleCommand - executa /explicar', async () => {
+    const ctxExplicar: CommandContext = {
+      text: '/explicar',
+      chatJid: 'test@s.whatsapp.net',
+      userJid: 'test@s.whatsapp.net',
+      accountName: 'main',
+      isGroup: false,
+      sock: mockSock
+    };
+
+    const handled = await handleCommand(ctxExplicar);
+    expect(handled).toBe(true);
+    expect(mockSock.sendMessage).toHaveBeenCalledWith(
+      'test@s.whatsapp.net',
+      expect.objectContaining({
+        text: expect.stringContaining('Como processei seu pedido')
       })
     );
   });

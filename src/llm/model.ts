@@ -14,7 +14,7 @@ if (!deepseekApiKey) {
 export const modelFlash = new ChatDeepSeek({
   apiKey: deepseekApiKey,
   model: "deepseek-v4-flash",
-  temperature: 0.7,
+  temperature: 0.3, // Reduzido de 0.7 para extração factual e uso de ferramentas — minimiza alucinações
   callbacks: [loggerCallbackHandler],
   modelKwargs: {
     thinking: {
@@ -29,7 +29,7 @@ export const modelFlash = new ChatDeepSeek({
 export const modelFlashStructured = new ChatDeepSeek({
   apiKey: deepseekApiKey,
   model: "deepseek-v4-flash",
-  temperature: 0.7,
+  temperature: 0.1, // Reduzido de 0.7 para decisões de roteamento quase-determinísticas da supervisora
   callbacks: [loggerCallbackHandler],
   modelKwargs: {
     thinking: {

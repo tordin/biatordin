@@ -4,8 +4,9 @@ import { getRoutinesForChat } from '../memory/routines.js';
 import { addVectorMemory, searchVectorMemory } from '../memory/vectorMemory.js';
 import { getMemory } from '../memory/coreMemory.js';
 import { addIgnoredGroup, removeIgnoredGroup, isGroupIgnored } from '../config/ignoredGroups.js';
-import { isTrustedChat, addAutoReplyChat, listTrustedChats, MASTER_JIDS } from '../memory/security.js';
+import { isTrustedChat, listTrustedChats, MASTER_JIDS } from '../memory/security.js';
 import { logger } from '../utils/logger.js';
+import { getLastTurnEvents, formatAuditExplanation } from '../utils/executionAudit.js';
 
 // Mapa em memória de override de modelo por chat
 const chatModelOverrides = new Map<string, string>();
@@ -166,7 +167,7 @@ export async function handleCommand(ctx: CommandContext): Promise<boolean> {
           return true;
         }
 
-        const results = await searchVectorMemory(ctx.chatJid, argsText);
+        const results = await searchVectorMemory(argsText, 5, ctx.chatJid, true);
         if (!results || results.length === 0) {
           await ctx.sock.sendMessage(ctx.chatJid, { text: `🔍 *Busca na Memória*\n\nNenhum resultado encontrado para "${argsText}".` });
           return true;
@@ -183,7 +184,7 @@ export async function handleCommand(ctx: CommandContext): Promise<boolean> {
       }
 
       case 'perfil': {
-        const memoryContent = await getMemory();
+        const memoryContent = await getMemory(ctx.chatJid, true);
         await ctx.sock.sendMessage(ctx.chatJid, {
           text: `👤 *Memória Core de Perfil (Bia)*\n\n${memoryContent}`
         });
@@ -224,24 +225,6 @@ export async function handleCommand(ctx: CommandContext): Promise<boolean> {
         return true;
       }
 
-      case 'aprovar': {
-        if (!MASTER_JIDS.includes(ctx.userJid)) {
-          await ctx.sock.sendMessage(ctx.chatJid, { text: `⛔ Apenas administradores Master podem aprovar novos contatos.` });
-          return true;
-        }
-
-        const target = argsText.replace(/[^0-9]/g, '');
-        if (!target) {
-          await ctx.sock.sendMessage(ctx.chatJid, { text: `⚠️ Envie o número a ser aprovado. Exemplo: \`/aprovar 5519999999999\`` });
-          return true;
-        }
-
-        const targetJid = target.includes('@s.whatsapp.net') ? target : `${target}@s.whatsapp.net`;
-        await addAutoReplyChat(targetJid);
-        await ctx.sock.sendMessage(ctx.chatJid, { text: `✅ Contato \`${targetJid}\` aprovado para respostas de auto-reply!` });
-        return true;
-      }
-
       case 'modelo': {
         const chosen = argsText.toLowerCase();
         if (chosen.includes('flash') || chosen.includes('fast')) {
@@ -258,6 +241,13 @@ export async function handleCommand(ctx: CommandContext): Promise<boolean> {
             text: `⚠️ Opções de modelo disponíveis:\n• \`/modelo flash\` (Padrão/Rápido)\n• \`/modelo pro\` (Complexo)\n• \`/modelo deepseek\` (Raciocínio R1)`
           });
         }
+        return true;
+      }
+
+      case 'explicar': {
+        const events = getLastTurnEvents(ctx.chatJid);
+        const explanation = formatAuditExplanation(events);
+        await ctx.sock.sendMessage(ctx.chatJid, { text: explanation });
         return true;
       }
 

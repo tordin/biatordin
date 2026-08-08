@@ -5,7 +5,7 @@ import { HumanMessage } from "@langchain/core/messages";
 describe("Base Agent Wrapper (safeAgentNode)", () => {
   test("deve capturar erro gracioso e retornar aviso ao exceder limites ou lançar exceção", async () => {
     const failingAgent = {
-      invoke: jest.fn().mockRejectedValue(new Error("Erro simulado no especialista"))
+      invoke: jest.fn<any>().mockRejectedValue(new Error("Erro simulado no especialista"))
     };
 
     const state: any = {
@@ -24,5 +24,5 @@ describe("Base Agent Wrapper (safeAgentNode)", () => {
     expect(result).toBeDefined();
     expect(result.nextAgent).toBe("supervisor");
     expect(result.contextData.lastError).toContain("testAgent: Erro simulado no especialista");
-  });
+  }, 30000);
 });

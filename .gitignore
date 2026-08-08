@@ -4,6 +4,16 @@ dist/
 database.sqlite*
 auth_info_baileys/
 auth_info_baileys_personal/
+auth_info_baileys*.bak_*/
 data/
 coverage/
 .DS_Store
+*.jsonl
+*.log
+parsed.txt
+thread_writes*.txt
+parse_thread.py
+recent_message*.jsonl
+thread_dump.jsonl
+logs/
+bia_test.log

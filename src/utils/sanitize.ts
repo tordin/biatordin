@@ -98,17 +98,36 @@ export function buildRecencyAnchoredHistory(
     return sliced;
   }
 
-  // Split into context (older) and current (last message)
-  const contextMessages = sliced.slice(0, -1);
-  const currentMessage = sliced[sliced.length - 1];
+  // Find the contiguous block of user messages at the end (message burst)
+  let userBurstStartIndex = sliced.length - 1;
+  const lastMsg = sliced[userBurstStartIndex];
+  
+  if (lastMsg instanceof HumanMessage) {
+    while (userBurstStartIndex > 0) {
+      const prevMsg = sliced[userBurstStartIndex - 1];
+      if (prevMsg instanceof HumanMessage) {
+        userBurstStartIndex--;
+      } else {
+        break;
+      }
+    }
+  }
+
+  // Split into context (older) and current (last burst or single message)
+  const contextMessages = sliced.slice(0, userBurstStartIndex);
+  const currentMessages = sliced.slice(userBurstStartIndex);
+
+  if (contextMessages.length === 0) {
+    return currentMessages;
+  }
 
   const anchorMarker = new SystemMessage(
     "─── ATENÇÃO: FOCO NA MENSAGEM ATUAL ───\n" +
-    "As mensagens ACIMA são CONTEXTO HISTÓRICO da conversa. Use-as APENAS para dar sentido à mensagem abaixo.\n" +
-    "NÃO re-execute comandos, buscas ou ações de mensagens anteriores. Concentre-se EXCLUSIVAMENTE na mensagem a seguir.\n" +
-    "Se a mensagem a seguir for uma saudação simples ('oi', 'boa noite', 'bom dia'), responda naturalmente SEM referenciar tarefas antigas.\n" +
-    "─── MENSAGEM ATUAL DO USUÁRIO ───"
+    "As mensagens ACIMA são CONTEXTO HISTÓRICO da conversa. Use-as APENAS para dar sentido à(s) mensagem(ões) abaixo.\n" +
+    "NÃO re-execute comandos, buscas ou ações de mensagens anteriores. Concentre-se EXCLUSIVAMENTE nas mensagens a seguir.\n" +
+    "Se as mensagens a seguir forem saudações simples ('oi', 'boa noite', 'bom dia'), responda naturalmente SEM referenciar tarefas antigas.\n" +
+    "─── MENSAGEM(ÕES) ATUAL(IS) DO USUÁRIO ───"
   );
 
-  return [...contextMessages, anchorMarker, currentMessage];
+  return [...contextMessages, anchorMarker, ...currentMessages];
 }
