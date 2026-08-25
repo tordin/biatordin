@@ -23,7 +23,9 @@ const CLASSIFICATION_PROMPT =
 
 const classificationSchema = z.object({
   topicId: z.string().describe("O ID do assunto onde a mensagem se encaixa, ou 'new' para novo assunto"),
-  newTitle: z.string().optional().describe("Título curto (até 4 palavras) se for novo assunto"),
+  // `.nullable()` (não `.optional()`) para compatibilidade com strict mode da DeepSeek:
+  // o LangChain força strict:true e a DeepSeek exige TODAS as props em `required`.
+  newTitle: z.string().nullable().describe("Título curto (até 4 palavras) se for novo assunto"),
   reason: z.string().describe("Justificativa da decisão")
 });
 

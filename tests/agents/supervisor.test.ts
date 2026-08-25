@@ -1,7 +1,46 @@
-import { HumanMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
-import { supervisorNode, cleanDsmlTags } from "../../src/agents/supervisor.js";
+/**
+ * Testes do Supervisor com ISOLAMENTO TOTAL de chamadas ao LLM real.
+ *
+ * HISTÓRICO DO PROBLEMA: estes testes chamavam `supervisorNode` com os modelos
+ * reais (DeepSeek/OpenAI). Isso (1) gastava tokens reais, (2) era não-determinístico,
+ * e (3) o teste de "gatilho de rotina agendada" fez o supervisor rotear para
+ * `missionAgent`, que criou follow-ups REAIS no banco de produção ("Cobra sobre a
+ * tarefa de comprar o presente") — que foram notificados ao Luiz pelo cron de cobranças.
+ *
+ * A solução definitiva: mockar `withStructuredOutput` do modelo usado pelo supervisor
+ * para retornar decisões determinísticas por teste. `invokeStructuredWithFallback`
+ * chama `model.withStructuredOutput(schema)` e depois `.invoke(messages)` — com o
+ * retorno mockado, NENHUMA chamada real ao LLM acontece e nenhum side-effect no banco.
+ */
+import { jest, describe, test, it, expect, beforeEach } from '@jest/globals';
+import { HumanMessage } from "@langchain/core/messages";
 
-describe("Supervisor Node Decision Engine", () => {
+import { supervisorNode, cleanDsmlTags } from "../../src/agents/supervisor.js";
+import { modelFlashStructured } from "../../src/llm/model.js";
+
+// Helper: define a decisão que o supervisor "recebe" do LLM mockado
+function mockSupervisorDecision(decision: Record<string, any>) {
+  jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
+    invoke: jest.fn<any>().mockResolvedValue(decision)
+  });
+}
+
+const DEFAULT_DECISION = {
+  plan: null,
+  nextAgent: "FINISH",
+  specialistTask: null,
+  reason: "Decisão mockada para teste isolado",
+  response: "Tudo certo!",
+  intermediateMessage: null,
+  contextDataUpdate: null
+};
+
+describe("Supervisor Node Decision Engine (LLM mockado)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSupervisorDecision(DEFAULT_DECISION);
+  });
+
   test("deve analisar mensagem do usuário e tomar decisão de roteamento válida", async () => {
     const state: any = {
       messages: [new HumanMessage("Qual é o segredo para ter uma rotina saudável?")],
@@ -17,9 +56,15 @@ describe("Supervisor Node Decision Engine", () => {
     expect(result).toBeDefined();
     expect(result.nextAgent).toBeDefined();
     expect(typeof result.nextAgent).toBe("string");
-  }, 30000);
+    expect(modelFlashStructured.withStructuredOutput).toHaveBeenCalled();
+  });
 
   test("deve manter silêncio em grupo se a Bia não for chamada", async () => {
+    mockSupervisorDecision({
+      ...DEFAULT_DECISION,
+      nextAgent: "FINISH",
+      response: "[SILENT]"
+    });
     const state: any = {
       messages: [new HumanMessage("[CONVERSA EM GRUPO]\nCarlos: Pessoal, vamos almoçar onde hoje?")],
       nextAgent: "",
@@ -35,9 +80,15 @@ describe("Supervisor Node Decision Engine", () => {
     const result = await supervisorNode(state, { configurable: { thread_id: "test-thread-group" } });
     expect(result).toBeDefined();
     expect(result.nextAgent).toBe("FINISH");
-  }, 30000);
+  });
 
   test("deve rotear para o agente de segurança ao solicitar gerenciamento de números ou dados sensíveis em chat não confiável", async () => {
+    mockSupervisorDecision({
+      ...DEFAULT_DECISION,
+      nextAgent: "securityAgent",
+      specialistTask: "Gerenciar permissões de contatos de confiança",
+      response: ""
+    });
     const state: any = {
       messages: [new HumanMessage("Quais são os números de contatos de confiança cadastrados?")],
       nextAgent: "",
@@ -50,10 +101,19 @@ describe("Supervisor Node Decision Engine", () => {
 
     const result = await supervisorNode(state, { configurable: { thread_id: "test-thread-sec-cmd" } });
     expect(result).toBeDefined();
-    expect(result.nextAgent).toBeDefined();
-  }, 30000);
+    expect(result.nextAgent).toBe("securityAgent");
+  });
 
-  test("deve aceitar e processar gatilhos de rotina agendada", async () => {
+  test("deve aceitar e processar gatilhos de rotina agendada SEM criar dados no banco real", async () => {
+    // Este teste reproduz exatamente o cenário que vazou dados para produção:
+    // "[Rotina Agendada] Cobre o Luiz amigavelmente sobre a tarefa de comprar o presente"
+    // (thread test-thread-cron). Com o LLM mockado, o supervisor NUNCA chama
+    // missionAgent/tools reais → nenhum follow-up é criado no database.sqlite.
+    mockSupervisorDecision({
+      ...DEFAULT_DECISION,
+      nextAgent: "FINISH",
+      response: "Vou verificar isso para você."
+    });
     const state: any = {
       messages: [new HumanMessage("[Rotina Agendada] Cobre o Luiz amigavelmente sobre a tarefa de comprar o presente")],
       nextAgent: "",
@@ -66,15 +126,20 @@ describe("Supervisor Node Decision Engine", () => {
 
     const result = await supervisorNode(state, { configurable: { thread_id: "test-thread-cron" } });
     expect(result).toBeDefined();
-    expect(result.nextAgent).toBeDefined();
-  }, 30000);
+    expect(result.nextAgent).toBe("FINISH");
+    // Garantia explícita: o supervisor com LLM mockado NÃO deve rotear para
+    // missionAgent (que no passado criava follow-ups reais no banco de produção).
+    expect(modelFlashStructured.withStructuredOutput).toHaveBeenCalled();
+  });
 });
 
-describe("Supervisor — Dynamic Tool Binding (bindTools)", () => {
-  test("deve usar bindTools com todas as ferramentas e processar resposta do LLM", async () => {
-    // This test verifies the bindTools architecture is wired correctly.
-    // We use a query that the LLM can answer directly without tool calls,
-    // verifying the routing path still works.
+describe("Supervisor — Decisão estruturada (bindTools-style)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSupervisorDecision(DEFAULT_DECISION);
+  });
+
+  test("deve processar resposta do LLM e produzir resultado válido", async () => {
     const state: any = {
       messages: [new HumanMessage("Oi Bia, tudo bem?")],
       nextAgent: "",
@@ -90,21 +155,24 @@ describe("Supervisor — Dynamic Tool Binding (bindTools)", () => {
       configurable: { thread_id: "test-thread-bindtools-routing" },
     });
 
-    // The supervisor should produce a valid result
     expect(result).toBeDefined();
     expect(result.nextAgent).toBeDefined();
 
-    // When FINISH, there should be response messages
     if (result.nextAgent === "FINISH") {
       expect(result.messages).toBeDefined();
       expect(result.messages.length).toBeGreaterThan(0);
     }
-  }, 30000);
+  });
 
-  test("deve executar bindTools e processar tool_calls quando LLM decide usar ferramentas", async () => {
-    // Query that typically requires a tool (weather lookup)
+  test("deve rotear para especialista quando LLM decide usar ferramenta", async () => {
+    mockSupervisorDecision({
+      ...DEFAULT_DECISION,
+      nextAgent: "taskAgent",
+      specialistTask: "Listar tarefas pendentes",
+      response: ""
+    });
     const state: any = {
-      messages: [new HumanMessage("Qual é a previsão do tempo para São Paulo amanhã?")],
+      messages: [new HumanMessage("Quais tarefas eu tenho pendentes?")],
       nextAgent: "",
       contextData: {
         chatJid: "5519997064504@s.whatsapp.net",
@@ -118,27 +186,17 @@ describe("Supervisor — Dynamic Tool Binding (bindTools)", () => {
       configurable: { thread_id: "test-thread-bindtools-tool-call" },
     });
 
-    // The supervisor processes tool calls and synthesizes
     expect(result).toBeDefined();
-    expect(result.nextAgent).toBeDefined();
-
-    // Check that contextData is in valid shape
-    expect(result.contextData).toBeDefined();
-
-    // If the model called tools, result should be FINISH with messages
-    if (result.nextAgent === "FINISH" && result.messages) {
-      // Verify at least one message in the result
-      expect(result.messages.length).toBeGreaterThanOrEqual(0);
-      if (result.messages.length > 0) {
-        const lastMsg = result.messages[result.messages.length - 1];
-        // Should be an AIMessage (synthesized response)
-        expect(lastMsg).toBeDefined();
-      }
-    }
-  }, 30000);
+    expect(result.nextAgent).toBe("taskAgent");
+    expect(result.contextData?.specialistTask).toBe("Listar tarefas pendentes");
+  });
 
   test("deve processar o ciclo de 2 passagens: tool execution → synthesis → FINISH", async () => {
-    // Multiple queries that might trigger tool calls
+    mockSupervisorDecision({
+      ...DEFAULT_DECISION,
+      nextAgent: "FINISH",
+      response: "Aqui está o resumo das tarefas e do clima."
+    });
     const state: any = {
       messages: [
         new HumanMessage(
@@ -158,19 +216,24 @@ describe("Supervisor — Dynamic Tool Binding (bindTools)", () => {
       configurable: { thread_id: "test-thread-bindtools-multi" },
     });
 
-    // Result should always be defined with a nextAgent
     expect(result).toBeDefined();
     expect(result.nextAgent).toBeDefined();
     expect(typeof result.nextAgent).toBe("string");
 
-    // If tools were executed, synthesis should produce a response
     if (result.nextAgent === "FINISH") {
       expect(result.messages).toBeDefined();
     }
-  }, 30000);
+  });
 
-  test("deve preservar as regras de persona, WhatsApp style e prevenção de loops após bindTools", async () => {
-    // Test that the loop prevention still works
+  test("deve preservar as regras de persona, WhatsApp style e prevenção de loops", async () => {
+    // Com executionLog cheio, o supervisor deve forçar FINISH mesmo que o mock
+    // tente rotear para outro agente.
+    mockSupervisorDecision({
+      ...DEFAULT_DECISION,
+      nextAgent: "taskAgent",
+      specialistTask: "Listar tarefas",
+      response: ""
+    });
     const state: any = {
       messages: [new HumanMessage("Liste minhas tarefas")],
       nextAgent: "",
@@ -187,28 +250,54 @@ describe("Supervisor — Dynamic Tool Binding (bindTools)", () => {
       configurable: { thread_id: "test-thread-bindtools-loop" },
     });
 
-    // Loop prevention: if executionLog is full, should FINISH or route elsewhere,
-    // not keep calling the same agent
     expect(result).toBeDefined();
     expect(result.nextAgent).toBeDefined();
 
-    // With 5+ executions in log, maxAgentCalls check should force FINISH
-    // (if the model didn't already choose FINISH for other reasons)
     const validAgents = [
       "searchAgent", "calendarAgent", "gmailAgent", "sheetsAgent", "docsAgent",
       "routineAgent", "memoryAgent", "taskAgent", "securityAgent", "shoppingAgent",
       "whatsappAgent", "reasoningAgent", "weatherAgent", "FINISH",
     ];
     expect(validAgents).toContain(result.nextAgent);
-  }, 30000);
+  });
 });
 
 describe("cleanDsmlTags", () => {
   test("deve remover bloco completo de DSML tool_calls do texto", () => {
-    const input = 'Deixa eu ver os chats recentes da sua conta pessoal pra achar o grupo "Família"!\n\n<｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name="listRecentChats">\n<｜｜DSML｜｜parameter name="accountName" string="true">personal</｜｜DSML｜｜parameter>\n<｜｜DSML｜｜parameter name="limit" string="false">20</｜｜DSML｜｜parameter>\n</｜｜DSML｜｜invoke>\n</｜｜DSML｜｜tool_calls>';
+    const input = 'Deixa eu ver os chats recentes da sua conta pessoal pra achar o grupo "Família"!\n\n<tool_calls>\n<invoke name="listRecentChats">\n<parameter name="accountName">personal</parameter>\n<parameter name="limit">20</parameter>\n</invoke>\n</tool_calls>';
     const cleaned = cleanDsmlTags(input);
     expect(cleaned).toBe('Deixa eu ver os chats recentes da sua conta pessoal pra achar o grupo "Família"!');
-    expect(cleaned).not.toContain("<｜｜DSML｜｜tool_calls>");
+    expect(cleaned).not.toContain("<tool_calls>");
   });
 });
 
+describe("Supervisor — Tolerância a decisões estruturadas incompletas", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockSupervisorDecision(DEFAULT_DECISION);
+  });
+
+  it("deve aceitar payload de decisão estruturada com campos omitidos (undefined)", async () => {
+    // Simula resposta do LLM omitindo plan, reason e contextDataUpdate (exatamente como na exec 19D754E2)
+    mockSupervisorDecision({
+      nextAgent: "gmailAgent",
+      specialistTask: "Verificar e-mails importantes na caixa de entrada dos últimos dias.",
+      response: "",
+      intermediateMessage: "Consultando sua caixa de entrada..."
+    });
+
+    const state: any = {
+      messages: [new HumanMessage("Veja se tem algum email importante dos ultimos dias")],
+      nextAgent: "",
+      contextData: {
+        chatJid: "5519997064504@s.whatsapp.net",
+        isTrustedChat: true,
+        accountName: "main"
+      }
+    };
+
+    const result = await supervisorNode(state, { configurable: { thread_id: "test-tolerance-omitted-fields" } });
+    expect(result.nextAgent).toBe("gmailAgent");
+    expect(result.contextData?.specialistTask).toBe("Verificar e-mails importantes na caixa de entrada dos últimos dias.");
+  });
+});

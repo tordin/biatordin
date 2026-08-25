@@ -53,10 +53,13 @@ export async function invokeStructuredWithFallback<T>(
   messages: BaseMessage[],
   options: InvokeStructuredOptions
 ): Promise<T> {
-  // IMPORTANTE: NÃO usar `strict: true` aqui. A DeepSeek rejeita com 400
-  // ("Required properties must match all properties in the object") quando o
-  // schema tem campos opcionais (.optional()/.nullish()) porque o zod-to-json-schema
-  // com target openAi os serializa como OpenAiAnyType, incompatível com strict.
+  // IMPORTANTE: NÃO usar `strict: true` explícito (o SDK força strict no método
+  // jsonSchema de qualquer forma) e os schemas DEVEM ser strict-compatíveis:
+  // TODOS os campos precisam estar no `required` — usar `.nullable()` e NUNCA
+  // `.optional()`/`.nullish()` (que removem o campo do required e a DeepSeek
+  // responde 400 "Required properties must match all properties in the object").
+  // O método default (jsonSchema) preserva o comportamento correto do modelo
+  // (functionCalling altera o roteamento — ex: FINISH vira missionAgent em grupos).
   const structuredModel = model.withStructuredOutput(schema, { name: options.name });
 
   try {

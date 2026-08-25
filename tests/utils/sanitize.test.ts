@@ -8,7 +8,7 @@ describe('Sanitize Utility Functions', () => {
       new HumanMessage("hello"),
       new AIMessage({ content: "thinking...", tool_calls: [{ name: "search", id: "1", args: {} }] }),
       new ToolMessage({ content: "results", tool_call_id: "1" }),
-      new AIMessage({ content: "final answer <｜｜DSML｜｜tool_calls> tag" }),
+      new AIMessage({ content: "final answer <tool_calls> tag" }),
       new AIMessage({ content: "[SILENT]" }),
       new AIMessage({ content: "resposta AI" }),
       new AIMessage({ content: "resposta AI" }) // mensagem duplicada consecutiva
@@ -46,6 +46,22 @@ describe('Sanitize Utility Functions', () => {
 
     const anchored = buildRecencyAnchoredHistory(msgs, 12);
     expect(anchored.length).toBe(4); // 2 contexto + 1 marker + 1 atual
-    expect(anchored[2].content).toContain("MENSAGEM ATUAL DO USUÁRIO");
+    expect(anchored[2].content).toContain("MENSAGEM(ÕES) ATUAL(IS) DO USUÁRIO");
+  });
+  it('should group adjacent human messages from the same sender within 10 minutes', () => {
+    const input = [
+      new HumanMessage({ content: "[17/08/2026, 10:40:31] msg1", name: "UserA" }),
+      new HumanMessage({ content: "[17/08/2026, 10:45:00] msg2", name: "UserA" }),
+      new HumanMessage({ content: "[17/08/2026, 10:55:01] msg3", name: "UserA" }), // > 10 min gap from msg2
+      new HumanMessage({ content: "[17/08/2026, 10:56:00] msg4", name: "UserB" })  // different user
+    ];
+    
+    const output = sanitizeMessagesForModel(input);
+    expect(output.length).toBe(3);
+    
+    expect(output[0].content).toContain("msg1");
+    expect(output[0].content).toContain("msg2");
+    expect(output[1].content).toContain("msg3");
+    expect(output[2].content).toContain("msg4");
   });
 });

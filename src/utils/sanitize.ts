@@ -1,5 +1,14 @@
 import { BaseMessage, AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 
+function extractLastDateFromContent(content: string): number | null {
+  if (typeof content !== 'string') return null;
+  const matches = [...content.matchAll(/\[(\d{2})\/(\d{2})\/(\d{4})[, ]+(\d{2}):(\d{2}):(\d{2})\]/g)];
+  if (matches.length === 0) return null;
+  const lastMatch = matches[matches.length - 1];
+  const [_, day, month, year, hour, minute, second] = lastMatch;
+  return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)).getTime();
+}
+
 export function sanitizeMessagesForModel(messages: BaseMessage[]): BaseMessage[] {
   const sanitized: BaseMessage[] = [];
   let lastContent = "";
@@ -27,7 +36,7 @@ export function sanitizeMessagesForModel(messages: BaseMessage[]): BaseMessage[]
       }
       
       // Skip raw DeepSeek tool calls outputted as text strings to prevent formatting loops
-      if (typeof msg.content === "string" && msg.content.includes("<｜｜DSML｜｜tool_calls>")) {
+      if (typeof msg.content === "string" && msg.content.includes("<tool_calls>")) {
         continue;
       }
 
@@ -43,7 +52,25 @@ export function sanitizeMessagesForModel(messages: BaseMessage[]): BaseMessage[]
     }
 
     if (msg instanceof HumanMessage) {
-      sanitized.push(new HumanMessage({ content: msg.content, name: msg.name }));
+      const msgContentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      const msgTime = extractLastDateFromContent(msgContentStr);
+      const lastMsg = sanitized.length > 0 ? sanitized[sanitized.length - 1] : null;
+
+      let grouped = false;
+      if (lastMsg instanceof HumanMessage && lastMsg.name === msg.name) {
+        const lastMsgContentStr = typeof lastMsg.content === 'string' ? lastMsg.content : JSON.stringify(lastMsg.content);
+        const lastMsgTime = extractLastDateFromContent(lastMsgContentStr);
+
+        // Agrupa se a diferença de tempo for menor que 10 minutos (600000 ms)
+        if (msgTime && lastMsgTime && Math.abs(msgTime - lastMsgTime) < 600000) {
+          lastMsg.content = `${lastMsgContentStr}\n${msgContentStr}`;
+          grouped = true;
+        }
+      }
+
+      if (!grouped) {
+        sanitized.push(new HumanMessage({ content: msg.content, name: msg.name }));
+      }
       lastContent = ""; // Reset deduplication on human message
       continue;
     }
