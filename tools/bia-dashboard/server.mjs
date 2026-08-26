@@ -131,6 +131,8 @@ function processEntryDetails(turn, entry) {
   } else if (ev === 'TRIGGER_END') {
     turn.action = data.action || turn.action;
     if (data.responseText) turn.finalResponse = data.responseText;
+    if (data.reason) turn.reason = data.reason;
+    if (data.reason && !turn.summary) turn.summary = data.reason;
     if (data.agentsUsed) turn.agentsUsed = data.agentsUsed;
     if (data.durationMs) turn.durationMs = data.durationMs;
   } else if (ev === 'ERROR') {

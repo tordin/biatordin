@@ -69,4 +69,49 @@ describe("Structured Output Fallback Utility", () => {
       )
     ).rejects.toThrow();
   });
+
+  test("deve recuperar diretamente quando o erro contiver argumentos com sintaxe corrompida (: ,)", async () => {
+    const errorMsg = 'Function "TestOutput" arguments:\n\n{"greeting": "Olá direto!", "confidence": 0.99, "extra": , }\n\nare not valid JSON.';
+    const mockStructuredModel = {
+      invoke: jest.fn<any>().mockRejectedValue(new Error(errorMsg))
+    };
+
+    const mockModel = {
+      withStructuredOutput: jest.fn().mockReturnValue(mockStructuredModel),
+      invoke: jest.fn<any>()
+    };
+
+    const result = await invokeStructuredWithFallback(
+      mockModel,
+      dummySchema,
+      [new HumanMessage("Oi")],
+      { name: "TestOutput" }
+    );
+
+    expect(result).toEqual({ greeting: "Olá direto!", confidence: 0.99 });
+    // Não deve chamar o LLM novamente pois recuperou direto
+    expect(mockModel.invoke).not.toHaveBeenCalled();
+  });
+
+  test("deve sanitizar vírgulas extras e valores vazios no fallback regex", async () => {
+    const mockStructuredModel = {
+      invoke: jest.fn<any>().mockRejectedValue(new Error("Generic parser error"))
+    };
+
+    const mockModel = {
+      withStructuredOutput: jest.fn().mockReturnValue(mockStructuredModel),
+      invoke: jest.fn<any>().mockResolvedValue({
+        content: '{"greeting": "Recuperado!", "confidence": 0.77, }'
+      })
+    };
+
+    const result = await invokeStructuredWithFallback(
+      mockModel,
+      dummySchema,
+      [new HumanMessage("Oi")],
+      { name: "TestOutput" }
+    );
+
+    expect(result).toEqual({ greeting: "Recuperado!", confidence: 0.77 });
+  });
 });

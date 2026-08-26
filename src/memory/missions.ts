@@ -17,13 +17,33 @@ db.serialize(() => {
       objective TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+      updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      expiresAt DATETIME,
+      ttlHours INTEGER
     )
   `);
 
   db.run(`ALTER TABLE missions ADD COLUMN notes TEXT`, (err) => {
     if (err && !err.message.includes("duplicate column name")) {
       logger.error("[MISSIONS DB] Erro ao adicionar coluna notes:", err);
+    }
+  });
+
+  db.run(`ALTER TABLE missions ADD COLUMN expiresAt DATETIME`, (err) => {
+    if (err && !err.message.includes("duplicate column name")) {
+      logger.error("[MISSIONS DB] Erro ao adicionar coluna expiresAt:", err);
+    }
+  });
+
+  db.run(`ALTER TABLE missions ADD COLUMN ttlHours INTEGER`, (err) => {
+    if (err && !err.message.includes("duplicate column name")) {
+      logger.error("[MISSIONS DB] Erro ao adicionar coluna ttlHours:", err);
+    }
+  });
+
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_active_mission ON missions(masterJid, targetJid) WHERE status = 'active'`, (err) => {
+    if (err && !err.message.includes("already exists")) {
+      logger.error("[MISSIONS DB] Erro ao criar índice único de missões ativas:", err);
     }
   });
 });
@@ -37,12 +57,35 @@ export interface Mission {
   notes?: string | null;
   createdAt: string;
   updatedAt: string;
+  expiresAt?: string | null;
+  ttlHours?: number | null;
 }
 
-export function saveMission(masterJid: string, targetJid: string, objective: string): Promise<Mission> {
+export function expireOldMissions(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const stmt = db.prepare("INSERT INTO missions (masterJid, targetJid, objective, status) VALUES (?, ?, ?, 'active')");
-    stmt.run(masterJid, targetJid, objective, function (this: sqlite3.RunResult, err: Error | null) {
+    const stmt = db.prepare(`
+      UPDATE missions 
+      SET status = 'cancelled', 
+          notes = CASE WHEN notes IS NULL THEN 'Missão expirada por tempo limite.' ELSE notes || '\n\n[SISTEMA]: Missão expirada por tempo limite.' END,
+          updatedAt = CURRENT_TIMESTAMP
+      WHERE status = 'active' AND expiresAt IS NOT NULL AND expiresAt < CURRENT_TIMESTAMP
+    `);
+    stmt.run([], function (this: sqlite3.RunResult, err: Error | null) {
+      if (err) return reject(err);
+      if (this.changes > 0) {
+        logger.info(`[MISSIONS DB] ${this.changes} missões expiradas automaticamente.`);
+      }
+      resolve();
+    });
+    stmt.finalize();
+  });
+}
+
+export function saveMission(masterJid: string, targetJid: string, objective: string, ttlHours: number = 72): Promise<Mission> {
+  return new Promise((resolve, reject) => {
+    const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19);
+    const stmt = db.prepare("INSERT INTO missions (masterJid, targetJid, objective, status, ttlHours, expiresAt) VALUES (?, ?, ?, 'active', ?, ?)");
+    stmt.run(masterJid, targetJid, objective, ttlHours, expiresAt, function (this: sqlite3.RunResult, err: Error | null) {
       if (err) return reject(err);
       resolve(getMissionById(this.lastID));
     });
@@ -59,7 +102,8 @@ export function getMissionById(id: number): Promise<Mission> {
   });
 }
 
-export function getActiveMissionsForTarget(targetJid: string): Promise<Mission[]> {
+export async function getActiveMissionsForTarget(targetJid: string): Promise<Mission[]> {
+  await expireOldMissions();
   return new Promise((resolve, reject) => {
     db.all("SELECT * FROM missions WHERE targetJid = ? AND status = 'active' ORDER BY createdAt DESC", [targetJid], (err, rows: Mission[]) => {
       if (err) return reject(err);
@@ -69,7 +113,8 @@ export function getActiveMissionsForTarget(targetJid: string): Promise<Mission[]
 }
 
 /** Retorna a missão ativa mais recente de um master com um target (considerando LID↔número). */
-export function findActiveMission(masterJid: string, targetJid: string): Promise<Mission | null> {
+export async function findActiveMission(masterJid: string, targetJid: string): Promise<Mission | null> {
+  await expireOldMissions();
   const masterJids = getEquivalentJids(masterJid);
   const targetJids = getEquivalentJids(targetJid);
   const mPlaceholders = masterJids.map(() => '?').join(', ');
@@ -86,7 +131,8 @@ export function findActiveMission(masterJid: string, targetJid: string): Promise
   });
 }
 
-export function getActiveMissionsForChat(chatJid: string): Promise<Mission[]> {
+export async function getActiveMissionsForChat(chatJid: string): Promise<Mission[]> {
+  await expireOldMissions();
   const jids = getEquivalentJids(chatJid);
   const placeholders = jids.map(() => '?').join(', ');
   return new Promise((resolve, reject) => {
@@ -116,7 +162,8 @@ export function getRecentMissionsForChat(chatJid: string, limit: number = 10): P
   });
 }
 
-export function hasActiveMissionForTarget(targetJid: string): Promise<boolean> {
+export async function hasActiveMissionForTarget(targetJid: string): Promise<boolean> {
+  await expireOldMissions();
   return new Promise((resolve, reject) => {
     db.get("SELECT 1 FROM missions WHERE targetJid = ? AND status = 'active' LIMIT 1", [targetJid], (err, row) => {
       if (err) return reject(err);
@@ -125,7 +172,8 @@ export function hasActiveMissionForTarget(targetJid: string): Promise<boolean> {
   });
 }
 
-export function listActiveMissions(masterJid: string): Promise<Mission[]> {
+export async function listActiveMissions(masterJid: string): Promise<Mission[]> {
+  await expireOldMissions();
   return new Promise((resolve, reject) => {
     db.all("SELECT * FROM missions WHERE masterJid = ? AND status = 'active' ORDER BY createdAt DESC", [masterJid], (err, rows: Mission[]) => {
       if (err) return reject(err);

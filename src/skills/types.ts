@@ -8,4 +8,5 @@ export interface SkillDefinition {
   category: SkillCategory;
   tools?: string[];
   requiresTrusted?: boolean;
+  requiresCreator?: boolean;
 }

@@ -160,7 +160,9 @@ function writeDetailedLog(
   };
 
   try {
-    fs.appendFileSync(LOG_FILE, JSON.stringify(logEntry) + '\n', 'utf-8');
+    if (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined) {
+      fs.appendFileSync(LOG_FILE, JSON.stringify(logEntry) + '\n', 'utf-8');
+    }
     biaEvents.emit('log', logEntry);
   } catch (err) {
     console.error("Failed to write to detailed log file:", err);
@@ -191,6 +193,8 @@ interface PendingLlmStart {
 }
 const pendingLlmStarts = new Map<string, PendingLlmStart>();
 const writtenLlmEndRunIds = new Set<string>();
+const writtenToolStartRunIds = new Set<string>();
+const writtenToolEndRunIds = new Set<string>();
 const MAX_TRACKED_RUN_IDS = 2000;
 
 function queueLlmStart(
@@ -239,6 +243,28 @@ function isDuplicateLlmEnd(runId: string): boolean {
   if (writtenLlmEndRunIds.size > MAX_TRACKED_RUN_IDS) {
     const oldestRunId = writtenLlmEndRunIds.values().next().value;
     if (oldestRunId) writtenLlmEndRunIds.delete(oldestRunId);
+  }
+  return false;
+}
+
+function isDuplicateToolStart(runId: string): boolean {
+  if (!runId) return false;
+  if (writtenToolStartRunIds.has(runId)) return true;
+  writtenToolStartRunIds.add(runId);
+  if (writtenToolStartRunIds.size > MAX_TRACKED_RUN_IDS) {
+    const oldestRunId = writtenToolStartRunIds.values().next().value;
+    if (oldestRunId) writtenToolStartRunIds.delete(oldestRunId);
+  }
+  return false;
+}
+
+function isDuplicateToolEnd(runId: string): boolean {
+  if (!runId) return false;
+  if (writtenToolEndRunIds.has(runId)) return true;
+  writtenToolEndRunIds.add(runId);
+  if (writtenToolEndRunIds.size > MAX_TRACKED_RUN_IDS) {
+    const oldestRunId = writtenToolEndRunIds.values().next().value;
+    if (oldestRunId) writtenToolEndRunIds.delete(oldestRunId);
   }
   return false;
 }
@@ -365,6 +391,7 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
 
     console.log(`[🕒 ${new Date().toLocaleTimeString()}] [${agentName || 'SYSTEM'}] Calling tool: "${toolName}" with input: ${input}`);
 
+    if (isDuplicateToolStart(runId)) return;
     writeDetailedLog("TOOL_START", threadId, agentName, { toolName, input, runId });
   }
 
@@ -380,7 +407,25 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
 
     console.log(`[🕒 ${new Date().toLocaleTimeString()}] [${agentName || 'SYSTEM'}] Tool execution finished.`);
 
+    if (isDuplicateToolEnd(runId)) return;
     writeDetailedLog("TOOL_END", threadId, agentName, { output, runId });
+  }
+
+  handleToolError(
+    err: any,
+    runId: string,
+    parentRunId?: string,
+    tags?: string[],
+    metadata?: Record<string, any>
+  ) {
+    const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
+    const agentName = metadata?.agentName;
+    const errorStr = typeof err === "string" ? err : (err?.message || JSON.stringify(err));
+
+    console.error(`[🕒 ${new Date().toLocaleTimeString()}] [${agentName || 'SYSTEM'}] Tool execution failed:`, errorStr);
+
+    if (isDuplicateToolEnd(runId)) return;
+    writeDetailedLog("TOOL_END", threadId, agentName, { output: `Error: ${errorStr}`, isError: true, runId });
   }
 }
 
@@ -495,13 +540,15 @@ export const logger = {
     outcome: {
       action: 'silent' | 'responded' | 'error';
       responseText?: string;
+      reason?: string;
       agentsUsed?: string[];
       durationMs?: number;
       error?: string;
     }
   ) => {
     const actionEmoji = outcome.action === 'silent' ? '🔇' : outcome.action === 'responded' ? '✅' : '❌';
-    const cleanMsg = `[🕒 ${new Date().toLocaleTimeString()}] [TRIGGER_END] ID=${trigger.triggerId} ${actionEmoji} ${outcome.action.toUpperCase()} ${outcome.agentsUsed?.length ? `(agents: ${outcome.agentsUsed.join(' → ')})` : ''}`;
+    const reasonMsg = outcome.reason ? ` (motivo: ${outcome.reason})` : '';
+    const cleanMsg = `[🕒 ${new Date().toLocaleTimeString()}] [TRIGGER_END] ID=${trigger.triggerId} ${actionEmoji} ${outcome.action.toUpperCase()}${reasonMsg} ${outcome.agentsUsed?.length ? `(agents: ${outcome.agentsUsed.join(' → ')})` : ''}`;
     console.log(cleanMsg);
 
     writeDetailedLog(
@@ -517,6 +564,7 @@ export const logger = {
         accountName: trigger.accountName,
         action: outcome.action,
         responseText: outcome.responseText,
+        reason: outcome.reason,
         agentsUsed: outcome.agentsUsed,
         durationMs: outcome.durationMs,
         error: outcome.error,

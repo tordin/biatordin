@@ -6,7 +6,7 @@ describe("Routine Agent Node & Tool Handlers", () => {
   let createdRoutineId: number;
 
   test("deve testar execução direta das ferramentas de rotinas", async () => {
-    const config = { configurable: { thread_id: testJid } } as any;
+    const config = { configurable: { thread_id: testJid, contextData: { chatJid: testJid } } } as any;
 
     // Erro por falta de thread_id
     const errRes = await createRoutineTool.invoke({ cronExpression: "0 9 * * *", prompt: "Teste" }, {} as any);

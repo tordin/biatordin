@@ -7,17 +7,37 @@ import { modelFlash as model } from "../llm/model.js";
 import { AgentState } from "./state.js";
 import { logger } from "../utils/logger.js";
 import { saveTask, getTasksForChat, markTaskCompleted, deleteTask } from "../memory/tasks.js";
+import { saveFollowUp, getFollowUps, resolveFollowUp } from "../memory/followUps.js";
 import { getSkill } from "../skills/registry.js";
 
 export const addTaskTool = tool(
   async ({ title, category, urgency, dueDate }, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat (thread_id ausente).";
-    const chatJid = threadId.includes('_') ? threadId.split('_')[0] : threadId;
+    const chatJid = config?.configurable?.contextData?.chatJid;
+    if (!chatJid) throw new Error("chatJid is required in contextData");
     const topicId = config?.configurable?.contextData?.activeTopicId;
 
     try {
       const task = await saveTask(chatJid, title, category || "Geral", urgency || "Média", dueDate, topicId);
+
+      // Se a tarefa envolve um terceiro ou compromisso externo com prazo, registra follow-up automático
+      const lowerTitle = title.toLowerCase();
+      const isPromised = lowerTitle.startsWith('enviar') || lowerTitle.startsWith('mandar') || lowerTitle.startsWith('passar') || lowerTitle.startsWith('entregar');
+      const isWaiting = lowerTitle.startsWith('cobrar') || lowerTitle.startsWith('aguardar') || lowerTitle.startsWith('esperar');
+
+      if ((isPromised || isWaiting) && dueDate) {
+        const contactExtract = title.split(/para|pro|pra|ao|do|da|de/i)[1]?.trim() || 'Contato da Tarefa';
+        saveFollowUp({
+          type: isPromised ? 'promised_by_me' : 'waiting_for_them',
+          contactName: contactExtract,
+          description: title,
+          dueDate: dueDate,
+          contextOrigin: 'direct',
+          chatJid: chatJid
+        }).catch(e => logger.warn('[TASK AGENT] Falha ao sincronizar follow-up da tarefa:', e));
+      }
+
       return `✅ Tarefa criada com sucesso! ID: ${task.id} | Título: "${task.title}" | Categoria: ${task.category} | Urgência: ${task.urgency}${task.dueDate ? ` | Prazo: ${task.dueDate}` : ""}`;
     } catch (err: any) {
       logger.error("Erro ao adicionar tarefa:", err);
@@ -40,7 +60,8 @@ export const listTasksTool = tool(
   async ({ status, category }, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat.";
-    const chatJid = threadId.includes('_') ? threadId.split('_')[0] : threadId;
+    const chatJid = config?.configurable?.contextData?.chatJid;
+    if (!chatJid) throw new Error("chatJid is required in contextData");
 
     try {
       const tasks = await getTasksForChat(chatJid, status || "pending", category);
@@ -48,11 +69,12 @@ export const listTasksTool = tool(
         return `Nenhuma tarefa ${status === 'completed' ? 'concluída' : 'pendente'} encontrada.`;
       }
 
-      const formattedList = tasks.map(t => 
-        `ID: ${t.id} | [${t.isCompleted ? 'x' : ' '}] ${t.title} (${t.category}, Urgência: ${t.urgency}${t.dueDate ? `, Prazo: ${t.dueDate}` : ''})`
+      const formattedList = tasks.slice(0, 30).map(t => 
+        `- [${t.isCompleted ? 'x' : ' '}] ID ${t.id}: ${t.title} (${t.category}${t.dueDate ? `, Prazo: ${t.dueDate}` : ''})`
       ).join("\n");
+      const extra = tasks.length > 30 ? `\n...e mais ${tasks.length - 30} tarefas ocultas.` : "";
 
-      return `<RAW_TOOL_OUTPUT source="sqlite:tasks">\nLista de Tarefas:\n${formattedList}\n</RAW_TOOL_OUTPUT>`;
+      return `<RAW_TOOL_OUTPUT source="sqlite:tasks">\nLista de Tarefas:\n${formattedList}${extra}\n</RAW_TOOL_OUTPUT>`;
     } catch (err: any) {
       logger.error("Erro ao listar tarefas:", err);
       return `Erro ao consultar tarefas no banco de dados: ${err.message}`;
@@ -72,7 +94,8 @@ export const completeTaskTool = tool(
   async ({ id }, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat.";
-    const chatJid = threadId.includes('_') ? threadId.split('_')[0] : threadId;
+    const chatJid = config?.configurable?.contextData?.chatJid;
+    if (!chatJid) throw new Error("chatJid is required in contextData");
 
     try {
       const success = await markTaskCompleted(id, chatJid);
@@ -99,7 +122,8 @@ export const deleteTaskTool = tool(
   async ({ id }, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat.";
-    const chatJid = threadId.includes('_') ? threadId.split('_')[0] : threadId;
+    const chatJid = config?.configurable?.contextData?.chatJid;
+    if (!chatJid) throw new Error("chatJid is required in contextData");
 
     try {
       const success = await deleteTask(id, chatJid);

@@ -12,6 +12,8 @@ import { getAllGroups, isWhatsAppConnected, notifyMaster } from "../transport/wh
 import { listDailySummaryGroups, addDailySummaryGroup, removeDailySummaryGroup } from "../memory/dailySummary.js";
 import { saveRoutine, getAllActiveRoutines } from "../memory/routines.js";
 import { MASTER_NUMBER } from "../memory/security.js";
+import { loadLidMappings, registerLidMapping, jidsMatch, canonicalJid, formatJidForUser } from '../utils/jidResolver.js';
+import { saveContact } from '../memory/contacts.js';
 import { getSkill } from "../skills/registry.js";
 
 const WHATSAPP_AGENT_PROMPT = getSkill("whatsappAgent")?.detailedPrompt || "";
@@ -24,20 +26,15 @@ export const listRecentChatsTool = tool(
       return `<RAW_TOOL_OUTPUT>\nERRO: A conta '${accountName}' do WhatsApp não está conectada ao vivo no momento (e nenhum histórico recente foi encontrado). Avise o usuário que a conta está desconectada.\n</RAW_TOOL_OUTPUT>`;
     }
 
-    // Enrich group names using getAllGroups (preserved from original logic)
-    const allGroups = await getAllGroups(accountName);
-    const groupMap = new Map(allGroups.map((g: any) => [g.jid, g.name]));
-
     for (const r of result) {
-      if (r.chatJid.endsWith("@g.us")) {
-        const realName = groupMap.get(r.chatJid);
-        if (realName) r.name = realName;
-        else if (r.name && !r.name.includes("Grupo")) r.name = `Grupo (Última msg de: ${r.name})`;
-      }
+      r.name = await formatJidForUser(r.chatJid, accountName);
     }
 
     let content = result.length > 0 
-      ? result.map(r => `- ${r.name || r.chatJid} (JID: ${r.chatJid}) - Última msg em: ${new Date(r.lastMessageAt).toLocaleString('pt-BR')}`).join('\n')
+      ? result.map(r => {
+          const shortDate = new Date(r.lastMessageAt).toLocaleString('pt-BR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+          return `- ${r.name} (ID: ${r.chatJid}) - Últ. msg: ${shortDate}`;
+        }).join('\n')
       : "Nenhum chat recente encontrado.";
 
     if (objective && result.length > 0) {
@@ -69,7 +66,11 @@ export const getChatHistoryTool = tool(
   async ({ accountName, chatJid, limit, objective }) => {
     const result = getChatHistory(accountName, chatJid, limit || 20);
     let content = result.length > 0
-      ? result.map(m => `[${m.date || new Date(m.timestamp).toLocaleString('pt-BR')}] ${m.isFromMe ? 'Eu' : (m.senderName || m.sender)}: ${m.content}`).join('\n')
+      ? result.map(m => {
+          const shortDate = new Date(m.timestamp).toLocaleString('pt-BR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+          const sender = m.isFromMe ? 'Eu' : (m.senderName || m.sender);
+          return `[${shortDate}] ${sender}: ${m.content}`;
+        }).join('\n')
       : "Nenhuma mensagem encontrada neste chat.";
     
     if (objective && result.length > 0) {
@@ -106,20 +107,12 @@ export const searchChatByNameTool = tool(
       return `<RAW_TOOL_OUTPUT>\nERRO: A conta '${accountName}' do WhatsApp não está conectada ao vivo no momento. Não foi possível buscar o chat '${queryName}'. Avise o usuário que a conta '${accountName}' está desconectada e pergunte se deseja conectar.\n</RAW_TOOL_OUTPUT>`;
     }
 
-    // Enrich group names using getAllGroups (preserved from original logic)
-    const allGroups = await getAllGroups(accountName);
-    const groupMap = new Map(allGroups.map((g: any) => [g.jid, g.name]));
-
     for (const r of result) {
-      if (r.chatJid.endsWith("@g.us")) {
-        const realName = groupMap.get(r.chatJid);
-        if (realName) r.name = realName;
-        else if (!r.name.includes("Grupo")) r.name = `Grupo (Última msg de: ${r.name})`;
-      }
+      r.name = await formatJidForUser(r.chatJid, accountName);
     }
 
     let content = result.length > 0
-      ? result.map(r => `- ${r.name || r.chatJid} (JID: ${r.chatJid})`).join('\n')
+      ? result.slice(0, 5).map(r => `- ${r.name} (ID: ${r.chatJid})`).join('\n') + (result.length > 5 ? `\n...e mais ${result.length - 5} resultados.` : '')
       : `Nenhum chat encontrado com o nome '${queryName}' na conta '${accountName}'. DICA: Você DEVE tentar pesquisar na outra conta (se usou 'main', tente 'personal', e vice-versa) ou usar listRecentChats.`;
 
     return `<RAW_TOOL_OUTPUT>\n${content}\n</RAW_TOOL_OUTPUT>`;
@@ -146,8 +139,8 @@ export const searchGroupsTool = tool(
       ? allGroups.filter((g: any) => g.name && g.name.toLowerCase().includes(query))
       : allGroups;
     let content = filtered.length > 0
-      ? filtered.map((g: any) => `- ${g.name} (JID: ${g.jid})`).join('\n')
-      : `Nenhum grupo encontrado com o nome '${query}' na conta '${accountName}'. Aqui estão todos os grupos disponíveis:\n\n${allGroups.map((g: any) => `- ${g.name} (JID: ${g.jid})`).join('\n')}`;
+      ? filtered.slice(0, 5).map((g: any) => `- ${g.name} (JID: ${g.jid})`).join('\n') + (filtered.length > 5 ? `\n...e mais ${filtered.length - 5} grupos.` : '')
+      : `Nenhum grupo encontrado com o nome '${query}' na conta '${accountName}'. Tente usar um nome parcial.`;
     return `<RAW_TOOL_OUTPUT source="whatsapp:groups">\n${content}\n</RAW_TOOL_OUTPUT>`;
   },
   {
@@ -163,16 +156,35 @@ export const searchGroupsTool = tool(
 
 
 
-function formatJidForUser(jid?: string): string {
-  if (!jid) return "";
-  return jid.split('@')[0];
-}
+export const saveContactAliasTool = tool(
+  async ({ phoneNumber, alias }) => {
+    try {
+      let clean = phoneNumber.replace(/[^0-9]/g, '');
+      if (clean.length === 10 || clean.length === 11) {
+        clean = '55' + clean;
+      }
+      const jid = `${clean}@s.whatsapp.net`;
+      await saveContact(jid, alias);
+      return `Contato salvo com sucesso! A partir de agora, o número ${phoneNumber} será reconhecido como "${alias}".`;
+    } catch (e: any) {
+      return `Erro ao salvar contato: ${e.message}`;
+    }
+  },
+  {
+    name: "save_contact_alias",
+    description: "Salva ou atualiza o nome/apelido (alias) de um contato. Use esta ferramenta quando o usuário disser 'minha mãe é o número X' ou 'anote o número do João: Y'.",
+    schema: z.object({
+      phoneNumber: z.string().describe("O número de telefone (idealmente com DDI e DDD, apenas números)"),
+      alias: z.string().describe("O nome ou apelido para este contato (ex: 'Minha Mãe', 'João')"),
+    }),
+  }
+);
 
 export const addDailySummaryGroupTool = tool(
   async ({ jid, name }) => {
     try {
       await addDailySummaryGroup(jid);
-      let responseMsg = `O grupo ${name || formatJidForUser(jid)} (${jid}) foi adicionado à lista de grupos do resumo diário.`;
+      let responseMsg = `O grupo ${name || await formatJidForUser(jid)} foi adicionado à lista de grupos do resumo diário.`;
       
       const activeRoutines = await getAllActiveRoutines();
       const hasSummaryRoutine = activeRoutines.some(r => r.prompt.includes("generate_daily_summary"));
@@ -205,7 +217,7 @@ export const removeDailySummaryGroupTool = tool(
   async ({ jid }) => {
     try {
       await removeDailySummaryGroup(jid);
-      return `O grupo ${formatJidForUser(jid)} foi removido da lista de grupos do resumo diário.`;
+      return `O grupo ${await formatJidForUser(jid)} foi removido da lista de grupos do resumo diário.`;
     } catch (e: any) {
       return `Erro ao remover grupo do resumo diário: ${e.message}`;
     }
@@ -226,8 +238,8 @@ export const listDailySummaryGroupsTool = tool(
       if (groups.length === 0) {
         return "Atualmente não há nenhum grupo na lista do resumo diário.";
       }
-      const list = groups.map(g => `- ${formatJidForUser(g.jid)} (Adicionado em: ${new Date(g.addedAt).toLocaleString('pt-BR')})`).join('\n');
-      return `Grupos no resumo diário atualmente:\n${list}`;
+      const list = await Promise.all(groups.map(async g => `- ${await formatJidForUser(g.jid)} (Adicionado em: ${new Date(g.addedAt).toLocaleString('pt-BR')})`));
+      return `Grupos no resumo diário atualmente:\n${list.join('\n')}`;
     } catch (e: any) {
       return `Erro ao listar grupos do resumo diário: ${e.message}`;
     }
@@ -240,7 +252,7 @@ export const listDailySummaryGroupsTool = tool(
 );
 
 export const generateDailySummaryTool = tool(
-  async ({ hours }) => {
+  async ({ hours, filter }) => {
     try {
       const groups = await listDailySummaryGroups();
       if (groups.length === 0) {
@@ -248,13 +260,21 @@ export const generateDailySummaryTool = tool(
       }
       
       const jids = groups.map(g => g.jid);
-      const data = getMessagesForGroups(jids, hours || 24);
+      let data = getMessagesForGroups(jids, hours || 24);
+      
+      if (filter && filter.trim()) {
+        const lowerFilter = filter.toLowerCase().trim();
+        data = data.filter(g => g.groupName.toLowerCase().includes(lowerFilter) || g.chatJid.toLowerCase().includes(lowerFilter));
+        if (data.length === 0) {
+          return `Nenhum grupo com o termo "${filter}" teve novas mensagens nas últimas ${hours || 24} horas (ou não está configurado na lista do resumo diário).`;
+        }
+      }
       
       if (data.length === 0) {
         return `Não houve novas mensagens nos grupos do resumo diário nas últimas ${hours || 24} horas.`;
       }
       
-      let report = `DADOS BRUTOS DOS GRUPOS DO RESUMO DIÁRIO (ÚLTIMAS ${hours || 24} HORAS):\n\n`;
+      let report = `DADOS BRUTOS DOS GRUPOS DO RESUMO DIÁRIO (ÚLTIMAS ${hours || 24} HORAS)${filter ? ` [FILTRO: "${filter}"]` : ''}:\n\n`;
       for (const group of data) {
         report += `--- GRUPO: ${group.groupName} ---\n`;
         for (const msg of group.messages) {
@@ -271,9 +291,10 @@ export const generateDailySummaryTool = tool(
   },
   {
     name: "generate_daily_summary",
-    description: "Obtém as mensagens recentes de todos os grupos adicionados ao resumo diário.",
+    description: "Obtém as mensagens recentes de todos os grupos do resumo diário de forma consolidada e instantânea. Use SEMPRE esta ferramenta para resumos diários, podendo passar `filter` para focar em um grupo ou assunto específico.",
     schema: z.object({
       hours: z.number().optional().describe("Quantas horas de histórico buscar (padrão 24). Para resumos de fim de dia, use 10 ou 12. Para resumos matinais, use 24."),
+      filter: z.string().optional().describe("Filtro opcional por nome do grupo ou assunto (ex: 'iFood', 'CRM', 'Condomínio'). Se omitido, busca todos os grupos configurados."),
     }),
   }
 );
@@ -288,7 +309,8 @@ const whatsappAgent = createReactAgent({
     generateDailySummaryTool,
     addDailySummaryGroupTool,
     removeDailySummaryGroupTool,
-    listDailySummaryGroupsTool
+    listDailySummaryGroupsTool,
+    saveContactAliasTool
   ],
   messageModifier: WHATSAPP_AGENT_PROMPT,
 });

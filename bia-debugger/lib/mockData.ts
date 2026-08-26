@@ -5,27 +5,31 @@ export type Chat = {
   time: string
   unread: number
   avatar: string
+  accountType?: 'main' | 'personal' | 'system' | 'master'
 }
 
 export const mockChats: Chat[] = [
-  { id: '1', name: 'Luiz Tordin (Master)', lastMessage: 'Bia, você pode checar se a matrícula da Cecília no Imaculada tá confirmada?', time: '10:42', unread: 0, avatar: 'L' },
-  { id: '2', name: 'Luciana Tordin', lastMessage: 'Bia: Mandei mensagem pro Luiz sobre os docinhos da festa da Cecília.', time: '09:15', unread: 1, avatar: 'Lu' },
-  { id: '3', name: 'Missão OLX: Pneu Michelin', lastMessage: 'Vendedor: Faço por R$ 350 o par se retirar hoje.', time: '08:30', unread: 0, avatar: 'M' },
-  { id: '4', name: 'Grupo Família Tordin', lastMessage: 'Bia: [Lembrete] Aula de piano da Manuela às 14h.', time: 'Ontem', unread: 0, avatar: 'F' },
+  { id: '1', name: '👑 Luiz', lastMessage: 'Bia, você pode checar se a matrícula da Cecília no Imaculada tá confirmada?', time: '10:42', unread: 0, avatar: 'L', accountType: 'master' },
+  { id: '2', name: 'Luciana Tordin', lastMessage: 'Bia: Mandei mensagem pro Luiz sobre os docinhos da festa da Cecília.', time: '09:15', unread: 1, avatar: 'L', accountType: 'main' },
+  { id: '3', name: 'Missão OLX: Pneu Michelin', lastMessage: 'Vendedor: Faço por R$ 350 o par se retirar hoje.', time: '08:30', unread: 0, avatar: 'M', accountType: 'personal' },
+  { id: '4', name: '⚙️ Sistema', lastMessage: 'Bia: [Lembrete] Aula de piano da Manuela às 14h.', time: 'Ontem', unread: 0, avatar: 'S', accountType: 'system' },
 ]
 
 export type Message = {
   id: string
   chatId: string
   text: string
-  sender: 'user' | 'bia'
+  sender: 'user' | 'bia' | 'system'
   time: string
   runId?: string
   responseTime?: string
+  triggerType?: 'whatsapp_message' | 'cron_routine' | 'system_inject' | 'mission' | 'startup' | 'connection' | string
+  routineId?: number
   isCron?: boolean
   isMission?: boolean
   isSilent?: boolean
   isError?: boolean
+  silenceReason?: string
 }
 
 export const mockMessages: Record<string, Message[]> = {
@@ -106,6 +110,16 @@ export const mockMessages: Record<string, Message[]> = {
       text: 'Vendedor: Faço por R$ 350 o par se retirar hoje.',
       sender: 'user',
       time: '08:30'
+    },
+    {
+      id: 'm33',
+      chatId: '3',
+      text: 'Silêncio',
+      sender: 'bia',
+      time: '08:31',
+      isSilent: true,
+      silenceReason: 'Observador passivo: Resposta do vendedor está dentro da margem esperada; aguardando decisão ou contraproposta do Master.',
+      runId: 'mis-7711'
     }
   ],
   '4': [
@@ -132,14 +146,16 @@ export const mockMessages: Record<string, Message[]> = {
 
 export type TraceNode = {
   id: string
-  type: 'trigger' | 'supervisor' | 'agent' | 'output' | 'llm' | 'tool'
+  type: 'trigger' | 'supervisor' | 'evaluator' | 'agent' | 'output' | 'llm' | 'tool' | 'error'
   title: string
   subtitle?: string
-  tint: 'green' | 'purple' | 'orange' | 'cyan' | 'blue'
+  tint: 'green' | 'purple' | 'orange' | 'cyan' | 'blue' | 'red'
+  agentName?: string
   tools?: { name: string, input: string, rawOutput: string }[]
   toolDetails?: { name: string, input: string, rawOutput: string }
   isLlmStep?: boolean
   isToolStep?: boolean
+  isErrorStep?: boolean
   timestamp?: string
   time?: string
 }
@@ -181,10 +197,11 @@ export const mockTraces: Record<string, TraceNode[]> = {
     },
     {
       id: 'n4',
-      type: 'supervisor',
-      title: 'Supervisora - Síntese Final',
-      subtitle: 'nextAgent: "FINISH" (Garantia de alucinação zero)',
-      tint: 'purple'
+      type: 'evaluator',
+      title: 'Avaliador de Qualidade (Critic)',
+      subtitle: 'Auditoria pós-execução: Veredito -> PASS (Aprovado)',
+      agentName: 'evaluator',
+      tint: 'cyan'
     },
     {
       id: 'n5',
@@ -309,6 +326,9 @@ export const mockInspectors: Record<string, {
   agentState: object
   modelOutput: object
   logs: string
+  outboundText?: string
+  recipient?: string
+  accountName?: string
 }> = {
   'n3': {
     context: `Você é a Bia, assistente virtual pessoal e inteligente de Luiz Tordin.
@@ -372,5 +392,19 @@ Resumo de Especialistas:
     },
     logs: `[10:40:59.800] [INFO] [LANGGRAPH] Node 'supervisor' iniciado.
 [10:41:00.200] [INFO] [ROUTER] Intenção detectada com alta confiança (0.98): Gmail Workspaces.`
+  },
+
+  'n5': {
+    context: 'Envio de Mensagem Outbound',
+    memory: 'N/A',
+    outboundText: 'Encontrei o e-mail da secretaria do Colégio Imaculada enviado ontem às 16:20!\n\n**Assunto:** Confirmação de Matrícula 2026/2 - Cecília Tordin\n**Status:** Confirmada e paga.\n**Anexo:** `Comprovante_Matricula_Cecilia.pdf` registrado no seu Google Drive.',
+    recipient: '👑 Luiz',
+    accountName: 'main',
+    agentState: {
+      chatJid: "5519997064504@s.whatsapp.net",
+      text: 'Encontrei o e-mail da secretaria do Colégio Imaculada enviado ontem às 16:20!\n\n**Assunto:** Confirmação de Matrícula 2026/2 - Cecília Tordin\n**Status:** Confirmada e paga.\n**Anexo:** `Comprovante_Matricula_Cecilia.pdf` registrado no seu Google Drive.'
+    },
+    modelOutput: {},
+    logs: '[10:42:01] [INFO] Mensagem transmitida via WhatsApp (Baileys) para Luiz Tordin.'
   }
 }

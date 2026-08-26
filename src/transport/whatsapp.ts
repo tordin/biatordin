@@ -7,15 +7,18 @@ import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { agent } from '../graph/workflow.js';
 import { logger, generateTriggerId, setActiveTrigger, clearActiveTrigger, getActiveTrigger, runWithTriggerContext, loggerCallbackHandler, triggerStorage } from '../utils/logger.js';
 import { resolveTopicForMessage } from '../utils/topicBroker.js';
-import { isTrustedChat, MASTER_NUMBER, MASTER_JIDS, consumeApprovalToken, addTrustedChat } from '../memory/security.js';
+import { getTopic, updateTopicActivity } from '../memory/topics.js';
+import { isTrustedChat, MASTER_NUMBER, MASTER_JIDS } from '../memory/security.js';
 import { isGroupIgnored, addIgnoredGroup, removeIgnoredGroup, isGroupManagementCommand } from '../config/ignoredGroups.js';
 import { appendMessageToHistory } from '../memory/chatHistory.js';
 import { isCommand, handleCommand, getChatModelOverride } from '../commands/commandRouter.js';
 import { savePendingMessage, getAllPendingMessages, clearPendingMessagesForQueue } from '../memory/pendingQueue.js';
 import { hasActiveMissionForTarget, getActiveMissionsForTarget, getActiveMissionsForChat, getRecentMissionsForChat } from '../memory/missions.js';
-import { loadLidMappings, registerLidMapping, jidsMatch } from '../utils/jidResolver.js';
+import { autoResolveFollowUpsForChat } from '../memory/followUps.js';
+import { loadLidMappings, registerLidMapping, jidsMatch, canonicalJid } from '../utils/jidResolver.js';
 import OpenAI, { toFile } from 'openai';
 import { triggerSimulator } from '../utils/simulator.js';
+import { updateContactPushName } from '../memory/contacts.js';
 
 const groqClient = new OpenAI({
     apiKey: process.env.GROQ_API_KEY,
@@ -96,7 +99,6 @@ interface ChatState {
     isProcessing: boolean;
     firstMessageTime: number;
     lastSilenceDelay?: number;
-    pendingInjectMetas?: SystemInjectOptions[];
 }
 
 const chatQueues = new Map<string, ChatState>();
@@ -271,7 +273,8 @@ async function processChatQueue(queueKey: string, sock: any) {
     const queue = chatQueues.get(queueKey);
     if (!queue) return;
 
-    const [accountName, chatJid] = queueKey.split(':');
+    const [accountName, rawChatJid] = queueKey.split(':');
+    const chatJid = canonicalJid(rawChatJid);
 
     if (queue.isProcessing) {
         logger.info(`[DEBOUNCE] Fila de ${queueKey} já está sendo processada.`);
@@ -288,12 +291,9 @@ async function processChatQueue(queueKey: string, sock: any) {
         queue.timeoutId = null;
     }
 
-    // Copia e esvazia a fila de mensagens e lê metadados de inject se presentes
+    // Copia e esvazia a fila de mensagens
     const messagesToProcess = [...queue.messages];
     queue.messages = [];
-    const injectMetas = queue.pendingInjectMetas ? [...queue.pendingInjectMetas] : [];
-    queue.pendingInjectMetas = [];
-    const injectMeta = injectMetas.length > 0 ? injectMetas[injectMetas.length - 1] : undefined;
 
     // Limpa da fila SQLite permanente uma vez que as mensagens passaram para execução
     clearPendingMessagesForQueue(queueKey).catch(err =>
@@ -310,11 +310,21 @@ async function processChatQueue(queueKey: string, sock: any) {
         const isPersonalGroup = isGroup && accountName === 'personal';
 
         // Guardrail: Truncate combined text to 2000 characters
-        let combinedText = messagesToProcess.map(m => {
-            return isGroup ? `${m.displayName}: ${m.text}` : m.text;
+        let groupedMessages: { displayName: string, text: string, timestamp: number, metadata?: any }[] = [];
+        for (const m of messagesToProcess) {
+            if (groupedMessages.length > 0 && groupedMessages[groupedMessages.length - 1].displayName === m.displayName && !m.metadata?.wasReceivedWhileProcessing) {
+                groupedMessages[groupedMessages.length - 1].text += `\n${m.text}`;
+            } else {
+                groupedMessages.push({ ...m });
+            }
+        }
+
+        let combinedText = groupedMessages.map(m => {
+            const requiresSenderPrefix = isGroup || accountName === 'personal';
+            return requiresSenderPrefix ? `${m.displayName}:\n${m.text}` : m.text;
         }).join("\n---\n");
 
-        const maxChars = isPersonalGroup ? 30000 : 2000;
+        const maxChars = 30000;
         if (combinedText.length > maxChars) {
             logger.warn(`[GUARDRAIL] Mensagem truncada de ${combinedText.length} para ${maxChars} caracteres no chat ${chatJid}`);
             combinedText = combinedText.substring(0, maxChars);
@@ -334,29 +344,52 @@ async function processChatQueue(queueKey: string, sock: any) {
         timestamps.push(now);
         rateLimitTimestamps.set(queueKey, timestamps);
 
-        const { topicId, title } = await resolveTopicForMessage(chatJid, combinedText, accountName);
-        const threadId = `${chatJid}_${topicId}`;
+        // Verifica se há missão ativa para este chat ANTES de classificar o tópico.
+        // Se houver, fixa o tópico para evitar fragmentação de threads no LangGraph.
+        const earlyMissions = await getActiveMissionsForChat(chatJid);
+        
+        let hasMissionActive = false;
+        if (accountName === 'main') {
+            hasMissionActive = earlyMissions.length > 0;
+        } else if (accountName === 'personal') {
+            hasMissionActive = earlyMissions.some((m: any) => jidsMatch(m.masterJid, chatJid));
+        }
+
+        let topicId: string;
+        let title: string;
+        if (hasMissionActive) {
+            // Missão ativa: usar tópico fixo para manter continuidade do state no LangGraph
+            topicId = 'mission';
+            title = 'Missão Ativa';
+            logger.info(`[DEBOUNCE] Chat ${chatJid} tem missão ativa. Fixando tópico como 'Missão Ativa' para evitar fragmentação de thread.`);
+        } else {
+            const resolved = await resolveTopicForMessage(chatJid, combinedText, accountName);
+            topicId = resolved.topicId;
+            title = resolved.title;
+        }
+        const threadId = `${accountName}_${chatJid}_${topicId}`;
 
         logger.info(`[DEBOUNCE] Direcionando mensagens para o assunto: "${title}" (Thread: ${threadId})`);
 
         let addedWarning = false;
-        const humanMessages = messagesToProcess.map(
+        const humanMessages = groupedMessages.map(
             m => {
                 const dateStr = new Date(m.timestamp).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-                let msgContent = isGroup ? `${m.displayName}: ${m.text}` : m.text;
+                const requiresSenderPrefix = isGroup || accountName === 'personal';
+                let msgContent = requiresSenderPrefix ? `${m.displayName}:\n${m.text}` : m.text;
                 if (m.metadata?.wasReceivedWhileProcessing) {
                     if (!addedWarning) {
                         msgContent = `[⚠️ As mensagens a seguir foram enviadas enquanto você formulava a resposta anterior]\n${msgContent}`;
                         addedWarning = true;
                     }
                 }
-                return new HumanMessage({ content: `[${dateStr}] ${msgContent}`, name: m.displayName });
+                return new HumanMessage({ content: `[${dateStr}]\n${msgContent}`, name: m.displayName });
             }
         );
 
         const isTrusted = await isTrustedChat(chatJid);
         const lastMsg = messagesToProcess[messagesToProcess.length - 1];
-        const lastMsgUserJid = lastMsg?.userJid || chatJid;
+        const lastMsgUserJid = canonicalJid(lastMsg?.userJid || chatJid);
         const senderName = lastMsg?.displayName || "Desconhecido";
         
         let chatName = chatJid;
@@ -365,10 +398,8 @@ async function processChatQueue(queueKey: string, sock: any) {
         }
 
         // ── TRIGGER: register the generating event before invoking the agent ──
-        // Use inject metadata if this queue was triggered by a cron/system inject;
-        // otherwise it's a regular WhatsApp message.
         const triggerId = generateTriggerId();
-        const resolvedTriggerType = injectMeta?.triggerType ?? 'whatsapp_message';
+        const resolvedTriggerType = 'whatsapp_message';
         resolvedThreadId = threadId;
         const triggerCtx = setActiveTrigger(threadId, {
             triggerId,
@@ -376,8 +407,8 @@ async function processChatQueue(queueKey: string, sock: any) {
             threadId,
             chatJid,
             chatName,
-            senderJid: injectMeta ? undefined : lastMsgUserJid,
-            senderName: injectMeta ? 'SISTEMA' : senderName,
+            senderJid: lastMsgUserJid,
+            senderName: senderName,
             accountName,
             messageContent: combinedText,
             metadata: {
@@ -386,8 +417,6 @@ async function processChatQueue(queueKey: string, sock: any) {
                 isReplyToBot: messagesToProcess.some(m => m.metadata?.isReplyToBot),
                 wasReceivedWhileProcessing: messagesToProcess.some(m => m.metadata?.wasReceivedWhileProcessing),
             },
-            routineId: injectMeta?.routineId,
-            routinePrompt: injectMeta?.routinePrompt,
         });
         activeTriggerCtx = triggerCtx;
         logger.logTriggerEvent(triggerCtx);
@@ -396,16 +425,47 @@ async function processChatQueue(queueKey: string, sock: any) {
         await runWithTriggerContext(triggerCtx, async () => {
             const config = { 
                 configurable: { thread_id: threadId },
-                metadata: { threadId: threadId, agentName: "graph" },
+                metadata: { 
+                    threadId: threadId, 
+                    agentName: "graph",
+                    chatJid: chatJid,
+                    chatName: chatName,
+                    accountName: accountName,
+                    isGroup: isGroup,
+                    isTrusted: isTrusted,
+                    topicTitle: title,
+                },
+                tags: [
+                    accountName,
+                    isGroup ? 'group' : 'private',
+                    isTrusted ? 'trusted' : 'untrusted'
+                ],
                 callbacks: [loggerCallbackHandler],
-                recursionLimit: 25
+                recursionLimit: 25,
+                runName: `Bia (${isGroup ? (chatName || chatJid) : (senderName || chatJid)})`
             };
             const activeMissions = await getActiveMissionsForChat(chatJid);
             const recentMissions = await getRecentMissionsForChat(chatJid, 10);
+
+            // V7: Se este chat é alvo de uma missão ativa, injetar histórico recente
+            // para que o missionAgent saiba o que a Bia já disse
+            let missionChatHistory = '';
+            const isTargetOfMission = activeMissions.some((m: any) => jidsMatch(m.targetJid, chatJid));
+            if (isTargetOfMission) {
+                const { getChatHistory } = await import('../memory/chatHistory.js');
+                const recentHistory = getChatHistory(accountName, chatJid, 20);
+                if (recentHistory.length > 0) {
+                    missionChatHistory = recentHistory.map(h => 
+                        `[${h.date || new Date(h.timestamp).toLocaleString('pt-BR')}] ${h.isFromMe ? 'Bia' : h.senderName}: ${h.content}`
+                    ).join('\n');
+                }
+            }
+
             const result = await agent.invoke({
                 messages: humanMessages,
                 contextData: { 
                     active_topic_title: title,
+                    topicId: topicId,
                     isTrustedChat: isTrusted,
                     isGroup: isGroup,
                     chatJid: chatJid,
@@ -416,9 +476,11 @@ async function processChatQueue(queueKey: string, sock: any) {
                     accountName: accountName,
                     activeMissions: activeMissions,
                     recentMissions: recentMissions,
+                    missionChatHistory: missionChatHistory || undefined,
                     executionLog: [],
                     executedTools: [],
-                    activePlan: []
+                    activePlan: [],
+                    outputMessages: []
                 }
             }, config);
 
@@ -439,33 +501,40 @@ async function processChatQueue(queueKey: string, sock: any) {
                 ['send_message_to_target', 'notify_master', 'start_mission'].includes(t)
             );
             
+            let silenceReason = result.contextData?.silenceReason;
+
             if (agentsUsed.includes("missionAgent") && isTargetChat) {
                 if (responseText && responseText.trim().toUpperCase() !== '[SILENT]') {
                     logger.info(`[WHATSAPP] missionAgent atuou em chat de alvo. Suprimindo resposta textual bruta para evitar vazamentos (use send_message_to_target).`);
                     responseText = '';
+                    silenceReason = 'Ação tratada pelo especialista de missão (resposta textual suprimida no chat do alvo).';
                 }
             } else if (missionToolsUsed && responseText && responseText.trim().toUpperCase() !== '[SILENT]') {
                 logger.info(`[WHATSAPP] missionAgent já tratou a comunicação via tools. Suprimindo resposta do pipeline para ${chatJid}.`);
                 responseText = '';
+                silenceReason = 'Comunicação já realizada via ferramentas da missão.';
             }
 
             // Bloqueio de segurança para a conta pessoal (READ-ONLY)
             if (accountName === 'personal') {
                 if (responseText && responseText.trim().toUpperCase() !== '[SILENT]') {
-                    logger.info(`[SECURITY] IA tentou responder na conta pessoal. Redirecionando alerta para o Master. Chat: ${chatJid}`);
-                    const chatNameForNotice = chatName && chatName !== chatJid ? chatName : chatJid.split('@')[0];
-                    const notificationText = `🚨 *Bia Detectou Algo (Conta Pessoal)*\n\nNo chat com *${chatNameForNotice}*, eu decidi que você deveria saber disso/responder:\n\n"${responseText}"`;
-                    await notifyMaster(notificationText);
+                    logger.warn(`[SECURITY] IA gerou resposta na conta pessoal. Encaminhando mensagem gerada como alerta natural para o Master. Chat de origem: ${chatJid}`);
+                    await notifyMaster(responseText);
+                    silenceReason = 'Conta pessoal: Alerta enviado em privado para o Master (silêncio mantido com terceiro).';
+                } else {
+                    silenceReason = silenceReason || 'Conta pessoal: Observação passiva silenciosa (sem fatos urgentes para alertar).';
                 }
                 responseText = ''; // Força silêncio absoluto no socket da conta pessoal
             }
 
             // Se a resposta for '[SILENT]' ou vazia/não-AIMessage, não enviamos nenhuma mensagem de volta
             if (!responseText || responseText.trim().toUpperCase() === '[SILENT]') {
-                logger.info(`[DEBUG] Bia decidiu ficar em silêncio ou não gerou resposta de IA no chat ${chatJid} (Conta: ${accountName}).`);
+                silenceReason = silenceReason || result.contextData?.silenceReason || 'Silêncio intencional mantido pela Bia.';
+                logger.info(`[DEBUG] Bia decidiu ficar em silêncio (${silenceReason}) no chat ${chatJid} (Conta: ${accountName}).`);
                 // Log trigger outcome: silent
                 logger.logTriggerOutcome(triggerCtx, {
                     action: 'silent',
+                    reason: silenceReason,
                     agentsUsed,
                     durationMs: Date.now() - triggerStartMs,
                 });
@@ -537,6 +606,214 @@ export interface SystemInjectOptions {
     triggerType?: 'cron_routine' | 'system_inject';
     routineId?: number;
     routinePrompt?: string;
+    topicId?: string;
+}
+
+const systemExecutionQueues = new Map<string, Promise<void>>();
+
+async function executeIsolatedSystemMessage(
+    chatJid: string,
+    text: string,
+    accountName: string,
+    options: SystemInjectOptions
+) {
+    const sock = sockets.get(accountName) || globalSock;
+    if (!sock) {
+        logger.error(`[ISOLATED SYSTEM EXECUTION] Socket para ${accountName} não está inicializado.`);
+        return;
+    }
+
+    const resolvedChatJid = canonicalJid(chatJid);
+    const isGroup = resolvedChatJid.endsWith('@g.us');
+    let chatName = resolvedChatJid;
+    if (isGroup) {
+        chatName = (await getChatName(sock, resolvedChatJid, accountName)) || "Grupo Desconhecido";
+    }
+    const isTrusted = await isTrustedChat(resolvedChatJid);
+
+    // Resolve Topic
+    let topicId = options.topicId;
+    let title = '';
+    if (topicId) {
+        try {
+            const existingTopic = await getTopic(topicId);
+            if (existingTopic && existingTopic.status === 'active') {
+                title = existingTopic.title;
+                await updateTopicActivity(topicId);
+            } else {
+                topicId = undefined;
+            }
+        } catch (e) {
+            logger.warn(`[ISOLATED SYSTEM EXECUTION] Erro ao buscar topicId ${topicId}:`, e);
+            topicId = undefined;
+        }
+    }
+
+    if (!topicId || !title) {
+        const resolved = await resolveTopicForMessage(resolvedChatJid, text, accountName);
+        topicId = resolved.topicId;
+        title = resolved.title;
+    }
+
+    const threadId = `${accountName}_${resolvedChatJid}_${topicId}`;
+    logger.info(`[ISOLATED SYSTEM EXECUTION] Executando mensagem de sistema no assunto: "${title}" (Thread: ${threadId}, Routine ID: ${options.routineId || 'N/A'})`);
+
+    const dateStr = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    const humanMessages = [
+        new HumanMessage({
+            content: `[${dateStr}]\n${text}`,
+            name: "SISTEMA",
+        })
+    ];
+
+    const triggerId = generateTriggerId();
+    const resolvedTriggerType = options.triggerType || 'cron_routine';
+    const triggerCtx = setActiveTrigger(threadId, {
+        triggerId,
+        triggerType: resolvedTriggerType,
+        threadId,
+        chatJid: resolvedChatJid,
+        chatName,
+        senderJid: undefined,
+        senderName: 'SISTEMA',
+        accountName,
+        messageContent: text,
+        metadata: {
+            isGroup,
+            mentionsBia: false,
+            isReplyToBot: false,
+            wasReceivedWhileProcessing: false,
+        },
+        routineId: options.routineId,
+        routinePrompt: options.routinePrompt,
+    });
+
+    logger.logTriggerEvent(triggerCtx);
+    const triggerStartMs = Date.now();
+
+    try {
+        await runWithTriggerContext(triggerCtx, async () => {
+            const config = {
+                configurable: { thread_id: threadId },
+                metadata: { 
+                    threadId: threadId, 
+                    agentName: "graph",
+                    chatJid: resolvedChatJid,
+                    chatName: chatName,
+                    accountName: accountName,
+                    isGroup: isGroup,
+                    isTrusted: isTrusted,
+                    topicTitle: title,
+                    source: "system-trigger"
+                },
+                tags: [
+                    accountName,
+                    isGroup ? 'group' : 'private',
+                    isTrusted ? 'trusted' : 'untrusted',
+                    'system-trigger'
+                ],
+                callbacks: [loggerCallbackHandler],
+                recursionLimit: 25,
+                runName: `Bia System (${chatName || resolvedChatJid})`
+            };
+            const activeMissions = await getActiveMissionsForChat(resolvedChatJid);
+            const recentMissions = await getRecentMissionsForChat(resolvedChatJid, 10);
+
+            const result = await agent.invoke({
+                messages: humanMessages,
+                contextData: {
+                    active_topic_title: title,
+                    topicId: topicId,
+                    isTrustedChat: isTrusted,
+                    isGroup: isGroup,
+                    chatJid: resolvedChatJid,
+                    chatName: chatName,
+                    senderJid: resolvedChatJid,
+                    senderName: "SISTEMA",
+                    masterNumber: MASTER_NUMBER,
+                    accountName: accountName,
+                    activeMissions: activeMissions,
+                    recentMissions: recentMissions,
+                    executionLog: [],
+                    executedTools: [],
+                    activePlan: [],
+                    outputMessages: []
+                }
+            }, config);
+
+            const responseMessage = result.messages[result.messages.length - 1];
+            let responseText = (responseMessage instanceof AIMessage)
+                ? (typeof responseMessage.content === 'string' ? responseMessage.content : JSON.stringify(responseMessage.content))
+                : '';
+
+            const agentsUsed: string[] = (result.contextData?.executionLog as string[]) || [];
+
+            const executedTools: string[] = (result.contextData?.executedTools as string[]) || [];
+            const missionTools = ['create_mission', 'update_mission', 'cancel_mission', 'list_missions', 'send_mission_message'];
+            const missionToolsUsed = executedTools.some(t => missionTools.includes(t));
+
+            let silenceReason = result.contextData?.silenceReason;
+
+            if (missionToolsUsed && responseText && responseText.trim().toUpperCase() !== '[SILENT]') {
+                logger.info(`[WHATSAPP] missionAgent já tratou a comunicação via tools. Suprimindo resposta do pipeline para ${resolvedChatJid}.`);
+                responseText = '';
+                silenceReason = 'Comunicação já realizada via ferramentas da missão.';
+            }
+
+            if (accountName === 'personal') {
+                if (responseText && responseText.trim().toUpperCase() !== '[SILENT]') {
+                    logger.warn(`[SECURITY] IA gerou resposta na conta pessoal. Encaminhando mensagem gerada como alerta natural para o Master. Chat de origem: ${resolvedChatJid}`);
+                    await notifyMaster(responseText);
+                    silenceReason = 'Conta pessoal: Alerta enviado em privado para o Master (silêncio mantido com terceiro).';
+                } else {
+                    silenceReason = silenceReason || 'Conta pessoal: Observação passiva silenciosa (sem fatos urgentes para alertar).';
+                }
+                responseText = '';
+            }
+
+            if (!responseText || responseText.trim().toUpperCase() === '[SILENT]') {
+                silenceReason = silenceReason || result.contextData?.silenceReason || 'Silêncio intencional mantido pela Bia.';
+                logger.info(`[DEBUG] Bia decidiu ficar em silêncio (${silenceReason}) no chat ${resolvedChatJid} (Conta: ${accountName}).`);
+                logger.logTriggerOutcome(triggerCtx, {
+                    action: 'silent',
+                    reason: silenceReason,
+                    agentsUsed,
+                    durationMs: Date.now() - triggerStartMs,
+                });
+                clearActiveTrigger(threadId);
+            } else {
+                logger.logTriggerOutcome(triggerCtx, {
+                    action: 'responded',
+                    responseText,
+                    agentsUsed,
+                    durationMs: Date.now() - triggerStartMs,
+                });
+                clearActiveTrigger(threadId);
+
+                const queueKey = `${accountName}:${resolvedChatJid}`;
+                await queueMessageSend(queueKey, async () => {
+                    await sock.sendPresenceUpdate('composing', resolvedChatJid);
+                    const typingTime = Math.min(Math.max(responseText.length * 30, 1000), 4000);
+                    await delay(typingTime);
+                    await sock.sendPresenceUpdate('paused', resolvedChatJid);
+
+                    if (shouldBlockMessage(resolvedChatJid, responseText)) {
+                        logger.warn(`[WHATSAPP] Resposta final barrada por deduplicação: "${responseText}"`);
+                        return;
+                    }
+                    await sock.sendMessage(resolvedChatJid, { text: responseText });
+                });
+            }
+        });
+    } catch (error) {
+        logger.error(`[ISOLATED SYSTEM EXECUTION] Erro ao executar mensagem no chat ${resolvedChatJid}:`, error);
+        logger.logTriggerOutcome(triggerCtx, {
+            action: 'error',
+            error: error instanceof Error ? error.message : String(error),
+            durationMs: Date.now() - triggerStartMs,
+        });
+        clearActiveTrigger(threadId);
+    }
 }
 
 export async function injectSystemMessage(
@@ -545,76 +822,26 @@ export async function injectSystemMessage(
     accountName: string = 'main',
     options: SystemInjectOptions = {}
 ) {
-    const sock = sockets.get(accountName) || globalSock;
-    if (!sock) {
-        logger.error(`[SYSTEM INJECT] Socket for ${accountName} is not initialized.`);
-        return;
-    }
-    
-    const queueKey = `${accountName}:${chatJid}`;
+    const resolvedChatJid = canonicalJid(chatJid);
+    const queueKey = `${accountName}:${resolvedChatJid}`;
     const resolvedType = options.triggerType || 'system_inject';
-    logger.info(`[SYSTEM INJECT] Injetando mensagem na fila ${queueKey} (tipo: ${resolvedType}): "${text}"`);
-    let queue = chatQueues.get(queueKey);
-    if (!queue) {
-        queue = {
-            accountName: accountName,
-            messages: [],
-            timeoutId: null,
-            isProcessing: false,
-            firstMessageTime: Date.now()
-        };
-        chatQueues.set(queueKey, queue);
-    }
+    logger.info(`[SYSTEM INJECT] Enfileirando mensagem isolada na fila ${queueKey} (tipo: ${resolvedType}, routineId: ${options.routineId || 'N/A'}): "${text}"`);
 
-    if (queue.messages.length === 0) {
-        queue.firstMessageTime = Date.now();
-    }
+    const currentPromise = systemExecutionQueues.get(queueKey) || Promise.resolve();
+    const nextPromise = currentPromise
+        .then(async () => {
+            await executeIsolatedSystemMessage(resolvedChatJid, text, accountName, options);
+        })
+        .catch(err => {
+            logger.error(`[ISOLATED SYSTEM EXECUTION] Erro na fila ${queueKey}:`, err);
+        })
+        .finally(() => {
+            if (systemExecutionQueues.get(queueKey) === nextPromise) {
+                systemExecutionQueues.delete(queueKey);
+            }
+        });
 
-    if (!queue.pendingInjectMetas) {
-        queue.pendingInjectMetas = [];
-    }
-    queue.pendingInjectMetas.push({
-        triggerType: resolvedType,
-        routineId: options.routineId,
-        routinePrompt: options.routinePrompt,
-    });
-
-    const msgId = "sys-" + Date.now();
-    const timestamp = Date.now();
-    const isGroup = chatJid.endsWith('@g.us');
-    const metadata = {
-        isGroup,
-        mentionsBia: false,
-        isReplyToBot: false,
-        wasReceivedWhileProcessing: false
-    };
-
-    queue.messages.push({
-        text: text,
-        displayName: "SISTEMA",
-        messageId: msgId,
-        userJid: chatJid,
-        timestamp: timestamp,
-        metadata: metadata
-    });
-
-    savePendingMessage(msgId, queueKey, accountName, chatJid, text, "SISTEMA", chatJid, timestamp, metadata).catch(err => 
-        logger.error("[PENDING_QUEUE DB] Erro ao salvar mensagem injetada no SQLite:", err)
-    );
-
-    if (queue.timeoutId) {
-        clearTimeout(queue.timeoutId);
-    }
-
-    const silenceDelay = getSilenceDelayForMessage(text);
-    queue.lastSilenceDelay = silenceDelay;
-
-    const timeElapsed = Date.now() - queue.firstMessageTime;
-    const delayTime = Math.max(0, Math.min(silenceDelay, MAX_WAIT_MS - timeElapsed));
-
-    queue.timeoutId = setTimeout(() => {
-        processChatQueue(queueKey, sock);
-    }, delayTime);
+    systemExecutionQueues.set(queueKey, nextPromise);
 }
 
 export async function injectSimulatedTargetMessage(
@@ -837,7 +1064,30 @@ export async function notifyMaster(text: string) {
 
     try {
         logger.info(`[NOTIFY MASTER] Enviando notificação para o master: "${text}"`);
-        await globalSock.sendMessage(masterJid, { text });
+        const currentTrigger = triggerStorage.getStore();
+        if (!currentTrigger) {
+            const triggerId = generateTriggerId();
+            const triggerCtx: any = {
+                triggerId,
+                triggerType: 'system_inject',
+                threadId: `main_${masterJid}_${triggerId}`,
+                chatJid: masterJid,
+                chatName: 'Luiz',
+                accountName: 'main',
+                messageContent: `[Notificação Master] ${text.slice(0, 100)}`,
+                startedAt: new Date().toISOString()
+            };
+            logger.logTriggerEvent(triggerCtx);
+            await runWithTriggerContext(triggerCtx, async () => {
+                await globalSock.sendMessage(masterJid, { text });
+            });
+            logger.logTriggerOutcome(triggerCtx, {
+                action: 'responded',
+                responseText: text
+            });
+        } else {
+            await globalSock.sendMessage(masterJid, { text });
+        }
     } catch (error) {
         logger.error(`[NOTIFY MASTER] Erro ao enviar mensagem para o master:`, error);
     }
@@ -932,63 +1182,82 @@ export async function connectToWhatsApp(accountName: string = 'main') {
     });
 
     // === TRAVA DE TRANSPORTE ABSOLUTA (VAZAMENTO ZERO) ===
-    // Garante que NENHUM tráfego de rede seja gerado para contatos simulados na camada base
+    // Garante que NENHUM tráfego de rede seja gerado para contatos simulados na camada base e
+    // que a conta pessoal seja EXCLUSIVAMENTE OUVINTE.
     const originalSendMessage = sock.sendMessage.bind(sock);
-    sock.sendMessage = async (jid: string, content: any, options?: any) => {
-        let sentMsg: any = null;
-        const text = content?.text || content?.caption || '[Arquivo/Mídia]';
-        
-        if (isSimulatedJid(jid)) {
-            logger.error(`[TRANSPORT LOCK ABSOLUTO] BLOQUEADO envio real (sendMessage) para ${jid}.`);
-            // Se o conteúdo for texto, repassamos pro simulador pra não travar o fluxo
-            if (content && typeof content.text === 'string') {
-                handleSimulatorIntercept(jid, content.text);
-            }
-            sentMsg = { 
-                key: { remoteJid: jid, fromMe: true, id: `sim-transport-${Date.now()}` }, 
-                message: content, 
-                messageTimestamp: Math.floor(Date.now() / 1000), 
-                status: 2 
-            } as any;
-        } else {
-            sentMsg = await originalSendMessage(jid, content, options);
-        }
-
-        // Log the outbound message to the debugger, automatically tied to current trigger context
-        logger.logOutboundMessage(jid, text);
-
-        // Adiciona ao histórico centralizadamente para que notifyMaster, start_mission, etc. nunca fiquem de fora
-        if (sentMsg?.key?.id) {
-            botSentMessageIds.add(sentMsg.key.id);
-            appendMessageToHistory(accountName, jid, {
-                id: sentMsg.key.id,
-                timestamp: Date.now(),
-                sender: "bia",
-                senderName: "Bia",
-                chatName: "Bia",
-                content: text,
-                isFromMe: true
-            });
-        }
-
-        return sentMsg;
-    };
-
     const originalSendPresenceUpdate = sock.sendPresenceUpdate.bind(sock);
-    sock.sendPresenceUpdate = async (type: any, jid?: string) => {
-        if (jid && isSimulatedJid(jid)) {
-            logger.info(`[TRANSPORT LOCK ABSOLUTO] BLOQUEADO presenceUpdate (${type}) para ${jid}.`);
-            return;
-        }
-        return originalSendPresenceUpdate(type, jid);
-    };
-
     const originalReadMessages = sock.readMessages.bind(sock);
-    sock.readMessages = async (keys: any[]) => {
-        const safeKeys = keys.filter(k => k.remoteJid && !isSimulatedJid(k.remoteJid));
-        if (safeKeys.length === 0) return;
-        return originalReadMessages(safeKeys);
-    };
+
+    if (accountName === 'personal') {
+        sock.sendMessage = async (jid: string, content: any, options?: any) => {
+            logger.error(`[TRANSPORT LOCK ABSOLUTO] Tentativa de envio barrada na conta pessoal para ${jid}. A conta pessoal é restrita a SOMENTE LEITURA.`);
+            return { key: { remoteJid: jid, fromMe: true, id: `blocked-${Date.now()}` }, message: content };
+        };
+
+        sock.sendPresenceUpdate = async (type: any, jid?: string) => {
+            logger.error(`[TRANSPORT LOCK ABSOLUTO] Tentativa de sendPresenceUpdate (${type}) barrada na conta pessoal para ${jid}.`);
+            return;
+        };
+
+        sock.readMessages = async (keys: any[]) => {
+            logger.error(`[TRANSPORT LOCK ABSOLUTO] Tentativa de readMessages barrada na conta pessoal.`);
+            return;
+        };
+    } else {
+        sock.sendMessage = async (jid: string, content: any, options?: any) => {
+            let sentMsg: any = null;
+            const text = content?.text || content?.caption || '[Arquivo/Mídia]';
+            
+            if (isSimulatedJid(jid)) {
+                logger.error(`[TRANSPORT LOCK ABSOLUTO] BLOQUEADO envio real (sendMessage) para ${jid}.`);
+                // Se o conteúdo for texto, repassamos pro simulador pra não travar o fluxo
+                if (content && typeof content.text === 'string') {
+                    handleSimulatorIntercept(jid, content.text);
+                }
+                sentMsg = { 
+                    key: { remoteJid: jid, fromMe: true, id: `sim-transport-${Date.now()}` }, 
+                    message: content, 
+                    messageTimestamp: Math.floor(Date.now() / 1000), 
+                    status: 2 
+                } as any;
+            } else {
+                sentMsg = await originalSendMessage(jid, content, options);
+            }
+
+            // Log the outbound message to the debugger, automatically tied to current trigger context
+            logger.logOutboundMessage(jid, text);
+
+            // Adiciona ao histórico centralizadamente para que notifyMaster, start_mission, etc. nunca fiquem de fora
+            if (sentMsg?.key?.id) {
+                botSentMessageIds.add(sentMsg.key.id);
+                appendMessageToHistory(accountName, jid, {
+                    id: sentMsg.key.id,
+                    timestamp: Date.now(),
+                    sender: "bia",
+                    senderName: "Bia",
+                    chatName: "Bia",
+                    content: text,
+                    isFromMe: true
+                });
+            }
+
+            return sentMsg;
+        };
+
+        sock.sendPresenceUpdate = async (type: any, jid?: string) => {
+            if (jid && isSimulatedJid(jid)) {
+                logger.info(`[TRANSPORT LOCK ABSOLUTO] BLOQUEADO presenceUpdate (${type}) para ${jid}.`);
+                return;
+            }
+            return originalSendPresenceUpdate(type, jid);
+        };
+
+        sock.readMessages = async (keys: any[]) => {
+            const safeKeys = keys.filter(k => k.remoteJid && !isSimulatedJid(k.remoteJid));
+            if (safeKeys.length === 0) return;
+            return originalReadMessages(safeKeys);
+        };
+    }
 
     sockets.set(accountName, sock);
     if (accountName === 'main') {
@@ -1171,9 +1440,14 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
             if (!rawMsg) continue;
             
             const msg = rawMsg.msg;
-            const userJid = normalizeJid(msg.key.participant || msg.participant || chatJid);
+            let userJid = normalizeJid(msg.key.participant || msg.participant || chatJid);
             const myJid = normalizeJid(sock.user?.id || botJids.get(accountName));
             const myLid = normalizeJid(sock.user?.lid || botLids.get(accountName));
+            
+            if (msg.key.fromMe) {
+                userJid = myJid || MASTER_NUMBER;
+            }
+
             const isSelf = chatJid === myJid || chatJid === myLid;
             const isGroup = chatJid.endsWith('@g.us');
 
@@ -1420,38 +1694,43 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
 
             if (!text) continue;
 
-            // --- INTERCEPTADOR ALGORÍTMICO DE SEGURANÇA ---
-            if (MASTER_JIDS.includes(userJid) && accountName === 'main') {
-                const autorizarMatch = text.trim().match(/^AUTORIZAR\s+(\d{4})$/i);
-                if (autorizarMatch) {
-                    const token = autorizarMatch[1];
-                    const approvedJid = consumeApprovalToken(token);
-                    if (approvedJid) {
-                        await addTrustedChat(approvedJid);
-                        await sock.sendMessage(MASTER_NUMBER, { text: `✅ Chat autorizado com sucesso! (bypass determinístico)` });
-                        await sock.sendMessage(approvedJid, { text: `✅ Boas notícias! O administrador acabou de autorizar este chat.` });
-                    } else {
-                        await sock.sendMessage(MASTER_NUMBER, { text: `❌ Token inválido ou expirado.` });
-                    }
-                    continue; // Ignora o resto do pipeline da IA
-                }
 
-
-            }
-            // ----------------------------------------------
 
             // --- GERENCIAMENTO DE GRUPOS IGNORADOS ---
             if (isGroup && MASTER_JIDS.includes(userJid) && accountName === 'main') {
                 const cmd = isGroupManagementCommand(text);
-                if (cmd.action === 'ignore') {
+                if (cmd.action === 'ignore' || cmd.action === 'unignore') {
+                    const triggerId = generateTriggerId();
                     const groupName = await getChatName(sock, chatJid, accountName) || chatJid;
-                    addIgnoredGroup(chatJid, groupName);
-                    await sock.sendMessage(chatJid, { text: '✅ Entendido! Não vou mais responder neste grupo. Se precisar de mim, é só me chamar no privado. 😊' });
-                    continue;
-                }
-                if (cmd.action === 'unignore') {
-                    removeIgnoredGroup(chatJid);
-                    await sock.sendMessage(chatJid, { text: '✅ Pronto! Voltei a prestar atenção neste grupo. 😊' });
+                    const triggerCtx: any = {
+                        triggerId,
+                        triggerType: 'whatsapp_message',
+                        threadId: `${accountName}_${chatJid}_${triggerId}`,
+                        chatJid,
+                        chatName: groupName,
+                        senderJid: userJid,
+                        senderName: msg.pushName || 'Luiz',
+                        accountName,
+                        messageContent: text,
+                        startedAt: new Date().toISOString(),
+                        metadata: { isGroup: true }
+                    };
+                    logger.logTriggerEvent(triggerCtx);
+                    const responseText = cmd.action === 'ignore'
+                        ? '✅ Entendido! Não vou mais responder neste grupo. Se precisar de mim, é só me chamar no privado. 😊'
+                        : '✅ Pronto! Voltei a prestar atenção neste grupo. 😊';
+                    await runWithTriggerContext(triggerCtx, async () => {
+                        if (cmd.action === 'ignore') {
+                            addIgnoredGroup(chatJid, groupName);
+                        } else {
+                            removeIgnoredGroup(chatJid);
+                        }
+                        await sock.sendMessage(chatJid, { text: responseText });
+                    });
+                    logger.logTriggerOutcome(triggerCtx, {
+                        action: 'responded',
+                        responseText
+                    });
                     continue;
                 }
             }
@@ -1459,19 +1738,46 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
 
             // --- PROCESSAMENTO DE COMANDOS DETERMINÍSTICOS (/comando) ---
             if (isCommand(text)) {
-                const handled = await handleCommand({
-                    text,
+                const triggerId = generateTriggerId();
+                const chatName = (await getChatName(sock, chatJid, accountName)) || chatJid;
+                const senderName = msg.pushName || (msg.key.fromMe ? 'Luiz' : userJid.split('@')[0]);
+                const triggerCtx: any = {
+                    triggerId,
+                    triggerType: 'whatsapp_message',
+                    threadId: `${accountName}_${chatJid}_${triggerId}`,
                     chatJid,
-                    userJid,
+                    chatName,
+                    senderJid: userJid,
+                    senderName,
                     accountName,
-                    isGroup,
-                    sock,
-                    clearQueue: () => {
-                        const q = chatQueues.get(queueKey);
-                        if (q) q.messages = [];
-                    }
+                    messageContent: text,
+                    startedAt: new Date().toISOString(),
+                    metadata: { isGroup }
+                };
+
+                logger.logTriggerEvent(triggerCtx);
+
+                let handled = false;
+                await runWithTriggerContext(triggerCtx, async () => {
+                    handled = await handleCommand({
+                        text,
+                        chatJid,
+                        userJid,
+                        accountName,
+                        isGroup,
+                        sock,
+                        clearQueue: () => {
+                            const q = chatQueues.get(queueKey);
+                            if (q) q.messages = [];
+                        }
+                    });
                 });
+
                 if (handled) {
+                    logger.logTriggerOutcome(triggerCtx, {
+                        action: 'responded',
+                        responseText: `Comando ${text.split(/\s+/)[0]} executado.`
+                    });
                     continue; // Ignora enfileiramento e invocação da IA
                 }
             }
@@ -1489,7 +1795,14 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
             }
 
             try {
-                const displayName = msg.pushName || userJid.split('@')[0];
+                let displayName = msg.pushName || userJid.split('@')[0];
+                if (msg.key.fromMe) {
+                    displayName = "Luiz";
+                } else if (msg.pushName) {
+                    updateContactPushName(canonicalJid(userJid), msg.pushName).catch(err => 
+                        logger.error(`Erro ao salvar pushName do contato ${userJid}:`, err)
+                    );
+                }
                 
                 // Determina se a mensagem cita/responde ao bot
                 const quotedParticipant = msg.message?.extendedTextMessage?.contextInfo?.participant;
@@ -1562,6 +1875,13 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                 savePendingMessage(msgId, queueKey, accountName, chatJid, text, displayName, userJid, timestamp, metadata).catch(err => 
                     logger.error("[PENDING_QUEUE DB] Erro ao salvar mensagem recebida no SQLite:", err)
                 );
+
+                // Auto-resolução inteligente de follow-ups ao receber retorno do contato
+                if (!msg.key.fromMe) {
+                    autoResolveFollowUpsForChat(chatJid, userJid, displayName, text).catch(err =>
+                        logger.error("[FOLLOWUP AUTO-RESOLVE] Erro ao auto-resolver follow-ups:", err)
+                    );
+                }
                 
                 appendMessageToHistory(accountName, chatJid, {
                     id: msgId,
@@ -1659,13 +1979,21 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
             const chatJid = normalizeJid(msg.key.remoteJid);
             const userJid = normalizeJid(msg.key.participant || msg.participant || chatJid);
 
-            // Ignora as próprias mensagens que o bot/usuário enviou para evitar self-loops
-            if (msg.key.fromMe) continue;
+            // Ignora as próprias mensagens enviadas no socket da Bia (main) para evitar self-loops,
+            // mas preserva no socket 'personal' para gravar o histórico do que o usuário humano respondeu.
+            if (msg.key.fromMe && accountName === 'main') continue;
 
             // Ignora TODAS as mensagens enviadas pela própria Bia (main JID / LID) em qualquer socket
             if (isMessageFromBia(userJid)) {
                 logger.info(`[IGNORED] Mensagem enviada pela própria Bia (${userJid}) recebida na conta ${accountName}. Descartando.`);
                 continue;
+            }
+
+            // Envia recibo de leitura apenas na conta da própria Bia (main)
+            if (accountName === 'main' && msg.key) {
+                sock.readMessages([msg.key]).catch(err => {
+                    logger.error(`[READ RECEIPT] Erro ao marcar mensagem como lida:`, err);
+                });
             }
 
             // Mapeia grupos nos quais a conta main está ativa

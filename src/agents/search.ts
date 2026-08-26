@@ -38,12 +38,15 @@ async function serperSearch(query: string, timeframe?: string): Promise<string |
 
       if (response.ok) {
         const data = await response.json();
-        const results = (data.organic || []).map((item: any) => ({
-          title: item.title,
-          url: item.link,
-          content: item.snippet,
-        }));
-        return JSON.stringify({ results });
+        const organic = (data.organic || []).slice(0, 4); // RTK Truncation
+        
+        if (organic.length === 0) return "Nenhum resultado encontrado.";
+
+        const formatted = organic.map((item: any) => 
+          `### [${item.title}](${item.link})\n${item.snippet}`
+        ).join("\n\n");
+        
+        return formatted;
       }
 
       logger.error(`Erro na resposta da API do Serper (tentativa ${attempt}/${maxRetries}): ${response.status} ${response.statusText}`);
@@ -79,14 +82,7 @@ async function jinaSearchFallback(query: string): Promise<string | null> {
         content = content.substring(0, 10000) + "\n\n...[Conteúdo truncado]...";
       }
       // Normalize to same structured format as Serper for consistent LLM input
-      return JSON.stringify({
-        results: [{
-          title: `Resultados da busca para: ${query}`,
-          url: searchUrl,
-          content: content.substring(0, 2000),
-        }],
-        source: "jina_fallback",
-      });
+      return `### [Resultados da busca para: ${query}](${searchUrl})\n${content.substring(0, 1500)}`;
     } else {
       logger.error(`Jina Reader fallback falhou: ${response.status} ${response.statusText}`);
     }
@@ -139,7 +135,7 @@ export const googleSearchTool = tool(
 );
 
 export const openWebpageTool = tool(
-  async ({ url }) => {
+  async ({ url, objective }) => {
     logger.info(`[OPEN WEBPAGE] Lendo conteúdo da URL via Jina Reader: ${url}`);
     try {
       const response = await fetch(`https://r.jina.ai/${url}`, {
@@ -152,10 +148,14 @@ export const openWebpageTool = tool(
 
       if (response.ok) {
         let content = await response.text();
-        // Limit the content length so we don't blow up the LLM context window
-        if (content.length > 8000) {
-          content = content.substring(0, 8000) + "\n\n...[Conteúdo truncado por ser muito longo]...";
+        
+        // RTK: Smart Filtering via extração LLM
+        if (objective && objective.trim().length > 0) {
+           content = await extractRelevantContent(content, objective, url, 400);
+        } else if (content.length > 4000) {
+           content = content.substring(0, 4000) + "\n\n...[Conteúdo truncado. Forneça um 'objective' na ferramenta para extração completa]...";
         }
+        
         return wrapUntrustedWebContent(content, url);
       } else {
         logger.error(`Erro ao ler URL ${url}: ${response.status} ${response.statusText}`);
@@ -168,9 +168,10 @@ export const openWebpageTool = tool(
   },
   {
     name: "open_webpage",
-    description: "Abre uma URL específica e retorna o texto completo (limpo) da página. Útil quando os snippets da busca não fornecem detalhes suficientes e você precisa ler o conteúdo real da página ou notícia.",
+    description: "Abre uma URL específica e retorna o texto da página filtrado baseado no seu objetivo. Útil quando os snippets não fornecem detalhes suficientes.",
     schema: z.object({
       url: z.string().url().describe("A URL completa da página a ser lida."),
+      objective: z.string().optional().describe("O que exatamente você está procurando na página? (Ex: 'descobrir o preço do produto X'). Se fornecido, apenas fatos relevantes serão retornados."),
     }),
   }
 );

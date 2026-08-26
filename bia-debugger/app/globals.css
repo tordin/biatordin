@@ -35,3 +35,10 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans), sans-serif;
 }
+
+/* Ensure pre and code elements properly wrap and do not break layout */
+pre, code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+

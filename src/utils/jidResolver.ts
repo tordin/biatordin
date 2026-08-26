@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from './logger.js';
+import { getContact } from '../memory/contacts.js';
 
 /**
  * Resolvedor de JIDs do WhatsApp: LID ↔ número.
@@ -126,3 +127,101 @@ export function jidsMatch(a: string, b: string): boolean {
 export function canonicalJid(jid: string): string {
   return resolveLidToNumberJid(jid) || jid;
 }
+
+/**
+ * Retorna o melhor nome amigável para exibição ao usuário final.
+ * Para grupos: Retorna o nome do grupo (ou o número base se não achar).
+ * Para contatos: Retorna o nome/apelido conhecido, pushName, ou apenas o número (sem @s.whatsapp.net).
+ * Oculte JIDs completos sempre!
+ */
+export async function formatJidForUser(jid?: string, accountName?: string): Promise<string> {
+  if (!jid) return "Desconhecido";
+  
+  if (jid.endsWith('@g.us')) {
+    // É grupo
+    if (accountName) {
+      try {
+        const { getAllGroups } = await import('../transport/whatsapp.js');
+        const groups = await getAllGroups(accountName);
+        const group = groups.find((g: any) => g.jid === jid);
+        if (group && group.name) {
+          return group.name; // Retorna só o nome do grupo
+        }
+      } catch (err) {
+        logger.error(`Erro ao buscar nome do grupo ${jid} em formatJidForUser:`, err);
+      }
+    }
+    // Se não achou nome, retorna o prefixo numérico do grupo (sem @g.us)
+    return jid.split('@')[0];
+  }
+
+  // Contato individual
+  const cleanNumber = jid.split('@')[0];
+  const canonical = canonicalJid(jid);
+  const contact = await getContact(canonical);
+
+  let bestName = contact?.name || contact?.pushName;
+
+  // Consulta entidade no CRM Pessoal
+  try {
+    const { getEntityByJid, getEntityByPhone } = await import('../memory/entities.js');
+    const entity = (await getEntityByJid(canonical)) || (await getEntityByPhone(cleanNumber));
+    if (entity) {
+      const roleStr = entity.role_or_relation ? ` (${entity.role_or_relation})` : '';
+      return `${entity.name}${roleStr}`;
+    }
+  } catch (err) {
+    logger.debug(`[JID RESOLVER] Erro ao buscar entidade para JID ${jid}:`, err);
+  }
+  
+  if (bestName) {
+    return bestName; 
+  }
+  
+  // Sem nome: retorna apenas o número
+  return cleanNumber.startsWith('55') ? `+${cleanNumber}` : cleanNumber;
+}
+
+/**
+ * Resolve uma menção em linguagem natural, nome, apelido ou telefone para JID do WhatsApp
+ * combinando a base do CRM de Entidades e a tabela de contatos.
+ */
+export async function resolveContactJid(query: string): Promise<{ jid?: string; phone?: string; name: string } | null> {
+  if (!query) return null;
+  const clean = query.trim();
+
+  // 1. Consulta no CRM de Entidades
+  try {
+    const { resolveContactJidOrPhone } = await import('../services/entityResolver.js');
+    const resolved = await resolveContactJidOrPhone(clean);
+    if (resolved && (resolved.jid || resolved.phone)) {
+      const jid = resolved.jid || (resolved.phone ? `${resolved.phone}@s.whatsapp.net` : undefined);
+      return {
+        jid,
+        phone: resolved.phone || undefined,
+        name: resolved.name
+      };
+    }
+  } catch (err) {
+    logger.debug(`[JID RESOLVER] Erro ao resolver entidade no CRM:`, err);
+  }
+
+  // 2. Consulta na tabela legada de contacts
+  try {
+    const { searchContactsByName } = await import('../memory/contacts.js');
+    const contacts = await searchContactsByName(clean);
+    if (contacts.length > 0) {
+      const top = contacts[0];
+      return {
+        jid: top.jid,
+        phone: top.jid.split('@')[0],
+        name: top.name || top.pushName || clean
+      };
+    }
+  } catch (err) {
+    logger.debug(`[JID RESOLVER] Erro ao buscar contacts por nome:`, err);
+  }
+
+  return null;
+}
+

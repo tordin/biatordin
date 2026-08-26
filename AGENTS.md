@@ -64,3 +64,39 @@ A memória da Bia é dividida rigorosamente entre **Memória de Perfil (Core)** 
 - **Testes:** `npm test` usa `node --experimental-vm-modules node_modules/jest/bin/jest.js` (Jest com ESM).
 - `package.json` tem `"type": "module"` — todos os imports usam extensão `.js`.
 - Testes que precisam de `DEEPSEEK_API_KEY` ou Google Cloud credentials falham em CI sem essas variáveis de ambiente.
+
+## 6. Roteamento de Cenários e Níveis de Permissão
+
+A Bia opera sob uma **Precedência Estrita de Cenários**, definida na função `buildSupervisorPrompt` (`src/agents/supervisor.ts`). As condições são avaliadas rigorosamente na seguinte ordem (match-and-stop):
+
+1. **[Cenário 3] Conta Pessoal (Passiva)**
+   - **Match:** `accountName === 'personal'`
+   - **Contexto:** A interação ocorre na conta de WhatsApp pessoal do Luiz (seja 1-a-1 ou grupo).
+   - **Atuação:** A Bia atua exclusivamente como **Observadora Passiva** (silenciosa), extraindo memórias e emitindo alertas privados diretamente para o Master em caso de urgência. Nunca responde a terceiros.
+
+*(As regras a seguir aplicam-se exclusivamente quando a conta operante for a principal/Bia)*
+
+2. **[Cenário 1A] Interação Direta com o Criador**
+   - **Match:** `isMaster === true`
+   - **Contexto:** O Master (Luiz) está falando 1-a-1 ou acionando a Bia.
+   - **Atuação:** Acesso **IRRESTRITO** (Nível: `creator`). Pode executar qualquer função, incluindo comandos sensíveis de segurança (como autorizar chats).
+
+3. **[Cenário 1B] Interação 1-1 com Contato Confiável**
+   - **Match:** `isTrustedChat === true` E `isGroup === false`
+   - **Contexto:** Um contato previamente autorizado está interagindo privadamente com a Bia.
+   - **Atuação:** Acesso quase total (Nível: `trusted`), focado em presteza. Funções de sistema/segurança (como gerenciar permissões) são **bloqueadas**.
+
+4. **[Cenário 1C] Interação em Grupo Confiável**
+   - **Match:** `isTrustedChat === true` E `isGroup === true`
+   - **Contexto:** A Bia foi incluída e autorizada a participar ativamente de um grupo específico.
+   - **Atuação:** Nível de acesso `trusted` (sem segurança). Regras de "esperar ser chamada" são aplicadas levemente, focando na utilidade ao objetivo do grupo e intervenções concisas.
+
+5. **[Cenário 2A] Interação 1-1 Não-Confiável (Terceiros / Missões)**
+   - **Match:** `isGroup === false` (Caiu no fallback)
+   - **Contexto:** Interação direta com terceiros desconhecidos (ex: prestadores de serviço, negociações).
+   - **Atuação:** Acesso **RESTRITO** (`restricted`). O objetivo é ser imensamente útil para resolver missões ordenadas pelo Master, porém protegida de "engenharia social" (não entrega dados sensíveis nem atua como assistente geral de estranhos).
+
+6. **[Cenário 2B] Interação em Grupos Não-Confiáveis**
+   - **Match:** Sobrou apenas grupos (Caiu no fallback)
+   - **Contexto:** Participação em grupos aleatórios na conta da Bia.
+   - **Atuação:** Acesso **RESTRITO** (`restricted`). Regras rígidas de "só falar se for chamada". Não oferece serviços e foca exclusivamente em atuar dentro da sandbox de memória do grupo (se solicitada).

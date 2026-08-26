@@ -1,6 +1,6 @@
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { RunnableConfig } from "@langchain/core/runnables";
-import { initWorkspaceTools, safeAgentNode } from "./base.js";
+import { initWorkspaceTools, safeAgentNode, registerAgentResetCallback } from "./base.js";
 import { modelFlash as model } from "../../llm/model.js";
 import { AgentState } from "../state.js";
 import { tool } from "@langchain/core/tools";
@@ -52,9 +52,13 @@ const createSpreadsheetTool = tool(
 
 let sheetsAgent: any = null;
 
+registerAgentResetCallback(() => {
+  sheetsAgent = null;
+});
+
 async function initSheetsAgent() {
+  const tools = await initWorkspaceTools();
   if (!sheetsAgent) {
-    const tools = await initWorkspaceTools();
     const messageModifier = tools.length > 0 
       ? SHEETS_PROMPT 
       : SHEETS_PROMPT + "\n\nAviso: As ferramentas do MCP falharam ao carregar. (Ferramentas nativas ainda estão disponíveis)";

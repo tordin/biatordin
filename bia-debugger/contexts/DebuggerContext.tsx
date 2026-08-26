@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Chat, Message, TraceNode } from '../lib/mockData';
 
 export type LogEvent = {
@@ -24,12 +24,17 @@ interface DebuggerContextData {
 const DebuggerContext = createContext<DebuggerContextData | undefined>(undefined);
 
 export function DebuggerProvider({ children }: { children: React.ReactNode }) {
-  // Start with mock data for visuals, but we will prepend real data
   const [chats, setChats] = useState<Chat[]>([]);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [traces, setTraces] = useState<Record<string, TraceNode[]>>({});
   const [inspectors, setInspectors] = useState<Record<string, any>>({});
   const [connected, setConnected] = useState(false);
+
+  // Synchronous in-memory store to prevent stale closure bugs during batch history processing
+  const chatsRef = useRef<Chat[]>([]);
+  const messagesRef = useRef<Record<string, Message[]>>({});
+  const tracesRef = useRef<Record<string, TraceNode[]>>({});
+  const inspectorsRef = useRef<Record<string, any>>({});
 
   useEffect(() => {
     let isMounted = true;
@@ -40,12 +45,12 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
     const activeLlmIds = new Map<string, string>();
     const llmNodeByRunId = new Map<string, string>();
     // Tool nodes: keyed por runId para que TOOL_END pareie corretamente mesmo com
-    // chamadas paralelas de ferramentas (antes, um slot por triggerId misturava os nós).
+    // chamadas paralelas de ferramentas.
     const activeToolIds = new Map<string, string>();
     const toolNodeByRunId = new Map<string, string>();
     const triggerChatIds = new Map<string, string>();
-    // Chat do Master, detectado via contextData.isTrustedChat nos eventos AGENT_START ou JIDs conhecidos.
-    // Usado para rotear mensagens de notify_master para a conversa correta.
+    const triggerSilenceReasons = new Map<string, string>();
+    // Chat do Master, detectado via contextData.chatJid nos eventos AGENT_START ou JIDs conhecidos.
     let masterChatId: string | null = null;
     const MASTER_JIDS = new Set(['5519997064504@s.whatsapp.net', '233070879867118@lid', 'Luiz']);
 
@@ -54,455 +59,732 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
       if (MASTER_JIDS.has(idOrName)) return true;
       if (idOrName.toLowerCase() === 'luiz') return true;
       if (masterChatId && idOrName === masterChatId) return true;
+      
+      // Strip account prefix (e.g., 'main_', 'personal_') and check again
+      const strippedId = idOrName.replace(/^(main|personal)_/, '');
+      if (MASTER_JIDS.has(strippedId)) return true;
+      
       return false;
     };
 
     const getCanonicalChatId = (chatId: string, senderName?: string, chatName?: string) => {
-      if (isMasterIdentifier(chatId) || isMasterIdentifier(senderName) || isMasterIdentifier(chatName)) {
+      if (!chatId || chatId === 'sistema' || chatId.startsWith('system_') || chatId === 'main_system' || chatId === 'main_new-chat' || chatId.endsWith('_new-chat')) {
+        return 'sistema';
+      }
+      if (isMasterIdentifier(chatId)) {
         return masterChatId || 'Luiz';
       }
       return chatId;
     };
 
-    const isRawJid = (val?: string) => !val || val.includes('@') || /^\d+$/.test(val);
+    const isRawJid = (val?: string) => !val || val.includes('@') || /^\d+$/.test(val) || /^(main|personal)_/.test(val);
 
     // Monotonic counter to avoid duplicate IDs when two events share the same ms timestamp
     let _nodeSeq = 0;
     const uniqueNodeId = (ts: string) => `${ts}-${++_nodeSeq}`;
 
-    // Garante que um chatId exista na lista de conversas. Necessário quando a Bia
-    // envia a primeira mensagem a um alvo/contato que ainda não tem conversa no sidebar
-    // (ex: start_mission/send_message_to_target para um número novo).
-    const upsertChat = (chatId: string, name: string, ts: string, lastMsgText?: string) => {
-      setChats(prev => {
-        const existingIdx = prev.findIndex(c => c.id === chatId);
-        const formattedTime = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const isMaster = isMasterIdentifier(chatId) || isMasterIdentifier(name);
-        const finalDisplayName = isMaster ? 'Luiz' : (name || chatId);
-
-        if (existingIdx >= 0) {
-          const current = prev[existingIdx];
-          const updatedName = (isRawJid(current.name) && !isRawJid(finalDisplayName)) ? finalDisplayName : current.name;
-          const updatedMsg = lastMsgText !== undefined ? lastMsgText : current.lastMessage;
-          const updated = { ...current, name: updatedName, time: formattedTime, lastMessage: updatedMsg };
-
-          const copy = [...prev];
-          copy.splice(existingIdx, 1);
-          return [updated, ...copy];
+    const formatInputBrief = (input: any): string => {
+      if (!input) return '';
+      let parsed = input;
+      if (typeof input === 'string') {
+        try {
+          parsed = JSON.parse(input);
+        } catch {
+          return input.length > 50 ? input.slice(0, 47) + '...' : input;
         }
+      }
+      if (typeof parsed === 'object' && parsed !== null) {
+        const keys = Object.keys(parsed).filter(k => k !== 'accountName');
+        if (keys.length === 0) return '';
+        const parts = keys.map(k => {
+          const val = typeof parsed[k] === 'string' ? `"${parsed[k]}"` : JSON.stringify(parsed[k]);
+          return `${k}: ${val}`;
+        });
+        const joined = parts.join(', ');
+        return joined.length > 60 ? joined.slice(0, 57) + '...' : joined;
+      }
+      return String(input);
+    };
 
-        return [{
+    const upsertChat = (chatId: string, name: string, ts: string, lastMsgText?: string, accountType?: 'main' | 'personal' | 'system', flush = true) => {
+      const prev = chatsRef.current;
+      const existingIdx = prev.findIndex(c => c.id === chatId);
+      const formattedTime = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      
+      let cleanName = (name || chatId);
+      cleanName = cleanName.replace(/ (📱|🤖)$/, '');
+      cleanName = cleanName.replace(/^(👑 |⚙️ |🔇 )/, '');
+
+      if (existingIdx >= 0) {
+          const currentName = prev[existingIdx].name.replace(/^(👑 |⚙️ |🔇 )/, '');
+          if (!isRawJid(currentName) && isRawJid(cleanName)) {
+              cleanName = currentName;
+          }
+      }
+
+      if (isRawJid(cleanName)) {
+          cleanName = cleanName.replace(/^(main|personal)_/, '');
+          if (cleanName.includes('_')) {
+             cleanName = cleanName.split('_').pop() || cleanName;
+          }
+          cleanName = cleanName.replace(/@s\.whatsapp\.net$/, '');
+          cleanName = cleanName.replace(/@g\.us$/, ' (Grupo)');
+          cleanName = cleanName.replace(/@lid$/, ' (LID)');
+          
+          if (/^55\d{10,11}$/.test(cleanName)) {
+              const isNine = cleanName.length === 13;
+              const ddd = cleanName.slice(2, 4);
+              const p1 = cleanName.slice(4, isNine ? 9 : 8);
+              const p2 = cleanName.slice(isNine ? 9 : 8);
+              cleanName = `+55 ${ddd} ${p1}-${p2}`;
+          }
+      }
+
+      const isMaster = isMasterIdentifier(chatId);
+      const isSystem = cleanName.toLowerCase().includes('sistema') || chatId.toLowerCase().includes('sistema') || accountType === 'system';
+      
+      let finalAccountType: 'main' | 'personal' | 'system' | 'master' | undefined = accountType;
+      if (isMaster) finalAccountType = 'master';
+      else if (isSystem) finalAccountType = 'system';
+
+      if (isMaster) cleanName = 'Luiz';
+
+      let prefix = '';
+      if (isMaster) {
+         prefix = '👑 ';
+      } else if (isSystem) {
+         prefix = '⚙️ ';
+      }
+
+      const finalDisplayName = `${prefix}${cleanName}`.trim();
+
+      if (existingIdx >= 0) {
+        const current = prev[existingIdx];
+        const updatedMsg = lastMsgText !== undefined ? lastMsgText : current.lastMessage;
+        const updatedType = finalAccountType || current.accountType;
+        const updated = { ...current, name: finalDisplayName, time: formattedTime, lastMessage: updatedMsg, accountType: updatedType };
+
+        const copy = [...prev];
+        copy.splice(existingIdx, 1);
+        chatsRef.current = [updated, ...copy];
+      } else {
+        chatsRef.current = [{
           id: chatId,
           name: finalDisplayName,
           lastMessage: lastMsgText || 'Nova interação...',
           time: formattedTime,
           unread: 0,
-          avatar: finalDisplayName.charAt(0).toUpperCase()
+          avatar: cleanName.charAt(0).toUpperCase(),
+          accountType: finalAccountType
         }, ...prev];
-      });
+      }
+
+      if (flush) {
+        setChats([...chatsRef.current]);
+      }
     };
     
-    function processLogEvent(log: LogEvent) {
-      const triggerId = log.triggerId || log.threadId || 'unknown-run';
+    function processLogEvent(log: LogEvent, flush = true) {
+      const triggerId = log.triggerId || log.threadId;
       
       // Handle TRIGGER (New Chat/Message)
-        if (log.event === 'TRIGGER') {
-          const rawChatId = log.data.chatJid || log.data.threadId || 'new-chat';
-          const senderName = log.data.senderName;
-          const chatNameRaw = log.data.chatName;
-          const chatId = getCanonicalChatId(rawChatId, senderName, chatNameRaw);
-          triggerChatIds.set(triggerId, chatId);
-
-          if (isMasterIdentifier(rawChatId) || isMasterIdentifier(senderName) || isMasterIdentifier(chatNameRaw)) {
-            if (!masterChatId) masterChatId = chatId;
-          }
-
-          const finalName = (chatNameRaw && chatNameRaw !== rawChatId) ? chatNameRaw : (senderName || chatId);
-          const msgContent = log.data.messageContent || 'Gatilho do sistema';
-
-          upsertChat(chatId, finalName, log.timestamp, msgContent);
-
-          setMessages(prev => {
-            const currentMsgs = prev[chatId] || [];
-            if (currentMsgs.some(m => m.runId === triggerId && m.sender === 'user')) {
-              return prev;
-            }
-            return {
-              ...prev,
-              [chatId]: [...currentMsgs, {
-                id: log.triggerId || Date.now().toString(),
-                chatId: chatId,
-                text: msgContent,
-                sender: 'user',
-                runId: triggerId,
-                time: new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
-              }]
-            };
-          });
-
-          setTraces(prev => {
-            const current = prev[triggerId] || [];
-            return {
-              ...prev,
-              [triggerId]: [...current, {
-                id: log.triggerId + '-trigger',
-                type: 'trigger',
-                title: `Gatilho: ${log.triggerType || 'Geral'}`,
-                subtitle: log.data.messageContent || 'Iniciando processamento...',
-                tint: 'green',
-                timestamp: log.timestamp
-              }]
-            };
-          });
-
-          setInspectors(prev => ({
-            ...prev,
-            [log.triggerId + '-trigger']: {
-              context: 'Gatilho Inicial da Conversa',
-              memory: 'N/A',
-              agentState: log.data,
-              modelOutput: {},
-              logs: `Payload recebido via ${log.triggerType || 'evento externo'}`
-            }
-          }));
+      if (log.event === 'TRIGGER') {
+        const effectiveTriggerId = log.triggerId || log.threadId || ('trigger-' + uniqueNodeId(log.timestamp));
+        const accountName = log.data.accountName || (log.data.threadId ? log.data.threadId.split('_')[0] : 'main');
+        const baseJid = log.data.chatJid || 'new-chat';
+        const rawChatId = `${accountName}_${baseJid}`;
+        
+        const senderName = log.data.senderName;
+        const senderJid = log.data.senderJid;
+        const chatNameRaw = log.data.chatName;
+        
+        const isSenderSystem = senderName?.toUpperCase() === 'SISTEMA';
+        const isSenderLuiz = isMasterIdentifier(senderJid) || isMasterIdentifier(senderName);
+        
+        let rawName = (chatNameRaw && chatNameRaw !== baseJid) ? chatNameRaw : baseJid;
+        if (!isSenderLuiz && !isSenderSystem && senderName && rawName === baseJid) {
+          rawName = senderName;
         }
 
-        // Handle AGENT_START
-        if (log.event === 'AGENT_START') {
-          const ctxData = log.data?.contextData;
-          if (ctxData?.isTrustedChat === true && ctxData?.chatJid) {
-            const canonical = getCanonicalChatId(ctxData.chatJid);
-            if (!masterChatId) masterChatId = canonical;
-          }
-          activeAgents.set(triggerId, {
-            name: log.agentName || 'Agent',
-            type: log.agentName === 'supervisor' ? 'supervisor' : 'agent',
-            tint: log.agentName === 'supervisor' ? 'purple' : 'orange',
-            state: log.data
-          });
+        const chatId = getCanonicalChatId(rawChatId, senderName, chatNameRaw);
+        triggerChatIds.set(effectiveTriggerId, chatId);
+
+        if (isMasterIdentifier(rawChatId)) {
+          if (!masterChatId) masterChatId = chatId;
+        }
+        
+        const rawTriggerType = log.triggerType || log.data?.triggerType;
+        const isCron = rawTriggerType === 'cron_routine' || (isSenderSystem && !!log.data?.routineId);
+        const isMission = rawTriggerType === 'mission' || log.data?.triggerType === 'mission';
+        const triggerType = rawTriggerType || (isCron ? 'cron_routine' : isSenderSystem ? 'system_inject' : 'whatsapp_message');
+        const isSystemTrigger = isCron || isMission || isSenderSystem || triggerType !== 'whatsapp_message';
+
+        let cleanMsgText = log.data.routinePrompt || log.data.messageContent || 'Gatilho do sistema';
+        cleanMsgText = cleanMsgText.replace(/^\[(Rotina Agendada|Missão Autônoma|Sistema)\]\s*/i, '');
+
+        upsertChat(chatId, rawName, log.timestamp, cleanMsgText, accountName as any, flush);
+
+        const currentMsgs = messagesRef.current[chatId] || [];
+        if (!currentMsgs.some(m => m.runId === effectiveTriggerId && (m.sender === 'user' || m.sender === 'system'))) {
+          messagesRef.current = {
+            ...messagesRef.current,
+            [chatId]: [...currentMsgs, {
+              id: log.triggerId || Date.now().toString(),
+              chatId: chatId,
+              text: cleanMsgText,
+              sender: isSystemTrigger ? 'system' : 'user',
+              runId: effectiveTriggerId,
+              time: new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+              triggerType,
+              routineId: log.data?.routineId,
+              isCron,
+              isMission
+            }]
+          };
+          if (flush) setMessages({ ...messagesRef.current });
         }
 
-        // Handle AGENT_DECISION
-        if (log.event === 'AGENT_DECISION') {
-          const llmNodeId = activeLlmIds.get(triggerId);
-          if (llmNodeId) {
-            setTraces(prev => {
-              const current = [...(prev[triggerId] || [])];
-              const nodeIdx = current.findIndex(n => n.id === llmNodeId);
-              if (nodeIdx >= 0) {
-                current[nodeIdx] = { ...current[nodeIdx], subtitle: `Decisão -> ${log.data.nextAgent || 'Concluído'}` };
+        const currentTraces = tracesRef.current[effectiveTriggerId] || [];
+        tracesRef.current = {
+          ...tracesRef.current,
+          [effectiveTriggerId]: [...currentTraces, {
+            id: (log.triggerId || effectiveTriggerId) + '-trigger',
+            type: 'trigger',
+            title: `Gatilho: ${log.triggerType || 'Geral'}`,
+            subtitle: log.data.messageContent || 'Iniciando processamento...',
+            tint: 'green',
+            timestamp: log.timestamp
+          }]
+        };
+
+        inspectorsRef.current = {
+          ...inspectorsRef.current,
+          [(log.triggerId || effectiveTriggerId) + '-trigger']: {
+            context: 'Gatilho Inicial da Conversa',
+            memory: 'N/A',
+            agentState: log.data,
+            modelOutput: {},
+            logs: `Payload recebido via ${log.triggerType || 'evento externo'}`
+          }
+        };
+
+        if (flush) {
+          setTraces({ ...tracesRef.current });
+          setInspectors({ ...inspectorsRef.current });
+        }
+      }
+
+      // Handle AGENT_START
+      if (log.event === 'AGENT_START') {
+        if (!triggerId) return;
+        const ctxData = log.data?.contextData;
+        if (ctxData?.chatJid && isMasterIdentifier(ctxData.chatJid)) {
+          const canonical = getCanonicalChatId(ctxData.chatJid);
+          if (!masterChatId) masterChatId = canonical;
+        }
+        const isSupervisor = log.agentName === 'supervisor';
+        const isEvaluator = log.agentName === 'evaluator' || log.agentName === 'critic' || log.agentName === 'evaluatorNode';
+        activeAgents.set(triggerId, {
+          name: isEvaluator ? 'evaluator' : (log.agentName || 'Agent'),
+          type: isSupervisor ? 'supervisor' : isEvaluator ? 'evaluator' : 'agent',
+          tint: isSupervisor ? 'purple' : isEvaluator ? 'cyan' : 'orange',
+          state: log.data
+        });
+      }
+
+      // Handle AGENT_DECISION
+      if (log.event === 'AGENT_DECISION') {
+        if (!triggerId) return;
+        if (log.data?.reason) {
+          triggerSilenceReasons.set(triggerId, log.data.reason);
+          let changed = false;
+          const nextMsgsState: Record<string, Message[]> = {};
+          for (const [cId, msgs] of Object.entries(messagesRef.current)) {
+            nextMsgsState[cId] = msgs.map(m => {
+              if (m.runId === triggerId && m.isSilent && !m.silenceReason) {
+                changed = true;
+                return { ...m, silenceReason: log.data.reason };
               }
-              return { ...prev, [triggerId]: current };
+              return m;
             });
-
-            setInspectors(prev => {
-               const existing = prev[llmNodeId];
-               if (!existing) return prev;
-               return {
-                 ...prev,
-                 [llmNodeId]: {
-                   ...existing,
-                   modelOutput: log.data, 
-                   logs: (existing.logs || '') + `\n[INFO] Decisão processada.`
-                 }
-               };
-            });
+          }
+          if (changed) {
+            messagesRef.current = nextMsgsState;
+            if (flush) setMessages({ ...messagesRef.current });
           }
         }
 
-        // Handle LLM_START
-        // LangChain dispara handleChatModelStart E handleLLMStart para a mesma chamada,
-        // produzindo dois eventos com o mesmo runId. Deduplicamos pelo runId; para
-        // eventos legados (sem runId) mantemos a checagem por timestamp.
-        if (log.event === 'LLM_START') {
-          const runId = log.data?.runId;
-          const existingLlmByRunId = runId ? llmNodeByRunId.get(runId) : undefined;
-          if (existingLlmByRunId) {
-            // Evento gêmeo: mescla dados complementares no inspector em vez de criar
-            // um segundo nó no trace (messages do chat-model + prompts do LLM).
-            setInspectors(prev => {
-              const existing = prev[existingLlmByRunId];
-              if (!existing) return prev;
-              const updated: any = { ...existing };
-              if (log.data.messages && Array.isArray(log.data.messages)) updated.llmMessages = log.data.messages;
-              if (log.data.prompts && Array.isArray(log.data.prompts) && !updated.context) updated.context = log.data.prompts.join('\n');
-              return { ...prev, [existingLlmByRunId]: updated };
-            });
+        const llmNodeId = activeLlmIds.get(triggerId);
+        if (llmNodeId) {
+          const agentInfo = activeAgents.get(triggerId);
+          const isEvaluator = agentInfo?.name === 'evaluator' || agentInfo?.type === 'evaluator';
+
+          const current = [...(tracesRef.current[triggerId] || [])];
+          const nodeIdx = current.findIndex(n => n.id === llmNodeId);
+          if (nodeIdx >= 0) {
+            const decisionText = isEvaluator
+              ? `Veredito -> ${log.data.verdict === 'PASS' ? 'PASS (Aprovado)' : log.data.verdict || log.data.nextAgent || 'Concluído'}`
+              : `Decisão -> ${log.data.nextAgent || 'Concluído'}`;
+            current[nodeIdx] = { ...current[nodeIdx], subtitle: decisionText };
+            tracesRef.current = { ...tracesRef.current, [triggerId]: current };
+            if (flush) setTraces({ ...tracesRef.current });
+          }
+
+          const existingInspector = inspectorsRef.current[llmNodeId];
+          if (existingInspector) {
+            inspectorsRef.current = {
+              ...inspectorsRef.current,
+              [llmNodeId]: {
+                ...existingInspector,
+                modelOutput: log.data, 
+                logs: (existingInspector.logs || '') + `\n[INFO] ${isEvaluator ? 'Veredito' : 'Decisão'} processado(a).`
+              }
+            };
+            if (flush) setInspectors({ ...inspectorsRef.current });
+          }
+        }
+      }
+
+      // Handle LLM_START
+      if (log.event === 'LLM_START') {
+        if (!triggerId) return;
+        const runId = log.data?.runId;
+        const agentInfo = activeAgents.get(triggerId) || { name: 'Agent', type: 'agent', tint: 'orange', state: {} };
+        
+        const rawAgentName = log.agentName || agentInfo.name;
+        const isEvaluator = rawAgentName === 'evaluator' || rawAgentName === 'critic' || rawAgentName === 'evaluatorNode';
+        const isSupervisor = !isEvaluator && (rawAgentName === 'supervisor' || agentInfo.type === 'supervisor');
+        const agentDisplayName = (rawAgentName === 'graph' && agentInfo.name && agentInfo.name !== 'Agent')
+          ? agentInfo.name
+          : rawAgentName;
+
+        const llmTitle = isSupervisor 
+          ? 'Supervisora (Decisão)' 
+          : isEvaluator
+          ? 'Avaliador de Qualidade (Critic)'
+          : `${agentDisplayName || 'Agente'} (Raciocínio)`;
+
+        const llmSubtitle = isSupervisor
+          ? 'Decisão (LLM)'
+          : isEvaluator
+          ? 'Auditoria & Controle de Qualidade'
+          : 'Raciocínio do Especialista';
+
+        const nodeType = isSupervisor ? 'supervisor' : isEvaluator ? 'evaluator' : (agentInfo.type as any);
+        const nodeTint = isSupervisor ? 'purple' : isEvaluator ? 'cyan' : (agentInfo.tint as any);
+
+        // 1. Checagem por runId exato
+        let targetLlmNodeId = runId ? llmNodeByRunId.get(runId) : undefined;
+
+        // 2. Se não encontrou por runId, verifica se a última etapa LLM ativa deste trigger ainda está aguardando saída
+        if (!targetLlmNodeId) {
+          const activeId = activeLlmIds.get(triggerId);
+          if (activeId) {
+            const activeInspector = inspectorsRef.current[activeId];
+            const isWaitingOutput = !activeInspector || !activeInspector.modelOutput || Object.keys(activeInspector.modelOutput).length === 0;
+            if (isWaitingOutput) {
+              targetLlmNodeId = activeId;
+            }
+          }
+        }
+
+        if (targetLlmNodeId) {
+          // Reaproveita o nó LLM ativo existente (evita nó duplicado sem saída)
+          if (runId) llmNodeByRunId.set(runId, targetLlmNodeId);
+
+          const current = [...(tracesRef.current[triggerId] || [])];
+          const idx = current.findIndex(n => n.id === targetLlmNodeId);
+          if (idx >= 0) {
+            current[idx] = {
+              ...current[idx],
+              type: nodeType,
+              title: llmTitle,
+              subtitle: current[idx].subtitle || llmSubtitle,
+              agentName: isEvaluator ? 'evaluator' : agentDisplayName,
+              tint: nodeTint
+            };
+            tracesRef.current = { ...tracesRef.current, [triggerId]: current };
+            if (flush) setTraces({ ...tracesRef.current });
+          }
+
+          const existingInspector = inspectorsRef.current[targetLlmNodeId] || {};
+          const updated: any = { ...existingInspector };
+          if (log.data.messages && Array.isArray(log.data.messages)) updated.llmMessages = log.data.messages;
+          if (log.data.prompts && Array.isArray(log.data.prompts) && !updated.context) updated.context = log.data.prompts.join('\n');
+          inspectorsRef.current = { ...inspectorsRef.current, [targetLlmNodeId]: updated };
+          if (flush) setInspectors({ ...inspectorsRef.current });
+          return;
+        }
+
+        // Se for uma nova chamada legítima (após o término da anterior)
+        const llmNodeId = uniqueNodeId(log.timestamp);
+        if (runId) llmNodeByRunId.set(runId, llmNodeId);
+        activeLlmIds.set(triggerId, llmNodeId);
+
+        const current = tracesRef.current[triggerId] || [];
+        tracesRef.current = {
+          ...tracesRef.current,
+          [triggerId]: [...current, {
+            id: llmNodeId,
+            type: nodeType,
+            title: llmTitle,
+            subtitle: llmSubtitle,
+            agentName: isEvaluator ? 'evaluator' : agentDisplayName,
+            tint: nodeTint,
+            isLlmStep: true,
+            timestamp: log.timestamp
+          }]
+        };
+
+        let systemPrompt = '';
+        let memory = '';
+        if (log.data.messages && Array.isArray(log.data.messages)) {
+          const sysMsg = log.data.messages.find((m: any) => m.role === 'SYSTEM');
+          if (sysMsg) {
+            systemPrompt = sysMsg.content;
+            const memoryMatch = systemPrompt.match(/<core_memory>([\s\S]*?)<\/core_memory>/);
+            if (memoryMatch) {
+               memory = memoryMatch[1].trim();
+               systemPrompt = systemPrompt.replace(/<core_memory>[\s\S]*?<\/core_memory>/, '').trim();
+            }
+          }
+        }
+        
+        inspectorsRef.current = {
+          ...inspectorsRef.current,
+          [llmNodeId]: {
+            context: systemPrompt || 'N/A',
+            memory: memory || 'N/A',
+            agentState: agentInfo.state,
+            llmMessages: log.data.messages || [],
+            modelOutput: {},
+            logs: `[INFO] LLM_START iniciado.`
+          }
+        };
+
+        if (flush) {
+          setTraces({ ...tracesRef.current });
+          setInspectors({ ...inspectorsRef.current });
+        }
+      }
+
+      // Handle LLM_END
+      if (log.event === 'LLM_END') {
+        if (!triggerId) return;
+        const runId = log.data?.runId;
+        const llmNodeId = runId ? llmNodeByRunId.get(runId) : activeLlmIds.get(triggerId);
+        if (llmNodeId) {
+          const current = [...(tracesRef.current[triggerId] || [])];
+          const nodeIdx = current.findIndex(n => n.id === llmNodeId);
+          if (nodeIdx >= 0) {
+            // Only update subtitle if not already customized by decision
+            if (!current[nodeIdx].subtitle || current[nodeIdx].subtitle.includes('Raciocínio') || current[nodeIdx].subtitle.includes('Decisão (LLM)')) {
+              current[nodeIdx] = { ...current[nodeIdx], subtitle: 'Resposta / Plano gerado' };
+            }
+            tracesRef.current = { ...tracesRef.current, [triggerId]: current };
+            if (flush) setTraces({ ...tracesRef.current });
+          }
+
+          const existingInspector = inspectorsRef.current[llmNodeId];
+          if (existingInspector) {
+            inspectorsRef.current = {
+              ...inspectorsRef.current,
+              [llmNodeId]: {
+                ...existingInspector,
+                modelOutput: log.data.generations || existingInspector.modelOutput,
+              }
+            };
+            if (flush) setInspectors({ ...inspectorsRef.current });
+          }
+        }
+      }
+
+      // Handle TOOL_START
+      if (log.event === 'TOOL_START') {
+        if (!triggerId) return;
+        const toolNodeId = uniqueNodeId(log.timestamp);
+        const toolRunId = log.data?.runId;
+        if (toolRunId) toolNodeByRunId.set(toolRunId, toolNodeId);
+        activeToolIds.set(triggerId, toolNodeId);
+
+        const agentInfo = activeAgents.get(triggerId) || { name: 'Agent', type: 'agent', tint: 'orange', state: {} };
+        const briefInput = formatInputBrief(log.data.input);
+        const toolSubtitle = briefInput 
+          ? `${agentInfo.name} • ${briefInput}` 
+          : `${agentInfo.name} • Executando ferramenta`;
+        
+        const current = tracesRef.current[triggerId] || [];
+        tracesRef.current = {
+          ...tracesRef.current,
+          [triggerId]: [...current, {
+            id: toolNodeId,
+            type: 'tool' as any,
+            title: log.data.toolName,
+            subtitle: toolSubtitle,
+            agentName: agentInfo.name,
+            tint: agentInfo.tint as any,
+            isToolStep: true,
+            toolDetails: {
+              name: log.data.toolName,
+              input: typeof log.data.input === 'string' ? log.data.input : JSON.stringify(log.data.input),
+              rawOutput: 'Executando...'
+            },
+            timestamp: log.timestamp
+          }]
+        };
+
+        inspectorsRef.current = {
+          ...inspectorsRef.current,
+          [toolNodeId]: {
+            context: 'N/A',
+            memory: 'N/A',
+            agentState: agentInfo.state,
+            modelOutput: {},
+            logs: `[INFO] Iniciando ferramenta ${log.data.toolName}`,
+            toolDetails: {
+              name: log.data.toolName,
+              input: typeof log.data.input === 'string' ? log.data.input : JSON.stringify(log.data.input),
+              rawOutput: 'Executando...'
+            }
+          }
+        };
+
+        if (flush) {
+          setTraces({ ...tracesRef.current });
+          setInspectors({ ...inspectorsRef.current });
+        }
+      }
+
+      // Handle TOOL_END
+      if (log.event === 'TOOL_END') {
+        if (!triggerId) return;
+        const toolRunId = log.data?.runId;
+        const toolNodeId = toolRunId ? toolNodeByRunId.get(toolRunId) : activeToolIds.get(triggerId);
+        if (toolNodeId) {
+          const isError = log.data?.isError === true || (typeof log.data?.output === 'string' && log.data.output.startsWith('Error:'));
+          const outputStr = typeof log.data?.output === 'string' ? log.data.output : JSON.stringify(log.data?.output || '');
+
+          const current = [...(tracesRef.current[triggerId] || [])];
+          const nodeIdx = current.findIndex(n => n.id === toolNodeId);
+          if (nodeIdx >= 0) {
+            const node = current[nodeIdx];
+            current[nodeIdx] = {
+              ...node,
+              tint: isError ? 'red' : node.tint,
+              isErrorStep: isError ? true : node.isErrorStep,
+              toolDetails: node.toolDetails ? { ...node.toolDetails, rawOutput: outputStr } : undefined
+            };
+            tracesRef.current = { ...tracesRef.current, [triggerId]: current };
+            if (flush) setTraces({ ...tracesRef.current });
+          }
+
+          const existing = inspectorsRef.current[toolNodeId];
+          if (existing) {
+            inspectorsRef.current = {
+              ...inspectorsRef.current,
+              [toolNodeId]: {
+                ...existing,
+                logs: existing.logs + (isError ? `\n[ERROR] Falha na ferramenta: ${outputStr}` : '\n[INFO] Ferramenta concluída.'),
+                toolDetails: existing.toolDetails ? { ...existing.toolDetails, rawOutput: outputStr } : undefined
+              }
+            };
+            if (flush) setInspectors({ ...inspectorsRef.current });
+          }
+        }
+      }
+
+      // Handle ERROR
+      if (log.event === 'ERROR') {
+        if (!triggerId) return; // Do not pollute conversation traces with orphan global errors
+        const errorMsg = log.data?.message || 'Erro durante a execução';
+        const errorArgs = log.data?.args ? (Array.isArray(log.data.args) ? log.data.args.join(' ') : String(log.data.args)) : '';
+        const fullErr = errorArgs ? `${errorMsg}: ${errorArgs}` : errorMsg;
+        const errorNodeId = uniqueNodeId(log.timestamp);
+        
+        const current = tracesRef.current[triggerId] || [];
+        tracesRef.current = {
+          ...tracesRef.current,
+          [triggerId]: [...current, {
+            id: errorNodeId,
+            type: 'error' as any,
+            title: 'Alerta / Erro de Execução',
+            subtitle: fullErr,
+            tint: 'red' as any,
+            isErrorStep: true,
+            timestamp: log.timestamp
+          }]
+        };
+
+        inspectorsRef.current = {
+          ...inspectorsRef.current,
+          [errorNodeId]: {
+            context: 'Falha ou Limite de Execução Detectado',
+            memory: 'N/A',
+            agentState: log.data,
+            modelOutput: {},
+            logs: `[ERROR] ${fullErr}`
+          }
+        };
+
+        if (flush) {
+          setTraces({ ...tracesRef.current });
+          setInspectors({ ...inspectorsRef.current });
+        }
+      }
+
+      // Handle TRIGGER_END
+      if (log.event === 'TRIGGER_END') {
+        if (!triggerId) return;
+        const accountName = log.data.accountName || (log.data.threadId ? log.data.threadId.split('_')[0] : 'main');
+        const baseJid = log.data.chatJid || 'new-chat';
+        const rawChatId = `${accountName}_${baseJid}`;
+        const chatId = triggerChatIds.get(triggerId) || getCanonicalChatId(rawChatId, log.data.senderName, log.data.chatName);
+        const isError = log.data.status === 'error' || !!log.data.error;
+        const isSilent = !log.data.responseText && !isError;
+        const text = log.data.responseText || (isError ? '[Erro na Execução]' : 'Silêncio');
+        const silenceReason = isSilent ? (log.data.reason || (triggerId ? triggerSilenceReasons.get(triggerId) : undefined)) : undefined;
+
+        const currentMsgs = messagesRef.current[chatId] || [];
+        
+        if (!isSilent && !isError) {
+            // The actual text message is handled by OUTBOUND_MESSAGE
             return;
-          }
-          const existingLlmId = activeLlmIds.get(triggerId);
-          if (!runId && existingLlmId && existingLlmId.startsWith(log.timestamp)) {
-            // Duplicate event (legado, sem runId) — skip
-            return;
-          }
-          const llmNodeId = uniqueNodeId(log.timestamp);
-          if (runId) llmNodeByRunId.set(runId, llmNodeId);
-          activeLlmIds.set(triggerId, llmNodeId);
-          
-          const agentInfo = activeAgents.get(triggerId) || { name: 'Agent', type: 'agent', tint: 'orange', state: {} };
-          
-          setTraces(prev => {
-            const current = prev[triggerId] || [];
-            return {
-              ...prev,
-              [triggerId]: [...current, {
-                id: llmNodeId,
-                type: agentInfo.type as any,
-                title: agentInfo.name,
-                subtitle: `Avaliação (LLM)`,
-                tint: agentInfo.tint as any,
-                isLlmStep: true,
-                timestamp: log.timestamp
-              }]
-            };
-          });
-
-          let systemPrompt = '';
-          let memory = '';
-          if (log.data.messages && Array.isArray(log.data.messages)) {
-            const sysMsg = log.data.messages.find((m: any) => m.role === 'SYSTEM');
-            if (sysMsg) {
-              systemPrompt = sysMsg.content;
-              const memoryMatch = systemPrompt.match(/<core_memory>([\s\S]*?)<\/core_memory>/);
-              if (memoryMatch) {
-                 memory = memoryMatch[1].trim();
-                 systemPrompt = systemPrompt.replace(/<core_memory>[\s\S]*?<\/core_memory>/, '').trim();
-              }
+        }
+        
+        if (isSilent) {
+            const sentAnywhere = Object.values(messagesRef.current).some(msgs => msgs.some(m => m.runId === triggerId && !m.isSilent && !m.isError && m.sender === 'bia'));
+            if (sentAnywhere) {
+                return;
             }
-          }
-          
-          setInspectors(prev => ({
-             ...prev,
-             [llmNodeId]: {
-               context: systemPrompt || 'N/A',
-               memory: memory || 'N/A',
-               agentState: agentInfo.state,
-               llmMessages: log.data.messages || [],
-               modelOutput: {},
-               logs: `[INFO] LLM_START iniciado.`
-             }
-          }));
         }
 
-        // Handle LLM_END
-        if (log.event === 'LLM_END') {
-          const runId = log.data?.runId;
-          const llmNodeId = runId ? llmNodeByRunId.get(runId) : activeLlmIds.get(triggerId);
-          if (llmNodeId) {
-            setTraces(prev => {
-              const current = [...(prev[triggerId] || [])];
-              const nodeIdx = current.findIndex(n => n.id === llmNodeId);
-              if (nodeIdx >= 0) {
-                current[nodeIdx] = { ...current[nodeIdx], subtitle: 'Resposta recebida' };
-              }
-              return { ...prev, [triggerId]: current };
-            });
+        messagesRef.current = {
+          ...messagesRef.current,
+          [chatId]: [...currentMsgs, {
+            id: (log.triggerId || triggerId) + '-end',
+            chatId: chatId,
+            text: text,
+            sender: 'bia',
+            runId: triggerId,
+            time: new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+            isSilent,
+            isError,
+            silenceReason
+          }]
+        };
 
-            setInspectors(prev => {
-               const existing = prev[llmNodeId];
-               if (!existing) return prev;
-               return {
-                 ...prev,
-                 [llmNodeId]: {
-                   ...existing,
-                   modelOutput: log.data.generations || existing.modelOutput,
-                 }
-               };
-            });
+        if (flush) {
+          setMessages({ ...messagesRef.current });
+        }
+      }
+
+      // Handle OUTBOUND_MESSAGE
+      if (log.event === 'OUTBOUND_MESSAGE') {
+        const isStandalone = !triggerId;
+        const effectiveTriggerId = triggerId || ('DIR_' + (log.timestamp ? new Date(log.timestamp).getTime().toString(16).slice(-6).toUpperCase() : Math.random().toString(16).slice(2, 8).toUpperCase()));
+        let accountName = log.threadId ? log.threadId.split('_')[0] : 'main';
+        const triggerChatId = log.triggerId ? triggerChatIds.get(log.triggerId) : undefined;
+        
+        if (!['main', 'personal', 'system'].includes(accountName)) {
+          if (triggerChatId) {
+            if (triggerChatId.startsWith('personal_')) accountName = 'personal';
+            else if (triggerChatId.startsWith('main_')) accountName = 'main';
+            else if (triggerChatId.startsWith('system_')) accountName = 'system';
+            else accountName = 'main';
+          } else {
+            accountName = 'main';
           }
         }
-
-        // Handle TOOL_START
-        if (log.event === 'TOOL_START') {
-          const toolNodeId = uniqueNodeId(log.timestamp);
-          const toolRunId = log.data?.runId;
-          if (toolRunId) toolNodeByRunId.set(toolRunId, toolNodeId);
-          activeToolIds.set(triggerId, toolNodeId);
-
-
-          const agentInfo = activeAgents.get(triggerId) || { name: 'Agent', type: 'agent', tint: 'orange', state: {} };
+        
+        const baseJid = log.data.chatJid || 'new-chat';
+        const rawChatId = `${accountName}_${baseJid}`;
+        
+        if (rawChatId) {
+          const chatId = triggerChatId || getCanonicalChatId(rawChatId);
+          upsertChat(chatId, rawChatId, log.timestamp, log.data.text, accountName as any, flush);
           
-          setTraces(prev => {
-            const current = prev[triggerId] || [];
-            return {
-              ...prev,
-              [triggerId]: [...current, {
-                id: toolNodeId,
-                type: agentInfo.type as any,
-                title: agentInfo.name,
-                subtitle: `Ferramenta: ${log.data.toolName}`,
-                tint: agentInfo.tint as any,
-                isToolStep: true,
-                toolDetails: {
-                  name: log.data.toolName,
-                  input: log.data.input,
-                  rawOutput: 'Executando...'
-                },
-                timestamp: log.timestamp
-              }]
-            };
-          });
-
-          setInspectors(prev => ({
-            ...prev,
-            [toolNodeId]: {
-              context: 'N/A',
-              memory: 'N/A',
-              agentState: agentInfo.state,
-              modelOutput: {},
-              logs: `[INFO] Iniciando ferramenta ${log.data.toolName}`,
-              toolDetails: {
-                name: log.data.toolName,
-                input: log.data.input,
-                rawOutput: 'Executando...'
-              }
-            }
-          }));
-        }
-
-        // Handle TOOL_END
-        if (log.event === 'TOOL_END') {
-          const toolRunId = log.data?.runId;
-          const toolNodeId = toolRunId ? toolNodeByRunId.get(toolRunId) : activeToolIds.get(triggerId);
-          if (toolNodeId) {
-            setTraces(prev => {
-              const current = [...(prev[triggerId] || [])];
-              const nodeIdx = current.findIndex(n => n.id === toolNodeId);
-              if (nodeIdx >= 0) {
-                const node = current[nodeIdx];
-                current[nodeIdx] = {
-                  ...node,
-                  subtitle: 'Concluído',
-                  toolDetails: node.toolDetails ? { ...node.toolDetails, rawOutput: log.data.output } : undefined
-                };
-              }
-              return { ...prev, [triggerId]: current };
-            });
-
-            setInspectors(prev => {
-              const existing = prev[toolNodeId];
-              if (!existing) return prev;
-              return {
-                ...prev,
-                [toolNodeId]: {
-                  ...existing,
-                  logs: existing.logs + '\n[INFO] Ferramenta concluída.',
-                  toolDetails: existing.toolDetails ? { ...existing.toolDetails, rawOutput: log.data.output } : undefined
-                }
-              };
-            });
-          }
-        }
-
-        // Handle TRIGGER_END
-        if (log.event === 'TRIGGER_END') {
-          const rawChatId = log.data.chatJid || log.data.threadId || 'new-chat';
-          const chatId = triggerChatIds.get(triggerId) || getCanonicalChatId(rawChatId, log.data.senderName, log.data.chatName);
-          const isError = log.data.status === 'error' || !!log.data.error;
-          const isSilent = !log.data.responseText && !isError;
-          const text = log.data.responseText || (isError ? '[Erro na Execução]' : 'Silêncio');
-
-          setMessages(prev => {
-            const currentMsgs = prev[chatId] || [];
-            
-            if (!isSilent && !isError) {
-                // Ignore. The actual text message is handled by OUTBOUND_MESSAGE
-                return prev;
-            }
-            
-            if (isSilent) {
-                const sentAnywhere = Object.values(prev).some(msgs => msgs.some(m => m.runId === triggerId && !m.isSilent && !m.isError && m.sender === 'bia'));
-                if (sentAnywhere) {
-                    return prev;
-                }
-            }
-
-            return {
-              ...prev,
+          const currentMsgs = messagesRef.current[chatId] || [];
+          if (!currentMsgs.some(m => m.runId === effectiveTriggerId && m.text === log.data.text && m.sender === 'bia')) {
+            messagesRef.current = {
+              ...messagesRef.current,
               [chatId]: [...currentMsgs, {
-                id: log.triggerId + '-end',
+                id: uniqueNodeId(log.timestamp) + '-outbound',
                 chatId: chatId,
-                text: text,
+                text: log.data.text || '',
                 sender: 'bia',
-                runId: triggerId,
+                runId: effectiveTriggerId,
                 time: new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-                isSilent,
-                isError
+                isSilent: false,
+                isError: false
               }]
             };
-          });
+            if (flush) setMessages({ ...messagesRef.current });
+          }
 
-          setTraces(prev => {
-            const current = prev[triggerId] || [];
-            return {
-              ...prev,
-              [triggerId]: [...current, {
-                id: log.triggerId + '-output',
-                type: 'output',
-                title: 'Saída Final',
-                subtitle: log.data.responseText ? 'Mensagem enviada' : 'Ação concluída',
-                tint: 'green',
-                timestamp: log.timestamp
-              }]
+          const outboundNodeId = uniqueNodeId(log.timestamp) + '-trace-outbound';
+          const textSnippet = log.data.text 
+            ? ` • "${log.data.text.slice(0, 45).replace(/\n/g, ' ')}${log.data.text.length > 45 ? '...' : ''}"` 
+            : '';
+
+          const current = tracesRef.current[effectiveTriggerId] || [];
+          const newTraceNodes = [...current];
+
+          if (isStandalone && newTraceNodes.length === 0) {
+            const triggerNodeId = `${effectiveTriggerId}-trigger`;
+            newTraceNodes.push({
+              id: triggerNodeId,
+              type: 'trigger',
+              title: 'Gatilho: Notificação Direta',
+              subtitle: 'Disparo direto de mensagem',
+              tint: 'green',
+              timestamp: log.timestamp
+            });
+            inspectorsRef.current = {
+              ...inspectorsRef.current,
+              [triggerNodeId]: {
+                context: 'Notificação Direta',
+                memory: 'N/A',
+                agentState: log.data,
+                modelOutput: {},
+                logs: `Disparo direto emitido em ${log.timestamp}`
+              }
             };
+          }
+
+          newTraceNodes.push({
+            id: outboundNodeId,
+            type: 'output',
+            title: 'Envio de Mensagem',
+            subtitle: `Para: ${chatId.split('@')[0]}${textSnippet}`,
+            tint: 'green',
+            timestamp: log.timestamp
           });
 
-          setInspectors(prev => ({
-            ...prev,
-            [log.triggerId + '-output']: {
-              context: 'Finalização do ciclo',
+          tracesRef.current = {
+            ...tracesRef.current,
+            [effectiveTriggerId]: newTraceNodes
+          };
+
+          inspectorsRef.current = {
+            ...inspectorsRef.current,
+            [outboundNodeId]: {
+              context: 'Mensagem enviada ao usuário/destinatário',
               memory: 'N/A',
+              outboundText: log.data.text || '',
+              recipient: chatId,
+              accountName: accountName,
               agentState: log.data,
               modelOutput: {},
-              logs: `Tempo de duração: ${log.data.durationMs ? log.data.durationMs + 'ms' : 'N/A'}`
+              logs: `[INFO] Mensagem enviada com sucesso para ${chatId} (${baseJid})`
             }
-          }));
-        }
+          };
 
-
-        // Handle OUTBOUND_MESSAGE
-        if (log.event === 'OUTBOUND_MESSAGE') {
-          const rawChatId = log.data.chatJid;
-          if (rawChatId) {
-            const chatId = getCanonicalChatId(rawChatId);
-            upsertChat(chatId, rawChatId, log.timestamp, log.data.text);
-            
-            setMessages(prev => {
-              const currentMsgs = prev[chatId] || [];
-              if (currentMsgs.some(m => m.runId === triggerId && m.text === log.data.text && m.sender === 'bia')) {
-                return prev;
-              }
-              return {
-                ...prev,
-                [chatId]: [...currentMsgs, {
-                  id: uniqueNodeId(log.timestamp) + '-outbound',
-                  chatId: chatId,
-                  text: log.data.text || '',
-                  sender: 'bia',
-                  runId: triggerId,
-                  time: new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-                  isSilent: false,
-                  isError: false
-                }]
-              };
-            });
-
-            setTraces(prev => {
-              const current = prev[triggerId] || [];
-              return {
-                ...prev,
-                [triggerId]: [...current, {
-                  id: uniqueNodeId(log.timestamp) + '-trace-outbound',
-                  type: 'output',
-                  title: 'Envio de Mensagem',
-                  subtitle: `Para: ${chatId.split('@')[0]}`,
-                  tint: 'green',
-                  timestamp: log.timestamp
-                }]
-              };
-            });
+          if (flush) {
+            setTraces({ ...tracesRef.current });
+            setInspectors({ ...inspectorsRef.current });
           }
         }
+      }
 
       // Handle DB Logs
       if (log.event === 'DB_QUERY') {
@@ -516,8 +798,14 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
         if (!isMounted) return;
         if (data.events && Array.isArray(data.events)) {
           data.events.forEach((evt: any) => {
-            if (evt) processLogEvent(evt as LogEvent);
+            if (evt) processLogEvent(evt as LogEvent, false);
           });
+
+          // Single batch commit to React state after processing all historical events
+          setChats([...chatsRef.current]);
+          setMessages({ ...messagesRef.current });
+          setTraces({ ...tracesRef.current });
+          setInspectors({ ...inspectorsRef.current });
         }
         
         // Connect to SSE only after history is processed
@@ -529,7 +817,7 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
           try {
             const rawLog = JSON.parse(e.data);
             if (rawLog.type === 'CONNECTED') return;
-            processLogEvent(rawLog as LogEvent);
+            processLogEvent(rawLog as LogEvent, true);
           } catch (err) {
             console.error('Error parsing SSE event', err);
           }

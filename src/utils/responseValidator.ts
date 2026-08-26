@@ -11,6 +11,26 @@ const CLAIM_AGENT_MAP: Array<{ pattern: RegExp; requiredAgents: string[]; claimD
     claimDescription: "envio de mensagem",
   },
   {
+    pattern: /(?:mandei|enviei|disparei)\s+(?:o\s+)?(?:e-?mails?|gmail)/i,
+    requiredAgents: ["gmailAgent"],
+    claimDescription: "envio de e-mail",
+  },
+  {
+    pattern: /(?:criei|adicionei|anotei|salvei)\s+(?:a\s+)?(?:tarefa|item|afazer)/i,
+    requiredAgents: ["taskAgent"],
+    claimDescription: "criação de tarefa",
+  },
+  {
+    pattern: /(?:criei|agendei|configurei)\s+(?:o\s+)?(?:lembrete|rotina|alarme)/i,
+    requiredAgents: ["routineAgent"],
+    claimDescription: "criação de rotina/lembrete",
+  },
+  {
+    pattern: /(?:agendei|marquei|criei)\s+(?:a\s+)?(?:reuni[ãa]o|compromisso|evento|na agenda)/i,
+    requiredAgents: ["calendarAgent"],
+    claimDescription: "agendamento na agenda",
+  },
+  {
     pattern: /(?:j[áa]\s+)?(?:pesquisei|busquei|procurei)(?:\s+(?:na\s+)?(?:web|internet|google))?/i,
     requiredAgents: ["searchAgent"],
     claimDescription: "busca na web",

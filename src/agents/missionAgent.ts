@@ -8,58 +8,99 @@ import { AgentState } from "./state.js";
 import { logger } from "../utils/logger.js";
 import { getSkill } from "../skills/registry.js";
 import { saveMission, getRecentMissionsForMaster, getRecentMissionsByTarget, completeMission, getActiveMissionsForTarget, updateMissionNotes, findActiveMission } from "../memory/missions.js";
+import { saveFollowUp, getFollowUps, resolveFollowUp } from "../memory/followUps.js";
 import { sendDirectMessage, notifyMaster } from "../transport/whatsapp.js";
 import { MASTER_NUMBER } from "../memory/security.js";
+import { appendMessageToHistory } from "../memory/chatHistory.js";
 import { jidsMatch } from "../utils/jidResolver.js";
 
-// Função auxiliar para formatar número para JID do WhatsApp
-function formatPhoneToJid(phone: string): string {
-    if (phone.includes('@g.us') || phone.includes('@lid') || phone.includes('@s.whatsapp.net')) {
-        return phone;
+// Função auxiliar para formatar número para JID do WhatsApp com resolução de entidades do CRM
+async function resolveAndFormatTargetJid(targetInput: string): Promise<{ jid: string; preferences?: Record<string, any>; entityName?: string }> {
+    if (targetInput.includes('@g.us') || targetInput.includes('@lid') || targetInput.includes('@s.whatsapp.net')) {
+        return { jid: targetInput };
     }
-    let clean = phone.replace(/\D/g, '');
+    const cleanDigits = targetInput.replace(/\D/g, '');
+    if (cleanDigits.length >= 8) {
+        let clean = cleanDigits;
+        if (!clean.startsWith('55') && clean.length <= 11) {
+            clean = '55' + clean;
+        }
+        return { jid: clean + '@s.whatsapp.net' };
+    }
+
+    // Se não for número puro, tenta resolver via CRM de Entidades
+    try {
+        const { resolveContactJidOrPhone } = await import('../services/entityResolver.js');
+        const resolved = await resolveContactJidOrPhone(targetInput);
+        if (resolved) {
+            const jid = resolved.jid || (resolved.phone ? (resolved.phone.startsWith('55') ? `${resolved.phone}@s.whatsapp.net` : `55${resolved.phone}@s.whatsapp.net`) : null);
+            if (jid) {
+                return { jid, preferences: resolved.preferences, entityName: resolved.name };
+            }
+        }
+    } catch (err) {
+        logger.debug('[MISSION AGENT] Erro ao resolver entidade no CRM:', err);
+    }
+
+    let clean = cleanDigits;
     if (!clean.startsWith('55') && clean.length <= 11) {
         clean = '55' + clean;
     }
-    // WhatsApp no Brasil muitas vezes usa o formato sem o 9 para números antigos, mas o Baileys geralmente aceita com 9.
-    // O mais seguro é assumir que o usuário passará algo próximo do correto ou o bot lidará com o formato @s.whatsapp.net
-    if (!clean.endsWith('@s.whatsapp.net')) {
-        clean = clean + '@s.whatsapp.net';
-    }
-    return clean;
+    return { jid: (clean || targetInput) + (clean.endsWith('@s.whatsapp.net') ? '' : '@s.whatsapp.net') };
 }
 
 export const startMissionTool = tool(
-    async ({ targetNumber, objective, firstMessage }, config) => {
+    async ({ targetNumber, objective, firstMessage, ttlHours }, config) => {
         const threadId = config?.configurable?.thread_id;
         if (!threadId) return "Erro: não foi possível identificar o chat do Master.";
-        const masterJid = threadId.includes('_') ? threadId.split('_')[0] : threadId;
+        const masterJid = config?.configurable?.contextData?.chatJid;
+        if (!masterJid) throw new Error("masterJid (chatJid) is required in contextData");
         const accountName = config?.configurable?.contextData?.accountName || 'main';
 
-        const targetJid = formatPhoneToJid(targetNumber);
+        const { jid: targetJid, preferences, entityName } = await resolveAndFormatTargetJid(targetNumber);
 
         try {
             // Evita missões duplicadas: se já existe missão ATIVA com este alvo, reutiliza
-            // (em vez de criar uma nova, como acontecia com as missões 35 e 36 duplicadas)
             const existing = await findActiveMission(masterJid, targetJid);
             if (existing) {
-                const sent = await sendDirectMessage(accountName, targetJid, firstMessage);
-                if (sent) {
-                    return `ℹ️ Já existe uma missão ativa com este alvo (ID: ${existing.id}). Nova mensagem enviada, mas nenhuma missão duplicada foi criada. Objetivo da missão existente: "${existing.objective}".`;
-                } else {
-                    return `ℹ️ Já existe uma missão ativa com este alvo (ID: ${existing.id}), mas houve falha ao enviar a nova mensagem para ${targetJid}.`;
-                }
+                return `⚠️ AVISO: Já existe uma missão ativa (ID: ${existing.id}) com este alvo. O objetivo atual é: "${existing.objective}". Nenhuma nova missão foi criada e NENHUMA mensagem foi enviada agora. Se precisar enviar uma mensagem, use a ferramenta 'send_message_to_target' ou gerencie-a de outra forma.`;
             }
 
-            const mission = await saveMission(masterJid, targetJid, objective);
+            const mission = await saveMission(masterJid, targetJid, objective, ttlHours);
+
+            // Cria automaticamente pendência de Waiting for Reply para a missão
+            const followUpHours = ttlHours || 24;
+            const followUpDueDate = new Date(Date.now() + followUpHours * 60 * 60 * 1000).toISOString();
+            saveFollowUp({
+                type: 'waiting_for_them',
+                contactName: entityName || targetJid,
+                contactJid: targetJid,
+                description: `Retorno da missão: ${objective}`,
+                dueDate: followUpDueDate,
+                contextOrigin: 'mission_id',
+                missionId: mission.id,
+                chatJid: targetJid,
+                notes: preferences && Object.keys(preferences).length > 0 ? `Preferências do contato: ${JSON.stringify(preferences)}` : null
+            }).catch(e => logger.warn('[MISSION AGENT] Falha ao registrar follow-up de missão:', e));
             
-            // Envia a primeira mensagem automaticamente
+            // Envia a primeira mensagem diretamente
             const sent = await sendDirectMessage(accountName, targetJid, firstMessage);
+            if (sent) {
+                // Registra no histórico do chat do alvo para manter contexto
+                appendMessageToHistory(accountName, targetJid, {
+                    id: "mission-start-" + Date.now(),
+                    timestamp: Date.now(),
+                    sender: accountName === 'personal' ? 'personal' : 'main',
+                    senderName: "Bia",
+                    content: firstMessage,
+                    isFromMe: true
+                });
+            }
             
             if (sent) {
-                return `✅ Missão (ID: ${mission.id}) iniciada com sucesso! A mensagem inicial foi enviada para ${targetJid}. Objetivo registrado: "${objective}".`;
+                return `✅ Missão (ID: ${mission.id}) iniciada com sucesso! A mensagem inicial foi agendada para envio para ${targetJid}. Objetivo registrado: "${objective}".`;
             } else {
-                return `⚠️ Missão (ID: ${mission.id}) registrada no banco, mas houve falha ao enviar a mensagem inicial para ${targetJid}. Verifique se o número está correto.`;
+                return `⚠️ Missão (ID: ${mission.id}) registrada no banco, mas houve falha ao agendar envio para ${targetJid}.`;
             }
         } catch (err: any) {
             logger.error("Erro ao iniciar missão:", err);
@@ -72,7 +113,8 @@ export const startMissionTool = tool(
         schema: z.object({
             targetNumber: z.string().describe("O número de telefone da pessoa (ex: 19999999999)."),
             objective: z.string().describe("O objetivo da missão (ex: 'Negociar a compra do carro XYZ por até 50 mil reais')."),
-            firstMessage: z.string().describe("O texto exato da primeira mensagem que será enviada agora para o alvo (ex: 'Olá! Estou falando em nome do Luiz...').")
+            firstMessage: z.string().describe("O texto exato da primeira mensagem que será enviada agora para o alvo (ex: 'Olá! Estou falando em nome do Luiz...')."),
+            ttlHours: z.number().optional().describe("A validade da missão em horas. Para pedidos imediatos/rápidos (ex: 'comprar pão agora') use 4. Para coisas que podem durar dias (ex: 'negociar um carro') use 168 (7 dias). Padrão é 72h.")
         }),
     }
 );
@@ -81,12 +123,13 @@ export const listMissionsTool = tool(
     async ({ targetNumber }, config) => {
         const threadId = config?.configurable?.thread_id;
         if (!threadId) return "Erro: não foi possível identificar o chat.";
-        const masterJid = threadId.includes('_') ? threadId.split('_')[0] : threadId;
+        const masterJid = config?.configurable?.contextData?.chatJid;
+        if (!masterJid) throw new Error("masterJid (chatJid) is required in contextData");
 
         try {
             let missions;
             if (targetNumber) {
-                const targetJid = formatPhoneToJid(targetNumber);
+                const { jid: targetJid } = await resolveAndFormatTargetJid(targetNumber);
                 missions = await getRecentMissionsByTarget(masterJid, targetJid, 15);
                 if (missions.length === 0) return `Nenhuma missão (ativa ou concluída) recentemente com o alvo ${targetJid}.`;
             } else {
@@ -94,7 +137,8 @@ export const listMissionsTool = tool(
                 if (missions.length === 0) return "Nenhuma missão (ativa ou concluída) recentemente.";
             }
             
-            return `Missões recentes (inclui ativas e concluídas):\n${missions.map(m => `ID: ${m.id} | Status: ${m.status.toUpperCase()} | Alvo: ${m.targetJid} | Objetivo: ${m.objective}\nNotas: ${m.notes || 'Nenhuma'}`).join("\n")}`;
+            const list = missions.map(m => `- [ID: ${m.id}] ${m.status.toUpperCase()} | Alvo: ${m.targetJid}\n  Obj: ${m.objective}\n  Notas: ${m.notes || '-'}`).join("\n");
+            return `<RAW_TOOL_OUTPUT source="sqlite:missions">\nMissões recentes:\n${list}\n</RAW_TOOL_OUTPUT>`;
         } catch (err: any) {
             logger.error("Erro ao listar missões:", err);
             return `Erro ao listar missões: ${err.message}`;
@@ -114,6 +158,13 @@ export const completeMissionTool = tool(
         try {
             const success = await completeMission(id);
             if (success) {
+                // Auto-resolve follow-ups vinculados a esta missão
+                getFollowUps({ missionId: id, status: 'active' }).then(linked => {
+                    for (const item of linked) {
+                        resolveFollowUp(item.id, `Missão ID ${id} concluída.`);
+                    }
+                }).catch(e => logger.warn('[MISSION AGENT] Falha ao auto-resolver follow-up de missão:', e));
+
                 return `✅ Missão ID ${id} foi marcada como concluída!`;
             } else {
                 return `Missão ID ${id} não encontrada ou já concluída.`;
@@ -135,13 +186,24 @@ export const completeMissionTool = tool(
 export const sendMessageToTargetTool = tool(
     async ({ targetNumber, message }, config) => {
         const accountName = config?.configurable?.contextData?.accountName || 'main';
-        const targetJid = formatPhoneToJid(targetNumber);
+        const { jid: targetJid } = await resolveAndFormatTargetJid(targetNumber);
 
         const sent = await sendDirectMessage(accountName, targetJid, message);
         if (sent) {
-            return `Mensagem enviada com sucesso para ${targetJid}.`;
+            // Registra no histórico do chat do alvo para manter contexto
+            appendMessageToHistory(accountName, targetJid, {
+                id: "mission-msg-" + Date.now(),
+                timestamp: Date.now(),
+                sender: accountName === 'personal' ? 'personal' : 'main',
+                senderName: "Bia",
+                content: message,
+                isFromMe: true
+            });
+        }
+        if (sent) {
+            return `Mensagem agendada com sucesso para envio a ${targetJid}.`;
         } else {
-            return `Falha ao enviar mensagem para ${targetJid}.`;
+            return `Falha ao agendar mensagem para ${targetJid}.`;
         }
     },
     {
@@ -217,8 +279,11 @@ export async function missionAgentNode(state: typeof AgentState.State, config?: 
     const recentTargetMissions = state.contextData?.recentMissions?.filter((m: any) => jidsMatch(m.targetJid, chatKey) && m.status !== 'active') || [];
     const recentMasterMissions = state.contextData?.recentMissions?.filter((m: any) => jidsMatch(m.masterJid, chatKey) && m.status !== 'active') || [];
 
+    const todayStr = new Date().toISOString();
+    const systemPrefix = `[CONTEXTO DE TEMPO] Data e hora atual: ${todayStr}\nSe uma missão for muito antiga, considere o contexto temporal.\n\n`;
+
     if (targetMissions.length > 0) {
-        systemContext = `[MISSÕES ATIVAS - RESPOSTA DO ALVO]
+        systemContext = systemPrefix + `[MISSÕES ATIVAS - RESPOSTA DO ALVO]
 Você está conversando com o alvo de uma ou mais missões ativas.
 Detalhes das missões: ${JSON.stringify(targetMissions, null, 2)}
 Analise a mensagem do alvo e decida o que fazer.
@@ -228,7 +293,7 @@ Analise a mensagem do alvo e decida o que fazer.
 - Se a missão foi concluída com sucesso, use 'complete_mission'.
 NÃO inicie uma nova missão (não use start_mission).`;
     } else if (masterMissions.length > 0) {
-        systemContext = `[MISSÕES ATIVAS - INSTRUÇÃO DO MASTER]
+        systemContext = systemPrefix + `[MISSÕES ATIVAS - INSTRUÇÃO DO MASTER]
 Você está gerenciando missões ativas para o Master. O Master está te dando uma instrução, aprovação ou respondendo a uma notificação.
 Detalhes das missões: ${JSON.stringify(masterMissions, null, 2)}
 Aja como o agente encarregado. 
@@ -236,12 +301,12 @@ Aja como o agente encarregado.
 - Se o Master der a última instrução de encerramento (ex: "agradece e diz que vou pensar"), use 'complete_mission' OBRIGATORIAMENTE junto no mesmo turno para não deixar a missão aberta.
 NÃO inicie nova missão.`;
     } else if (recentTargetMissions.length > 0 && !details && !state.contextData?.specialistTask) {
-        systemContext = `[RETOMADA DE MISSÃO - RESPOSTA DO ALVO]
+        systemContext = systemPrefix + `[RETOMADA DE MISSÃO - RESPOSTA DO ALVO]
 O alvo enviou uma mensagem, mas a missão recente dele já estava marcada como concluída/inativa.
 Detalhes da missão concluída: ${JSON.stringify(recentTargetMissions.slice(0, 1), null, 2)}
 Ação esperada: Avalie a nova mensagem do alvo. Se for apenas um "tchau" ou irrelevante, ignore. Se for uma nova informação importante para a missão, use 'notify_master' para avisar o Master. Se precisar, use 'start_mission' para reabrir o contexto e responder.`;
     } else if (details || state.contextData?.specialistTask) {
-        systemContext = `[INFORMAÇÕES DA MISSÃO PREPARADAS PELA SUPERVISORA]
+        systemContext = systemPrefix + `[INFORMAÇÕES DA MISSÃO PREPARADAS PELA SUPERVISORA]
 O alvo da missão é: ${details?.targetName || 'Não especificado'}
 Números/JIDs encontrados na memória: ${Array.isArray(details?.targetJids) ? details?.targetJids.join(", ") : details?.targetJids || 'Nenhum'}
 

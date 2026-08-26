@@ -1,9 +1,9 @@
 import { SKILL_DEFINITIONS, getSkill, getAllSkills, getSkillCatalogSummary, getSkillTools, getToolsForCategories, getAllTools } from "../../src/skills/registry.js";
 
 describe("Skills Registry & Directory Catalog", () => {
-  test("deve conter exatamente 15 habilidades cadastradas", () => {
+  test("deve conter exatamente 19 habilidades cadastradas", () => {
     const skills = getAllSkills();
-    expect(skills.length).toBe(15);
+    expect(skills.length).toBe(19);
   });
 
   test("deve recuperar uma skill específica pelo ID", () => {
@@ -11,6 +11,16 @@ describe("Skills Registry & Directory Catalog", () => {
     expect(searchSkill).toBeDefined();
     expect(searchSkill?.name).toBe("Agente de Busca na Web");
     expect(searchSkill?.detailedPrompt).toContain("google_search");
+
+    const followUpSkill = getSkill("followUpAgent");
+    expect(followUpSkill).toBeDefined();
+    expect(followUpSkill?.name).toContain("Follow-Up");
+    expect(followUpSkill?.tools).toEqual(["add_follow_up", "list_follow_ups", "resolve_follow_up", "cancel_follow_up", "update_follow_up"]);
+
+    const sentinelSkill = getSkill("emailSentinelAgent");
+    expect(sentinelSkill).toBeDefined();
+    expect(sentinelSkill?.name).toContain("Sentinela de E-mail");
+    expect(sentinelSkill?.tools).toEqual(["add_sentinel_rule", "list_sentinel_rules", "delete_sentinel_rule", "check_inbox_now", "get_sentinel_logs", "check_google_auth_status"]);
 
     const reasoningSkill = getSkill("reasoningAgent");
     expect(reasoningSkill).toBeDefined();

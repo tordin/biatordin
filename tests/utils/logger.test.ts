@@ -39,4 +39,23 @@ describe("Logger & Trigger Tracking System", () => {
     expect(() => logger.error("Teste de erro", new Error("Erro teste"))).not.toThrow();
     expect(() => logger.logAgentStart("testAgent", threadId, {})).not.toThrow();
   });
+
+  test("deve registrar resultado de gatilho com motivo de silêncio", () => {
+    const trigger = {
+      triggerId: "TRIG9999",
+      triggerType: "whatsapp_message" as const,
+      threadId: "test-thread",
+      chatJid: "123@s.whatsapp.net",
+      startedAt: new Date().toISOString()
+    };
+
+    expect(() => {
+      logger.logTriggerOutcome(trigger, {
+        action: "silent",
+        reason: "Observação passiva na conta pessoal",
+        agentsUsed: ["supervisor"],
+        durationMs: 150
+      });
+    }).not.toThrow();
+  });
 });

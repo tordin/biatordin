@@ -15,7 +15,7 @@ echo "🔍 Verificando se existem outros processos ativos da Bia..."
 
 # Função para encontrar PIDs de processos node/tsx associados a biatordin
 find_bia_pids() {
-    PIDS_PS=$(ps auxww | grep -E '(node|tsx|npm)' | grep -i 'biatordin' | grep -v 'grep' | grep -v 'start\.sh' | awk '{print $2}' || true)
+    PIDS_PS=$(ps auxww | grep -E '(node|tsx|npm)' | grep -i 'biatordin' | grep -v 'bia-debugger' | grep -v 'grep' | grep -v 'start\.sh' | awk '{print $2}' || true)
     PIDS_LSOF=$(lsof -t "$PROJECT_DIR/database.sqlite" 2>/dev/null || true)
     echo -e "$PIDS_PS\n$PIDS_LSOF" | sort -u | grep -v '^$' || true
 }

@@ -5,50 +5,83 @@ import { summarizerNode, shouldSummarize } from "../agents/summarizer.js";
 import { searchAgentNode } from "../agents/search.js";
 import { calendarAgentNode } from "../agents/workspace/calendar.js";
 import { gmailAgentNode } from "../agents/workspace/gmail.js";
+import { emailSentinelAgentNode } from "../agents/emailSentinelAgent.js";
 import { sheetsAgentNode } from "../agents/workspace/sheets.js";
 import { docsAgentNode } from "../agents/workspace/docs.js";
 import { driveAgentNode } from "../agents/workspace/drive.js";
 import { routineAgentNode } from "../agents/routineAgent.js";
 import { memoryAgentNode } from "../agents/memoryAgent.js";
 import { taskAgentNode } from "../agents/taskAgent.js";
+import { trackerAgentNode } from "../agents/trackerAgent.js";
 import { securityAgentNode } from "../agents/securityAgent.js";
 import { shoppingAgentNode } from "../agents/shopping.js";
 import { whatsappAgentNode } from "../agents/whatsappAgent.js";
 import { reasoningAgentNode } from "../agents/reasoningAgent.js";
 import { weatherAgentNode } from "../agents/weatherAgent.js";
 import { missionAgentNode } from "../agents/missionAgent.js";
+import { followUpAgentNode } from "../agents/followUpAgent.js";
+import { crmAgentNode } from "../agents/crmAgent.js";
+import { evaluatorNode } from "../agents/evaluator.js";
+import { outputGatewayNode } from "../agents/outputGateway.js";
 import { checkpointer } from "../memory/checkpointer.js";
 import { logger } from "../utils/logger.js";
 
-// Routes from supervisor to specialist agents based on supervisor's decision
+// Routes from supervisor to specialist agents, evaluator or directly to outputGateway
 export function routeFromSupervisor(state: typeof AgentState.State) {
   const next = state.nextAgent;
-  logger.info(`[ROUTING] Supervisor decision routes to: "${next}"`);
-  if (next === "searchAgent") return "searchAgent";
-  if (next === "calendarAgent") return "calendarAgent";
-  if (next === "gmailAgent") return "gmailAgent";
-  if (next === "sheetsAgent") return "sheetsAgent";
-  if (next === "docsAgent") return "docsAgent";
-  if (next === "driveAgent") return "driveAgent";
-  if (next === "routineAgent") return "routineAgent";
-  if (next === "memoryAgent") return "memoryAgent";
-  if (next === "taskAgent") return "taskAgent";
-  if (next === "securityAgent") return "securityAgent";
-  if (next === "shoppingAgent") return "shoppingAgent";
-  if (next === "whatsappAgent") return "whatsappAgent";
-  if (next === "reasoningAgent") return "reasoningAgent";
-  if (next === "weatherAgent") return "weatherAgent";
-  if (next === "missionAgent") return "missionAgent";
-  return "__end__";
+  let target = "evaluator";
+
+  if (next === "searchAgent") target = "searchAgent";
+  else if (next === "calendarAgent") target = "calendarAgent";
+  else if (next === "gmailAgent") target = "gmailAgent";
+  else if (next === "emailSentinelAgent") target = "emailSentinelAgent";
+  else if (next === "sheetsAgent") target = "sheetsAgent";
+  else if (next === "docsAgent") target = "docsAgent";
+  else if (next === "driveAgent") target = "driveAgent";
+  else if (next === "routineAgent") target = "routineAgent";
+  else if (next === "memoryAgent") target = "memoryAgent";
+  else if (next === "taskAgent") target = "taskAgent";
+  else if (next === "trackerAgent") target = "trackerAgent";
+  else if (next === "securityAgent") target = "securityAgent";
+  else if (next === "shoppingAgent") target = "shoppingAgent";
+  else if (next === "whatsappAgent") target = "whatsappAgent";
+  else if (next === "reasoningAgent") target = "reasoningAgent";
+  else if (next === "weatherAgent") target = "weatherAgent";
+  else if (next === "missionAgent") target = "missionAgent";
+  else if (next === "followUpAgent") target = "followUpAgent";
+  else if (next === "crmAgent") target = "crmAgent";
+  else if (state.contextData?.accountName === "personal") {
+    logger.info(`[ROUTING] Conta pessoal (passiva) detectada. Pulando avaliador direto para outputGateway.`);
+    target = "outputGateway";
+  } else if (state.contextData?.proposedResponse && state.contextData.proposedResponse.trim().toUpperCase() === "[SILENT]") {
+    logger.info(`[ROUTING] Resposta silenciosa [SILENT] detectada. Pulando avaliador direto para outputGateway.`);
+    target = "outputGateway";
+  } else if ((state.contextData?.executedTools || []).length === 0 && (state.contextData?.executionLog || []).length === 0) {
+    logger.info(`[ROUTING] Execução trivial detectada (nenhuma ferramenta/agente chamado). Pulando avaliador direto para outputGateway.`);
+    target = "outputGateway";
+  } else {
+    target = "evaluator";
+  }
+
+  logger.info(`[ROUTING] Supervisor decision "${next}" -> routed to: "${target}"`);
+  return target;
 }
 
-// Routes from specialist agents: allow FINISH → __end__ or back to supervisor
+// Routes from specialist agents: allow FINISH → outputGateway or back to supervisor
 export function routeFromSpecialist(state: typeof AgentState.State) {
   const next = state.nextAgent;
   logger.info(`[ROUTING] Specialist routes to: "${next}"`);
-  if (next === "FINISH") return "__end__";
+  if (next === "FINISH") return "outputGateway";
   if (next === "supervisor") return "supervisor";
   return "supervisor";
+}
+
+// Routes from evaluator: if approved, proceed to outputGateway; if correction needed, loop back to supervisor
+export function routeFromEvaluator(state: typeof AgentState.State) {
+  const next = state.nextAgent;
+  logger.info(`[ROUTING] Evaluator routes to: "${next}"`);
+  if (next === "supervisor") return "supervisor";
+  return "outputGateway";
 }
 
 
@@ -58,18 +91,24 @@ const workflow = new StateGraph(AgentState)
   .addNode("searchAgent", searchAgentNode)
   .addNode("calendarAgent", calendarAgentNode)
   .addNode("gmailAgent", gmailAgentNode)
+  .addNode("emailSentinelAgent", emailSentinelAgentNode)
   .addNode("sheetsAgent", sheetsAgentNode)
   .addNode("docsAgent", docsAgentNode)
   .addNode("driveAgent", driveAgentNode)
   .addNode("routineAgent", routineAgentNode)
   .addNode("memoryAgent", memoryAgentNode)
   .addNode("taskAgent", taskAgentNode)
+  .addNode("trackerAgent", trackerAgentNode)
   .addNode("securityAgent", securityAgentNode)
   .addNode("shoppingAgent", shoppingAgentNode)
   .addNode("whatsappAgent", whatsappAgentNode)
   .addNode("reasoningAgent", reasoningAgentNode)
   .addNode("weatherAgent", weatherAgentNode)
   .addNode("missionAgent", missionAgentNode)
+  .addNode("followUpAgent", followUpAgentNode)
+  .addNode("crmAgent", crmAgentNode)
+  .addNode("evaluator", evaluatorNode)
+  .addNode("outputGateway", outputGatewayNode)
   .addConditionalEdges("__start__", shouldSummarize, {
     summarizer: "summarizer",
     supervisor: "supervisor",
@@ -79,34 +118,45 @@ const workflow = new StateGraph(AgentState)
     searchAgent: "searchAgent",
     calendarAgent: "calendarAgent",
     gmailAgent: "gmailAgent",
+    emailSentinelAgent: "emailSentinelAgent",
     sheetsAgent: "sheetsAgent",
     docsAgent: "docsAgent",
     driveAgent: "driveAgent",
     routineAgent: "routineAgent",
     memoryAgent: "memoryAgent",
     taskAgent: "taskAgent",
+    trackerAgent: "trackerAgent",
     securityAgent: "securityAgent",
     shoppingAgent: "shoppingAgent",
     whatsappAgent: "whatsappAgent",
     reasoningAgent: "reasoningAgent",
     weatherAgent: "weatherAgent",
     missionAgent: "missionAgent",
-    __end__: "__end__",
+    followUpAgent: "followUpAgent",
+    crmAgent: "crmAgent",
+    evaluator: "evaluator",
+    outputGateway: "outputGateway",
   })
-  .addConditionalEdges("searchAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("calendarAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("gmailAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("sheetsAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("docsAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("driveAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("routineAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("memoryAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("taskAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("securityAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("shoppingAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("whatsappAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("reasoningAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("weatherAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" })
-  .addConditionalEdges("missionAgent", routeFromSpecialist, { supervisor: "supervisor", __end__: "__end__" });
+  .addConditionalEdges("searchAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("calendarAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("gmailAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("emailSentinelAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("sheetsAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("docsAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("driveAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("routineAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("memoryAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("taskAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("trackerAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("securityAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("shoppingAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("whatsappAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("reasoningAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("weatherAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("missionAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("followUpAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("crmAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addConditionalEdges("evaluator", routeFromEvaluator, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  .addEdge("outputGateway", "__end__");
 
 export const agent = workflow.compile({ checkpointer });

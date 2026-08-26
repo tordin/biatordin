@@ -1,7 +1,5 @@
 import { 
   initSecurityTable,
-  createApprovalToken, 
-  consumeApprovalToken, 
   isTrustedChat,
   addTrustedChat,
   removeTrustedChat,
@@ -23,18 +21,7 @@ describe("Security Memory & Approval Tokens", () => {
     }
   });
 
-  test("deve criar e consumir token de aprovação de chat de confiança", () => {
-    const token = createApprovalToken(testJid);
-    expect(token).toBeDefined();
-    expect(token.length).toBe(4);
 
-    const consumedJid = consumeApprovalToken(token);
-    expect(consumedJid).toBe(testJid);
-
-    // Segunda tentativa deve retornar null
-    const secondTry = consumeApprovalToken(token);
-    expect(secondTry).toBeNull();
-  });
 
 
 

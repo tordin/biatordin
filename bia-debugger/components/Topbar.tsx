@@ -25,7 +25,9 @@ export function Topbar({ chatId, runId, nodeId }: { chatId: string | null, runId
         {runId && (
           <>
             <ChevronRight className="w-4 h-4 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground font-mono">Run #{runId}</span>
+            <span className="text-sm text-muted-foreground font-mono">
+              {runId.startsWith('DIR_') ? `Notificação #${runId.slice(4)}` : runId.startsWith('outbound-') ? `Notificação #${runId.slice(9, 17)}` : `Run #${runId}`}
+            </span>
           </>
         )}
 

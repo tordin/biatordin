@@ -1,4 +1,5 @@
 import { ChatDeepSeek } from "@langchain/deepseek";
+import { ChatOpenAI } from "@langchain/openai";
 import dotenv from "dotenv";
 import { loggerCallbackHandler } from "../utils/logger.js";
 
@@ -8,6 +9,27 @@ const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
 if (!deepseekApiKey) {
   console.warn("WARNING: DEEPSEEK_API_KEY environment variable is not defined.");
 }
+
+const openaiApiKey = process.env.OPENAI_API_KEY;
+if (!openaiApiKey) {
+  console.warn("WARNING: OPENAI_API_KEY environment variable is not defined.");
+}
+
+// Supervisor Ativo: gpt-4o-mini com Strict Structured Outputs e fluidez conversacional
+export const modelSupervisorActive = new ChatOpenAI({
+  apiKey: openaiApiKey,
+  model: "gpt-4o-mini",
+  temperature: 0.1,
+  callbacks: [loggerCallbackHandler],
+});
+
+// Evaluator / Critic: gpt-4o-mini com temperature 0.0 para modo estritamente analítico e determinístico
+export const modelEvaluator = new ChatOpenAI({
+  apiKey: openaiApiKey,
+  model: "gpt-4o-mini",
+  temperature: 0.0,
+  callbacks: [loggerCallbackHandler],
+});
 
 // Flash: Rápido e custo-eficiente para volume
 // SEMPRE sem thinking — thinking é exclusivo do reasoningAgent (modelPro)
@@ -31,6 +53,9 @@ export const modelFlashStructured = new ChatDeepSeek({
   model: "deepseek-v4-flash",
   temperature: 0.1, // Reduzido de 0.7 para decisões de roteamento quase-determinísticas da supervisora
   callbacks: [loggerCallbackHandler],
+  configuration: {
+    baseURL: "https://api.deepseek.com/beta"
+  },
   modelKwargs: {
     thinking: {
       type: "disabled"
@@ -58,6 +83,9 @@ export const modelProStructured = new ChatDeepSeek({
   model: "deepseek-v4-flash",
   temperature: 0.2,
   callbacks: [loggerCallbackHandler],
+  configuration: {
+    baseURL: "https://api.deepseek.com/beta"
+  },
   modelKwargs: {
     thinking: {
       type: "disabled"

@@ -251,6 +251,51 @@ export async function handleCommand(ctx: CommandContext): Promise<boolean> {
         return true;
       }
 
+      case 'saldo': {
+        try {
+          const apiKey = process.env.DEEPSEEK_API_KEY;
+          if (!apiKey) {
+            await ctx.sock.sendMessage(ctx.chatJid, { text: `⚠️ *Erro:* A chave da API do DeepSeek não está configurada.` });
+            return true;
+          }
+
+          const response = await fetch('https://api.deepseek.com/user/balance', {
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Accept': 'application/json'
+            }
+          });
+
+          if (!response.ok) {
+            throw new Error(`Erro HTTP: ${response.status}`);
+          }
+
+          const data = await response.json();
+          let msg = `💰 *Saldo DeepSeek:*\n\n`;
+          
+          if (data.is_available !== undefined) {
+             msg += `• *Status da Conta:* ${data.is_available ? 'Ativa ✅' : 'Inativa ❌'}\n\n`;
+          }
+          
+          if (data.balance_infos && data.balance_infos.length > 0) {
+            data.balance_infos.forEach((info: any) => {
+              msg += `💵 *Moeda:* ${info.currency}\n`;
+              msg += `  └ Saldo Total: ${info.total_balance}\n`;
+              msg += `  └ Saldo Bônus: ${info.granted_balance}\n`;
+              msg += `  └ Saldo Recarga: ${info.to_up_balance}\n\n`;
+            });
+          } else {
+             msg += `_Nenhuma informação de saldo encontrada._\n`;
+          }
+
+          await ctx.sock.sendMessage(ctx.chatJid, { text: msg.trim() });
+        } catch (err: any) {
+          logger.error('[SALDO] Erro ao buscar saldo:', err);
+          await ctx.sock.sendMessage(ctx.chatJid, { text: `❌ *Erro ao consultar saldo:* ${err.message}` });
+        }
+        return true;
+      }
+
       case 'ajuda':
       case 'comandos':
       case 'help': {
@@ -274,6 +319,7 @@ export async function handleCommand(ctx: CommandContext): Promise<boolean> {
           `• \`/aprovar <numero>\` : Aprova número para envio sem confirmação\n\n` +
           `⚙️ *Configuração*\n` +
           `• \`/modelo [flash|pro|deepseek]\` : Alterna o modelo LLM do chat\n` +
+          `• \`/saldo\` : Verifica o saldo da conta na API do DeepSeek\n` +
           `• \`/ajuda\` : Exibe este menu`;
 
         await ctx.sock.sendMessage(ctx.chatJid, { text: menu });

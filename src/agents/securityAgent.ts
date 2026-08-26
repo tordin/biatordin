@@ -1,6 +1,6 @@
 import { AIMessage } from "@langchain/core/messages";
 import { AgentState } from "./state.js";
-import { notifyMaster, sendIntermediateMessage, connectToWhatsApp, disconnectFromWhatsApp, isWhatsAppConnected } from "../transport/whatsapp.js";
+import { sendIntermediateMessage, connectToWhatsApp, disconnectFromWhatsApp, isWhatsAppConnected } from "../transport/whatsapp.js";
 import { addTrustedChat, removeTrustedChat, isTrustedChat, listTrustedChats, MASTER_NUMBER, MASTER_JIDS } from "../memory/security.js";
 import { saveRoutine, getAllActiveRoutines } from "../memory/routines.js";
 import { addIgnoredGroup, removeIgnoredGroup, getAllIgnoredGroups, normalizeText } from "../config/ignoredGroups.js";
@@ -10,12 +10,7 @@ import { sanitizeMessagesForModel } from "../utils/sanitize.js";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
-
-// Helper para limpar o sufixo @s.whatsapp.net ou @lid para exibir ao usuário
-function formatJidForUser(jid?: string): string {
-  if (!jid) return "";
-  return jid.split('@')[0];
-}
+import { formatJidForUser } from "../utils/jidResolver.js";
 
 // Tools for the master to manage trusted chats
 export const addTrustedChatTool = tool(
@@ -29,7 +24,7 @@ export const addTrustedChatTool = tool(
         logger.error("Erro ao notificar chat aprovado:", err);
       }
 
-      return `O número ${formatJidForUser(jid)} foi adicionado à lista de chats de confiança.`;
+      return `O número ${await formatJidForUser(jid)} foi adicionado à lista de chats de confiança.`;
     } catch (e: any) {
       return `Erro ao adicionar número de confiança: ${e.message}`;
     }
@@ -47,7 +42,7 @@ export const removeTrustedChatTool = tool(
   async ({ jid }) => {
     try {
       await removeTrustedChat(jid);
-      return `O número ${formatJidForUser(jid)} foi removido da lista de chats de confiança.`;
+      return `O número ${await formatJidForUser(jid)} foi removido da lista de chats de confiança.`;
     } catch (e: any) {
       return `Erro ao remover número de confiança: ${e.message}`;
     }
@@ -65,7 +60,7 @@ export const checkTrustTool = tool(
   async ({ jid }) => {
     try {
       const isTrusted = await isTrustedChat(jid);
-      const cleanJid = formatJidForUser(jid);
+      const cleanJid = await formatJidForUser(jid);
       return isTrusted ? `O número ${cleanJid} É de confiança.` : `O número ${cleanJid} NÃO é de confiança.`;
     } catch (e: any) {
       return `Erro ao verificar número: ${e.message}`;
@@ -87,8 +82,8 @@ export const listTrustedChatsTool = tool(
       if (chats.length === 0) {
         return "Atualmente não há nenhum número na lista de chats de confiança (além do master).";
       }
-      const list = chats.map(c => `- ${formatJidForUser(c.jid)} (Adicionado em: ${new Date(c.addedAt).toLocaleString('pt-BR')})`).join('\n');
-      return `Chats de confiança atuais:\n${list}`;
+      const list = await Promise.all(chats.map(async c => `- ${await formatJidForUser(c.jid)} (Adicionado em: ${new Date(c.addedAt).toLocaleString('pt-BR')})`));
+      return `Chats de confiança atuais:\n${list.join('\n')}`;
     } catch (e: any) {
       return `Erro ao listar chats de confiança: ${e.message}`;
     }
@@ -102,7 +97,7 @@ export const listTrustedChatsTool = tool(
 
 export const getMasterInfoTool = tool(
   async () => {
-    return `O número Master (administrador) configurado no sistema é: ${formatJidForUser(MASTER_NUMBER)}`;
+    return `O número Master (administrador) configurado no sistema é: ${await formatJidForUser(MASTER_NUMBER)}`;
   },
   {
     name: "get_master_info",
@@ -357,30 +352,8 @@ export async function securityAgentNode(state: typeof AgentState.State) {
 
   // Se o usuário não é de confiança e está tentando acessar dados:
   if (!isTrusted) {
-    // Tenta entender o que ele estava pedindo para avisar o master
-    const lastHumanMsg = state.messages.slice().reverse().find(m => m._getType() === 'human');
-    let userRequest = lastHumanMsg && typeof lastHumanMsg.content === 'string' ? lastHumanMsg.content : "algo sensível";
-    
-    // Limpa metadados injetados para não poluir o alerta
-    userRequest = userRequest.replace(/\n\[Metadados do Grupo:.*?\]/g, "").trim();
-    
-    // Formata o pedido e avisa o master
-    const formatJidForUser = (jid: string | undefined) => jid ? jid.split('@')[0] : "Desconhecido";
-    const requesterJid = formatJidForUser(context.senderJid || context.chatJid);
-    const requesterName = context.senderName && context.senderName !== "Desconhecido" ? context.senderName : requesterJid;
-    
-    const chatJid = formatJidForUser(context.chatJid);
-    const chatName = context.chatName && context.chatName !== context.chatJid ? context.chatName : chatJid;
-
-    // Apenas notifica e orienta
-    const { createApprovalToken } = await import("../memory/security.js");
-    const token = createApprovalToken(context.chatJid || "");
-
-    const notificationText = `🚨 *Alerta de Segurança*\n*${requesterName}* tentou solicitar a seguinte informação sensível no chat *${chatName}*:\n"${userRequest}"\n\nPara liberar o acesso para esse chat, responda a esta mensagem com a palavra:\n*AUTORIZAR ${token}*`;
-    await notifyMaster(notificationText);
-
     // Resposta para o usuário bloqueado
-    responseText = "Por questões de segurança, eu não tenho permissão para acessar essa informação ou realizar essa tarefa por aqui. Já notifiquei o Luiz e pedi autorização. Se ele aprovar e liberar este chat, eu te aviso!";
+    responseText = "Por questões de segurança, eu não tenho permissão para acessar essa informação ou realizar essa tarefa por aqui.";
   } else if (isMaster) {
     // Se for o master, processa o pedido via ReactAgent para executar ferramentas de adição/remoção
     const sanitizedHistory = sanitizeMessagesForModel(state.messages);

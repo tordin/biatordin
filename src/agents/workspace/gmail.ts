@@ -1,6 +1,6 @@
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { RunnableConfig } from "@langchain/core/runnables";
-import { initWorkspaceTools, safeAgentNode } from "./base.js";
+import { initWorkspaceTools, safeAgentNode, registerAgentResetCallback } from "./base.js";
 import { modelFlash as model } from "../../llm/model.js";
 import { AgentState } from "../state.js";
 
@@ -10,9 +10,13 @@ const GMAIL_PROMPT = getSkill("gmailAgent")?.detailedPrompt || "";
 
 let gmailAgent: any = null;
 
+registerAgentResetCallback(() => {
+  gmailAgent = null;
+});
+
 async function initGmailAgent() {
+  const tools = await initWorkspaceTools();
   if (!gmailAgent) {
-    const tools = await initWorkspaceTools();
     const messageModifier = tools.length > 0 
       ? GMAIL_PROMPT 
       : GMAIL_PROMPT + "\n\nAviso: As ferramentas do MCP falharam ao carregar.";

@@ -741,11 +741,12 @@ function buildExecutiveTimeline(turn) {
       </div>
     </div>`;
   } else if (turn.action === 'silent' || (turn.finalDecision === 'FINISH' && !turn.finalResponse)) {
+    const silenceExplanation = turn.reason || turn.summary || "Não foi emitida resposta no WhatsApp (mensagem não dirigida à Bia ou sem ação requerida).";
     html += `<div class="exec-step silent">
       <div class="exec-step-icon">🔇</div>
       <div class="exec-step-content">
         <div class="exec-step-title">🔇 Bia permaneceu em silêncio</div>
-        <div class="exec-step-reason">Não foi emitida resposta no WhatsApp (mensagem não dirigida à Bia ou sem ação requerida).</div>
+        <div class="exec-step-reason">${escapeHtml(silenceExplanation)}</div>
       </div>
     </div>`;
   }

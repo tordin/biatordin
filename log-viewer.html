@@ -1396,7 +1396,8 @@
         } else if (action === 'silent') {
             const box = document.createElement('div');
             box.className = 'silent-box';
-            box.textContent = '🔇 Bia decidiu ficar em silêncio (sem resposta enviada)';
+            const silenceReason = endEv.data?.reason ? `: ${endEv.data.reason}` : ' (sem resposta enviada)';
+            box.textContent = '🔇 Bia decidiu ficar em silêncio' + silenceReason;
             content.appendChild(box);
         } else if (action === 'error') {
             const box = document.createElement('div');

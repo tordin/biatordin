@@ -1,6 +1,6 @@
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { RunnableConfig } from "@langchain/core/runnables";
-import { initWorkspaceTools, safeAgentNode } from "./base.js";
+import { initWorkspaceTools, safeAgentNode, registerAgentResetCallback } from "./base.js";
 import { modelFlash as model } from "../../llm/model.js";
 import { AgentState } from "../state.js";
 
@@ -11,10 +11,13 @@ const CALENDAR_PROMPT = getSkill("calendarAgent")?.detailedPrompt || "";
 
 let calendarAgent: any = null;
 
+registerAgentResetCallback(() => {
+  calendarAgent = null;
+});
+
 async function initCalendarAgent() {
+  const tools = await initWorkspaceTools();
   if (!calendarAgent) {
-    const tools = await initWorkspaceTools();
-    
     const messageModifier = (state: any) => {
       let prompt = CALENDAR_PROMPT;
       const isTrusted = state.contextData?.isTrustedChat ?? true;

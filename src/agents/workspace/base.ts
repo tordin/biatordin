@@ -32,15 +32,45 @@ class LoopDetectionCallbackHandler extends BaseCallbackHandler {
 
 let workspaceTools: any[] = [];
 let isInitialized = false;
+let lastKnownRefreshToken = "";
+const agentResetCallbacks: (() => void)[] = [];
 
-export async function initWorkspaceTools() {
-  if (isInitialized && workspaceTools.length > 0) return workspaceTools;
-  
+export function registerAgentResetCallback(cb: () => void) {
+  agentResetCallbacks.push(cb);
+}
+
+export function resetWorkspaceTools() {
+  workspaceTools = [];
+  isInitialized = false;
+  lastKnownRefreshToken = "";
+  for (const cb of agentResetCallbacks) {
+    try { cb(); } catch {}
+  }
+}
+
+export async function initWorkspaceTools(force = false) {
   // Reload dotenv to pick up any changes the user made to the .env file while the process was running
   dotenv.config({ override: true });
 
-  logger.info("[WORKSPACE AGENTS] Initializing MCP Client...");
-  
+  const currentRefreshToken = process.env.GOOGLE_REFRESH_TOKEN || "";
+  const tokenChanged = isInitialized && currentRefreshToken !== lastKnownRefreshToken;
+
+  if (!force && !tokenChanged && isInitialized && workspaceTools.length > 0) {
+    return workspaceTools;
+  }
+
+  if (tokenChanged || force) {
+    for (const cb of agentResetCallbacks) {
+      try { cb(); } catch {}
+    }
+  }
+
+  if (tokenChanged) {
+    logger.info("[WORKSPACE AGENTS] GOOGLE_REFRESH_TOKEN alterado no .env. Reinicializando MCP Client...");
+  } else {
+    logger.info("[WORKSPACE AGENTS] Initializing MCP Client...");
+  }
+
   const mcpClient = new MultiServerMCPClient({
     google_workspace: {
       command: "npx",
@@ -48,18 +78,19 @@ export async function initWorkspaceTools() {
       env: {
         GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || "",
         GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || "",
-        GOOGLE_REFRESH_TOKEN: process.env.GOOGLE_REFRESH_TOKEN || "",
+        GOOGLE_REFRESH_TOKEN: currentRefreshToken,
         GOOGLE_USER_EMAIL: process.env.GOOGLE_USER_EMAIL || "primary",
         PATH: process.env.PATH || ""
       }
     }
   });
-  
+
   try {
     const toolsMap = await mcpClient.initializeConnections();
     workspaceTools = toolsMap["google_workspace"] || [];
     if (workspaceTools.length > 0) {
       isInitialized = true;
+      lastKnownRefreshToken = currentRefreshToken;
       logger.info(`[WORKSPACE AGENTS] Loaded ${workspaceTools.length} tools from MCP.`);
     } else {
       logger.warn("[WORKSPACE AGENTS] MCP initialized but returned 0 tools.");
@@ -69,7 +100,7 @@ export async function initWorkspaceTools() {
     workspaceTools = [];
     isInitialized = false;
   }
-  
+
   return workspaceTools;
 }
 
@@ -172,7 +203,7 @@ export async function safeAgentNode(
           ? `O missionAgent já enviou mensagens diretamente via suas tools (send_message_to_target, notify_master, etc). ` +
             `Defina nextAgent='FINISH' e response='[SILENT]'. ` +
             `NÃO formule nenhuma resposta final ao usuário — o missionAgent já cuidou de toda a comunicação.`
-          : `Se sua solicitação original e seu plano de execução foram concluídos, USE EXATAMENTE OS DADOS dentro de <collected_data> para formular agora mesmo a resposta final amigável ao usuário no campo 'response' e defina nextAgent='FINISH'. NÃO repita buscas e NÃO ignore estes dados. NÃO invente informações que não estejam em <collected_data>.`;
+          : `Se ainda houver etapas pendentes no plano de execução ativo ou outras ações solicitadas pelo usuário, continue a execução roteando para o próximo especialista pendente preenchendo 'nextAgent' e 'specialistTask'. Somente quando TODAS as etapas do plano/ações solicitadas tiverem sido concluídas com sucesso (ou em caso de erro impeditivo), USE EXATAMENTE OS DADOS coletados para formular a resposta final amigável ao usuário no campo 'response' e defina nextAgent='FINISH'. NÃO repita buscas ou ações já concluídas.`;
       const mensagemAncorada = new AIMessage(
          `<specialist_return agent="${name}">\n` +
          `<collected_data>\n${respostaBruta}\n</collected_data>\n` +

@@ -1,5 +1,5 @@
 import { HumanMessage } from "@langchain/core/messages";
-import { whatsappAgentNode } from "../../src/agents/whatsappAgent.js";
+import { whatsappAgentNode, generateDailySummaryTool } from "../../src/agents/whatsappAgent.js";
 
 describe("WhatsApp Specialist Agent Node", () => {
   test("deve responder a consultas de mensagens recentes do WhatsApp", async () => {
@@ -17,4 +17,12 @@ describe("WhatsApp Specialist Agent Node", () => {
     expect(result.nextAgent).toBe("supervisor");
     expect(result.messages.length).toBeGreaterThan(0);
   }, 30000);
+
+  test("generateDailySummaryTool deve aceitar horas e filtro opcional", async () => {
+    const resAll = await generateDailySummaryTool.invoke({ hours: 24 });
+    expect(typeof resAll).toBe("string");
+
+    const resFilter = await generateDailySummaryTool.invoke({ hours: 24, filter: "iFood" });
+    expect(typeof resFilter).toBe("string");
+  });
 });

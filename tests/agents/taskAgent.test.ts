@@ -6,7 +6,7 @@ describe("Task Agent Node & Tool Handlers", () => {
   let createdTaskId: number;
 
   test("deve testar execução direta das ferramentas de tarefas", async () => {
-    const config = { configurable: { thread_id: testJid } } as any;
+    const config = { configurable: { thread_id: "main_test-task-agent@s.whatsapp.net_topic1", contextData: { chatJid: "test-task-agent@s.whatsapp.net" } } } as any;
 
     // Teste de add_task sem thread_id
     const errAdd = await addTaskTool.invoke({ title: "Sem chat" }, {} as any);

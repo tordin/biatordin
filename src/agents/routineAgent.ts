@@ -13,7 +13,8 @@ export const createRoutineTool = tool(
   async ({ cronExpression, prompt }, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat (thread_id ausente).";
-    const chatJid = threadId.includes('_') ? threadId.split('_')[0] : threadId;
+    const chatJid = config?.configurable?.contextData?.chatJid;
+    if (!chatJid) throw new Error("chatJid is required in contextData");
     const topicId = config?.configurable?.contextData?.activeTopicId;
 
     try {
@@ -39,14 +40,16 @@ export const listRoutinesTool = tool(
   async ({}, config) => {
     const threadId = config?.configurable?.thread_id;
     if (!threadId) return "Erro: não foi possível identificar o chat.";
-    const chatJid = threadId.includes('_') ? threadId.split('_')[0] : threadId;
+    const chatJid = config?.configurable?.contextData?.chatJid;
+    if (!chatJid) throw new Error("chatJid is required in contextData");
 
     try {
         const routines = await getRoutinesForChat(chatJid);
         if (routines.length === 0) return "Nenhuma rotina ativa encontrada para este usuário.";
         
-        const list = routines.map(r => `ID: ${r.id} | Cron: ${r.cronExpression} | Prompt: ${r.prompt}`).join("\n");
-        return `<RAW_TOOL_OUTPUT source="sqlite:routines">\nRotinas ativas:\n${list}\n</RAW_TOOL_OUTPUT>`;
+        const list = routines.slice(0, 30).map(r => `- [ID: ${r.id}] Cron: ${r.cronExpression} | ${r.prompt}`).join("\n");
+        const extra = routines.length > 30 ? `\n...e mais ${routines.length - 30} rotinas ocultas.` : "";
+        return `<RAW_TOOL_OUTPUT source="sqlite:routines">\nRotinas ativas:\n${list}${extra}\n</RAW_TOOL_OUTPUT>`;
     } catch (err: any) {
         logger.error("Erro ao listar rotinas:", err);
         return `Erro ao listar rotinas: ${err.message}`;

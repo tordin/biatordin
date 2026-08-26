@@ -1,14 +1,15 @@
-import dotenv from 'dotenv';
+import 'dotenv/config';
 import { initDbMonitor } from './utils/dbMonitor.js';
 import { initServer } from './api/server.js';
 import { connectToWhatsApp } from './transport/whatsapp.js';
 import { logger } from './utils/logger.js';
 import { checkpointer } from './memory/checkpointer.js';
 import { initRoutineManager } from './utils/routineManager.js';
+import { initEmailSentinel, stopEmailSentinel } from './services/emailSentinel/sentinelService.js';
+import { initFollowUpWorker, stopFollowUpWorker } from './services/followUp/followUpWorker.js';
+import { initFollowUpsTable } from './memory/followUps.js';
 import fs from 'fs';
 import path from 'path';
-
-dotenv.config();
 
 let isShuttingDown = false;
 
@@ -18,6 +19,8 @@ async function gracefulShutdown(signal: string) {
   logger.info(`\n[SHUTDOWN] Recebido sinal ${signal}. Iniciando graceful shutdown...`);
 
   try {
+    stopEmailSentinel();
+    stopFollowUpWorker();
     // 1. O checkpointer local do sqlite sincroniza no encerramento (o processo em si fecharia normal,
     // mas se precisarmos de algum teardown manual de DB ou WhatsApp, colocamos aqui).
     // Por hora, apenas avisamos e encerramos
@@ -32,6 +35,7 @@ async function gracefulShutdown(signal: string) {
 import { initTopicsTable } from './memory/topics.js';
 import { initSecurityTable } from './memory/security.js';
 import { initializeDailySummaryDB } from './memory/dailySummary.js';
+import { initEntitiesTable } from './memory/entities.js';
 import { loadLidMappings } from './utils/jidResolver.js';
 
 // Captura sinais de terminação
@@ -40,12 +44,20 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 async function bootstrap() {
   try {
+    const isLangSmithTracing = process.env.LANGSMITH_TRACING === 'true' || process.env.LANGCHAIN_TRACING_V2 === 'true';
+    if (isLangSmithTracing) {
+      const project = process.env.LANGSMITH_PROJECT || process.env.LANGCHAIN_PROJECT || 'default';
+      logger.info(`[LANGSMITH] Observabilidade ativa (Projeto: "${project}")`);
+    }
+
     initDbMonitor();
     initServer();
     
     await initTopicsTable();
     await initSecurityTable();
     await initializeDailySummaryDB();
+    await initFollowUpsTable();
+    await initEntitiesTable();
 
     // Carrega mapeamentos LID↔número antes de qualquer processamento de mensagens
     // (essencial para missões: alvo responde via @lid, missões salvas com número)
@@ -67,6 +79,14 @@ async function bootstrap() {
 
     initRoutineManager().catch((err) => {
       logger.error('Falha ao iniciar o gerenciador de rotinas:', err);
+    });
+
+    initEmailSentinel().catch((err) => {
+      logger.error('Falha ao iniciar o sentinela de e-mails:', err);
+    });
+
+    initFollowUpWorker().catch((err) => {
+      logger.error('Falha ao iniciar o worker de follow-up:', err);
     });
   } catch (err) {
     logger.error('Erro crítico no bootstrap da aplicação:', err);

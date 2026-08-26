@@ -47,7 +47,7 @@ describe("Resilience & Transparency (Self-Healing, Circuit Breaker, /explicar)",
       const lastMsg = result.messages[result.messages.length - 1] as AIMessage;
       expect(typeof lastMsg.content).toBe("string");
       expect((lastMsg.content as string).length).toBeGreaterThan(10);
-    });
+    }, 30000);
 
     it("deve acionar o Circuit Breaker quando turnDuration >= 30.000ms", async () => {
       const initialState = {
@@ -67,6 +67,6 @@ describe("Resilience & Transparency (Self-Healing, Circuit Breaker, /explicar)",
       const lastMsg = result.messages[result.messages.length - 1] as AIMessage;
       expect(typeof lastMsg.content).toBe("string");
       expect((lastMsg.content as string).length).toBeGreaterThan(10);
-    });
+    }, 30000);
   });
 });

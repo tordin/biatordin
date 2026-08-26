@@ -12,26 +12,6 @@ const db = new sqlite3.Database('database.sqlite', (err) => {
 export const MASTER_NUMBER = process.env.MASTER_NUMBER || "5519997064504@s.whatsapp.net";
 export const MASTER_JIDS = [MASTER_NUMBER, "233070879867118@lid"];
 
-// Mapeamento em memória de tokens para aprovação rápida
-const pendingApprovals = new Map<string, { jid: string; expires: number }>();
-
-export function createApprovalToken(jid: string): string {
-  const token = Math.floor(1000 + Math.random() * 9000).toString(); // 4 digitos
-  pendingApprovals.set(token, { jid, expires: Date.now() + 1000 * 60 * 60 }); // expira em 1 hora
-  return token;
-}
-
-export function consumeApprovalToken(token: string): string | null {
-  const pending = pendingApprovals.get(token);
-  if (!pending) return null;
-  if (Date.now() > pending.expires) {
-    pendingApprovals.delete(token);
-    return null;
-  }
-  pendingApprovals.delete(token);
-  return pending.jid;
-}
-
 
 
 export function initSecurityTable(): Promise<void> {

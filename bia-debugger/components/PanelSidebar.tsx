@@ -1,17 +1,53 @@
+import { useState } from "react"
 import { useDebugger } from "@/contexts/DebuggerContext"
 import { cn } from "@/lib/utils"
 import { Search, MessageSquare, Shield, Clock } from "lucide-react"
 
 export function PanelSidebar({ selectedId, onSelect }: { selectedId: string, onSelect: (id: string) => void }) {
   const { chats } = useDebugger()
+  const [activeTab, setActiveTab] = useState<'bia' | 'personal'>('bia')
+
+  const filteredChats = chats.filter(chat => {
+    if (activeTab === 'bia') {
+      return chat.accountType !== 'personal'
+    }
+    return chat.accountType === 'personal'
+  })
 
   return (
     <div className="w-[320px] shrink-0 border-r border-border bg-muted/30 flex flex-col h-full">
-      <div className="p-4 border-b border-border font-semibold text-sm">
-        Conversas recentes
+      <div className="p-4 border-b border-border flex flex-col gap-3">
+        <div className="font-semibold text-sm">
+          Conversas recentes
+        </div>
+        <div className="flex bg-muted p-1 rounded-md">
+          <button 
+            onClick={() => setActiveTab('bia')}
+            className={cn(
+              "flex-1 text-xs font-medium py-1.5 rounded-sm transition-all", 
+              activeTab === 'bia' ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            Bia
+          </button>
+          <button 
+            onClick={() => setActiveTab('personal')}
+            className={cn(
+              "flex-1 text-xs font-medium py-1.5 rounded-sm transition-all", 
+              activeTab === 'personal' ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            Pessoal
+          </button>
+        </div>
       </div>
       <div className="overflow-y-auto flex-1">
-        {chats.map(chat => (
+        {filteredChats.length === 0 && (
+          <div className="p-4 text-center text-sm text-muted-foreground">
+            Nenhuma conversa encontrada.
+          </div>
+        )}
+        {filteredChats.map(chat => (
           <button
             key={chat.id}
             onClick={() => onSelect(chat.id)}

@@ -28,12 +28,11 @@ export function scheduleRoutine(routine: Routine) {
     try {
         const job = cron.schedule(routine.cronExpression, () => {
             logger.info(`[ROUTINE MANAGER] Disparando rotina ID ${routine.id} para o chat ${routine.chatJid}`);
-            // Injeta a mensagem formatada para a Bia saber que é uma rotina automática
-            const formattedPrompt = `[Rotina Agendada] ${routine.prompt}`;
-            injectSystemMessage(routine.chatJid, formattedPrompt, 'main', {
+            injectSystemMessage(routine.chatJid, routine.prompt, 'main', {
                 triggerType: 'cron_routine',
                 routineId: routine.id,
                 routinePrompt: routine.prompt,
+                topicId: routine.topicId,
             });
         });
 
