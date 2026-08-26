@@ -15,6 +15,7 @@ export default {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   testPathIgnorePatterns: ['<rootDir>/dist/'],
+  maxWorkers: 1,
   globalTeardown: '<rootDir>/tests/globalTeardown.js',
   collectCoverageFrom: [
     'src/**/*.ts',

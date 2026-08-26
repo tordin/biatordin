@@ -22,7 +22,7 @@ import { modelFlashStructured } from "../../src/llm/model.js";
 function mockSupervisorDecision(decision: Record<string, any>) {
   jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
     invoke: jest.fn<any>().mockResolvedValue(decision)
-  });
+  } as any);
 }
 
 const DEFAULT_DECISION = {

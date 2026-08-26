@@ -1,7 +1,7 @@
 import { SystemMessage, HumanMessage, RemoveMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
-import { AgentState } from "./state.js";
+import { AgentState, PlanStep } from "./state.js";
 import { modelFlashStructured as model } from "../llm/model.js";
 import { sanitizeMessagesForModel } from "../utils/sanitize.js";
 import { sendIntermediateMessage } from "../transport/whatsapp.js";
@@ -17,6 +17,7 @@ import { recordExecutionEvent, getLastTurnEvents, formatAuditExplanation, clearT
 import { validateResponseConsistency } from "../utils/responseValidator.js";
 import { jidsMatch } from "../utils/jidResolver.js";
 import { addVectorMemory } from "../memory/vectorMemory.js";
+import { normalizePlan, updatePlanProgress, shouldEnforcePlan, formatPlanForPrompt } from "../utils/planManager.js";
 
 
 
@@ -191,6 +192,17 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
       toolCallHashMap: {},
       executedTools: [],
     };
+  } else if (currentContext.activePlan && currentContext.activePlan.length > 0) {
+    const lastExecutedAgent = currentContext.executionLog?.length 
+      ? currentContext.executionLog[currentContext.executionLog.length - 1] 
+      : undefined;
+    if (lastExecutedAgent) {
+      currentContext.activePlan = updatePlanProgress(
+        currentContext.activePlan,
+        lastExecutedAgent,
+        currentContext.lastError
+      );
+    }
   }
   
   const turnStartTime = currentContext.turnStartTime || Date.now();
@@ -280,10 +292,19 @@ ${memoryContent}
 </local_chat_memory>
 `;
 
+  const planPrompt = formatPlanForPrompt(currentContext.activePlan);
+
+  let evaluatorFeedbackPrompt = "";
+  if (currentContext.evaluationFeedback) {
+    evaluatorFeedbackPrompt = `[FEEDBACK DO AUDITOR / AVALIADOR DE QUALIDADE]:\nA resposta anterior precisa de correção ou esclarecimento:\n"${currentContext.evaluationFeedback}"\nINSTRUÇÃO: Ajuste a resposta final no campo 'response' e defina nextAgent = 'FINISH' para entregar a resposta corrigida ao usuário (a menos que uma nova ferramenta seja estritamente necessária).`;
+  }
+
   const contextPrompt = new SystemMessage(
     `[ESTADO DE EXECUÇÃO ATUAL]:\n${JSON.stringify(sanitizedContext)}\n\n` +
     memoryTag +
     `${missionsContext}\n\n` +
+    (evaluatorFeedbackPrompt ? `${evaluatorFeedbackPrompt}\n\n` : "") +
+    (planPrompt ? `${planPrompt}\n\n` : "") +
     (activeTopicsList ? `${activeTopicsList}\n\n` : "") +
     (topicContext ? `${topicContext}\n\n` : "") +
     (auditContextPrompt ? `${auditContextPrompt}\n\n` : "") +
@@ -305,7 +326,12 @@ ${memoryContent}
   // continua sendo aceito como valor.
   const supervisorSchema = z.object({
     plan: z.array(z.string()).nullable().describe("Array com os agentes planejados para serem executados, em ordem"),
-    nextAgent: z.enum(["searchAgent", "calendarAgent", "gmailAgent", "sheetsAgent", "docsAgent", "driveAgent", "routineAgent", "memoryAgent", "taskAgent", "securityAgent", "shoppingAgent", "whatsappAgent", "reasoningAgent", "weatherAgent", "missionAgent", "FINISH"]),
+    nextAgent: z.enum([
+      "searchAgent", "calendarAgent", "gmailAgent", "emailSentinelAgent", "sheetsAgent",
+      "docsAgent", "driveAgent", "routineAgent", "memoryAgent", "taskAgent",
+      "trackerAgent", "securityAgent", "shoppingAgent", "whatsappAgent", "reasoningAgent",
+      "weatherAgent", "missionAgent", "followUpAgent", "crmAgent", "FINISH"
+    ]),
     specialistTask: z.string().nullable().describe("Instrução clara, objetiva e cirúrgica do que o especialista deve fazer. Preencher OBRIGATORIAMENTE quando nextAgent não for FINISH."),
     reason: z.string().nullable(),
     response: z.string().nullable().describe("Resposta final para o usuário. Preencher SOMENTE quando nextAgent for 'FINISH'. Deixar vazio ao chamar um especialista."),
@@ -364,12 +390,50 @@ ${memoryContent}
     }
   }
 
+  // 🎯 Integração com Plan Enforcement Engine
+  let activePlan = currentContext.activePlan;
+  if (!activePlan || activePlan.length === 0) {
+    if (parsed.plan && Array.isArray(parsed.plan) && parsed.plan.length > 0) {
+      const normalized = normalizePlan(parsed.plan);
+      if (parsed.nextAgent !== "FINISH") {
+        const firstIdx = normalized.findIndex(s => s.agent === parsed.nextAgent && s.status === "pending");
+        if (firstIdx !== -1) {
+          normalized[firstIdx].status = "in_progress";
+        }
+      }
+      activePlan = normalized;
+    }
+  }
+
+  // Avalia se o encerramento (FINISH) foi prematuro e deve ser interceptado pelo Plan Enforcement
+  const enforcement = shouldEnforcePlan(
+    activePlan,
+    parsed.nextAgent,
+    currentContext.executionLog || [],
+    currentContext.lastError
+  );
+
+  if (enforcement.shouldEnforce && enforcement.nextStep) {
+    logger.info(`[PLAN_ENFORCEMENT] ${enforcement.reason}`);
+    parsed.nextAgent = enforcement.nextStep.agent as any;
+    parsed.specialistTask = enforcement.nextStep.task;
+    parsed.response = null;
+
+    // Atualiza status do próximo passo para 'in_progress'
+    const normalizedPlan = normalizePlan(activePlan);
+    const targetIdx = normalizedPlan.findIndex(s => s.agent === enforcement.nextStep!.agent && s.status === "pending");
+    if (targetIdx !== -1) {
+      normalizedPlan[targetIdx].status = "in_progress";
+    }
+    activePlan = normalizedPlan;
+  }
+
   const updates: Record<string, any> = {
     nextAgent: parsed.nextAgent,
     contextData: {
       ...currentContext,
       ...(isNewTurn ? { __reset: true, specialistTask: undefined } : {}),
-      ...(parsed.plan ? { activePlan: parsed.plan } : {}),
+      ...(activePlan && activePlan.length > 0 ? { activePlan } : (parsed.plan ? { activePlan: parsed.plan } : {})),
       ...(parsed.specialistTask ? { specialistTask: parsed.specialistTask } : { specialistTask: undefined }),
       turnStartTime,
       totalToolCalls,
@@ -444,14 +508,26 @@ ${memoryContent}
   if (isRepeatingAgent) {
     logger.warn(`Loop detectado: ${updates.nextAgent} chamado repetidamente. Forçando FINISH.`);
     updates.nextAgent = "FINISH";
-    if (!parsed.response) {
-      parsed.response = "[SILENT]";
+    if (!parsed.response || parsed.response.trim() === "" || parsed.response.toUpperCase() === "[SILENT]") {
+      if (currentContext.proposedResponse && currentContext.proposedResponse.toUpperCase() !== "[SILENT]") {
+        parsed.response = currentContext.proposedResponse;
+      } else if (currentContext.isTrustedChat) {
+        parsed.response = "Prontinho! Concluí o que você pediu.";
+      } else {
+        parsed.response = "[SILENT]";
+      }
     }
   } else if (updates.nextAgent !== "FINISH" && currentExecutions >= maxAgentCalls) {
     logger.warn(`Max agent calls (${maxAgentCalls}) atingido. Forçando FINISH.`);
     updates.nextAgent = "FINISH";
-    if (!parsed.response) {
-      parsed.response = "[SILENT]";
+    if (!parsed.response || parsed.response.trim() === "" || parsed.response.toUpperCase() === "[SILENT]") {
+      if (currentContext.proposedResponse && currentContext.proposedResponse.toUpperCase() !== "[SILENT]") {
+        parsed.response = currentContext.proposedResponse;
+      } else if (currentContext.isTrustedChat) {
+        parsed.response = "Prontinho! Concluí o que você pediu.";
+      } else {
+        parsed.response = "[SILENT]";
+      }
     }
   }
   
@@ -531,6 +607,7 @@ ${memoryContent}
       ...messagesToRemove,
       ...(cleanText ? [new AIMessage(cleanText)] : [])
     ];
+    updates.contextData.proposedResponse = cleanText;
     updates.contextData.lastInteractionTimestamp = Date.now();
   }
 

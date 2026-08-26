@@ -9,7 +9,7 @@
     "start": "bash scripts/start.sh",
     "restart": "bash scripts/start.sh",
     "build": "tsc",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit",
     "eval:mission": "tsx scripts/autonomous_eval.ts"
   },
   "keywords": [],

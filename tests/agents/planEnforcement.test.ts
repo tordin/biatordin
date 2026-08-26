@@ -2,7 +2,7 @@ import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { supervisorNode } from "../../src/agents/supervisor.js";
 import { PlanStep } from "../../src/agents/state.js";
-import { modelSupervisorActive } from "../../src/llm/model.js";
+import { modelFlashStructured } from "../../src/llm/model.js";
 
 describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
   const testChatJid = "5519997064504@s.whatsapp.net";
@@ -14,7 +14,7 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
   it("deve interceptar tentativa de FINISH prematuro quando houver etapas pendentes no plano", async () => {
     // Simula Turno 2: taskAgent já foi executado, mas o calendarAgent ainda está pendente.
     // O modelo LLM decide erroneamente FINISH.
-    jest.spyOn(modelSupervisorActive, "withStructuredOutput").mockReturnValue({
+    jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
       invoke: jest.fn<any>().mockResolvedValue({
         plan: [
           { agent: "taskAgent", task: "Adicionar tarefa comprar leite" },
@@ -70,7 +70,7 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
 
   it("deve permitir FINISH normalmente quando todas as etapas do plano estiverem concluídas", async () => {
     // Simula Turno 3: taskAgent e calendarAgent já executaram com sucesso.
-    jest.spyOn(modelSupervisorActive, "withStructuredOutput").mockReturnValue({
+    jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
       invoke: jest.fn<any>().mockResolvedValue({
         plan: [
           { agent: "taskAgent", task: "Adicionar tarefa comprar leite" },
@@ -117,7 +117,7 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
 
   it("deve tratar falha em uma etapa e prosseguir para as etapas pendentes subsequentes", async () => {
     // taskAgent falhou, mas ainda temos weatherAgent pendente
-    jest.spyOn(modelSupervisorActive, "withStructuredOutput").mockReturnValue({
+    jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
       invoke: jest.fn<any>().mockResolvedValue({
         plan: [
           { agent: "taskAgent", task: "Criar tarefa" },
@@ -162,7 +162,7 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
 
   it("deve respeitar limites de anti-loop e não entrar em loop infinito mesmo com etapas pendentes", async () => {
     // 5 execuções já realizadas no turno
-    jest.spyOn(modelSupervisorActive, "withStructuredOutput").mockReturnValue({
+    jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
       invoke: jest.fn<any>().mockResolvedValue({
         plan: [
           { agent: "taskAgent", task: "Criar tarefa" },
@@ -202,7 +202,7 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
   });
 
   it("deve funcionar com planos em formato legado (array de strings)", async () => {
-    jest.spyOn(modelSupervisorActive, "withStructuredOutput").mockReturnValue({
+    jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
       invoke: jest.fn<any>().mockResolvedValue({
         plan: ["taskAgent", "calendarAgent"],
         nextAgent: "FINISH",
