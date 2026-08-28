@@ -106,6 +106,31 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
       return String(input);
     };
 
+    const extractToolOutput = (raw: any): string => {
+      if (raw === undefined || raw === null) return '';
+      if (typeof raw === 'string') {
+        if (raw.startsWith('{') && (raw.includes('"ToolMessage"') || raw.includes('"kwargs"'))) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed?.kwargs?.content) return extractToolOutput(parsed.kwargs.content);
+            if (parsed?.content) return extractToolOutput(parsed.content);
+          } catch {}
+        }
+        return raw;
+      }
+      if (typeof raw === 'object') {
+        if (typeof raw.content === 'string') return raw.content;
+        if (raw.kwargs && typeof raw.kwargs.content === 'string') return raw.kwargs.content;
+        if (typeof raw.text === 'string') return raw.text;
+        try {
+          return JSON.stringify(raw, null, 2);
+        } catch {
+          return String(raw);
+        }
+      }
+      return String(raw);
+    };
+
     const upsertChat = (chatId: string, name: string, ts: string, lastMsgText?: string, accountType?: 'main' | 'personal' | 'system', flush = true) => {
       const prev = chatsRef.current;
       const existingIdx = prev.findIndex(c => c.id === chatId);
@@ -448,6 +473,34 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
                systemPrompt = systemPrompt.replace(/<core_memory>[\s\S]*?<\/core_memory>/, '').trim();
             }
           }
+
+          // Retroactive backfill: se houver nós de ferramentas anteriores ainda em "Executando...",
+          // preenche com o conteúdo real das mensagens 'TOOL' registradas neste LLM_START.
+          if (triggerId) {
+            const toolMsgs = log.data.messages.filter((m: any) => m.role === 'TOOL' && m.content);
+            if (toolMsgs.length > 0) {
+              const traceList = tracesRef.current[triggerId] || [];
+              const pendingToolNodes = traceList.filter(n => n.isToolStep && (!n.toolDetails?.rawOutput || n.toolDetails.rawOutput === 'Executando...'));
+              if (pendingToolNodes.length > 0) {
+                const startOffset = Math.max(0, toolMsgs.length - pendingToolNodes.length);
+                pendingToolNodes.forEach((node, i) => {
+                  const matchedMsg = toolMsgs[startOffset + i];
+                  if (matchedMsg) {
+                    const outText = typeof matchedMsg.content === 'string' ? matchedMsg.content : JSON.stringify(matchedMsg.content);
+                    node.toolDetails = {
+                      ...node.toolDetails,
+                      name: node.toolDetails?.name || node.title,
+                      input: node.toolDetails?.input || '',
+                      rawOutput: outText
+                    };
+                    if (inspectorsRef.current[node.id]) {
+                      inspectorsRef.current[node.id].toolDetails = { ...node.toolDetails };
+                    }
+                  }
+                });
+              }
+            }
+          }
         }
         
         inspectorsRef.current = {
@@ -557,14 +610,28 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
 
       // Handle TOOL_END
       if (log.event === 'TOOL_END') {
-        if (!triggerId) return;
         const toolRunId = log.data?.runId;
-        const toolNodeId = toolRunId ? toolNodeByRunId.get(toolRunId) : activeToolIds.get(triggerId);
-        if (toolNodeId) {
-          const isError = log.data?.isError === true || (typeof log.data?.output === 'string' && log.data.output.startsWith('Error:'));
-          const outputStr = typeof log.data?.output === 'string' ? log.data.output : JSON.stringify(log.data?.output || '');
+        let toolNodeId = toolRunId ? toolNodeByRunId.get(toolRunId) : undefined;
+        let resolvedTriggerId = triggerId;
 
-          const current = [...(tracesRef.current[triggerId] || [])];
+        if (!resolvedTriggerId && toolNodeId) {
+          for (const [trigId, traceList] of Object.entries(tracesRef.current)) {
+            if (traceList.some(n => n.id === toolNodeId)) {
+              resolvedTriggerId = trigId;
+              break;
+            }
+          }
+        }
+
+        if (!toolNodeId && resolvedTriggerId) {
+          toolNodeId = activeToolIds.get(resolvedTriggerId);
+        }
+
+        if (resolvedTriggerId && toolNodeId) {
+          const outputStr = extractToolOutput(log.data?.output);
+          const isError = log.data?.isError === true || outputStr.startsWith('Error:');
+
+          const current = [...(tracesRef.current[resolvedTriggerId] || [])];
           const nodeIdx = current.findIndex(n => n.id === toolNodeId);
           if (nodeIdx >= 0) {
             const node = current[nodeIdx];
@@ -572,9 +639,13 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
               ...node,
               tint: isError ? 'red' : node.tint,
               isErrorStep: isError ? true : node.isErrorStep,
-              toolDetails: node.toolDetails ? { ...node.toolDetails, rawOutput: outputStr } : undefined
+              toolDetails: node.toolDetails ? { ...node.toolDetails, rawOutput: outputStr } : {
+                name: node.title,
+                input: '',
+                rawOutput: outputStr
+              }
             };
-            tracesRef.current = { ...tracesRef.current, [triggerId]: current };
+            tracesRef.current = { ...tracesRef.current, [resolvedTriggerId]: current };
             if (flush) setTraces({ ...tracesRef.current });
           }
 
@@ -585,7 +656,11 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
               [toolNodeId]: {
                 ...existing,
                 logs: existing.logs + (isError ? `\n[ERROR] Falha na ferramenta: ${outputStr}` : '\n[INFO] Ferramenta concluída.'),
-                toolDetails: existing.toolDetails ? { ...existing.toolDetails, rawOutput: outputStr } : undefined
+                toolDetails: existing.toolDetails ? { ...existing.toolDetails, rawOutput: outputStr } : {
+                  name: existing.toolDetails?.name || 'tool',
+                  input: existing.toolDetails?.input || '',
+                  rawOutput: outputStr
+                }
               }
             };
             if (flush) setInspectors({ ...inspectorsRef.current });

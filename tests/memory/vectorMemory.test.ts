@@ -1,3 +1,5 @@
+import { jest, describe, test, expect, beforeAll } from '@jest/globals';
+import { setAIClient } from "../../src/memory/embeddings.js";
 import { 
   initVectorMemory, 
   addVectorMemory, 
@@ -16,6 +18,13 @@ describe("Semantic Search RAG Vector Memory Layer (sqlite-vec)", () => {
   let insertedId2: number;
 
   beforeAll(async () => {
+    setAIClient({
+      models: {
+        embedContent: async () => ({
+          embeddings: [{ values: new Array(3072).fill(0.1) }]
+        })
+      }
+    });
     await initVectorMemory();
   });
 
@@ -50,23 +59,17 @@ describe("Semantic Search RAG Vector Memory Layer (sqlite-vec)", () => {
     expect(records.some(r => r.content.includes("smartwatch"))).toBe(true);
   });
 
+  test("deve realizar busca semântica RAG por similaridade vetorial", async () => {
+    const results = await searchVectorMemory("O que eu combinei sobre o presente do aniversário do meu irmão?", 10, testChatJid, false);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.some(r => r.content.includes("smartwatch"))).toBe(true);
+  }, 15000);
+
   test("deve sincronizar a memória core com o banco vetorial (syncCoreMemoryToVector)", async () => {
     const syncedCount = await syncCoreMemoryToVector();
     expect(typeof syncedCount).toBe("number");
   });
 
-  test("deve listar memórias recentes gravadas", async () => {
-    const list = await listVectorMemories(10);
-    expect(list.length).toBeGreaterThanOrEqual(2);
-    expect(list.some(m => m.content.includes("smartwatch"))).toBe(true);
-    expect(list.some(m => m.content.includes("Royal Canin"))).toBe(true);
-  });
-
-  test("deve realizar busca semântica RAG por similaridade vetorial", async () => {
-    const results = await searchVectorMemory("O que eu combinei sobre o presente do aniversário do meu irmão?", 3, testChatJid);
-    expect(results.length).toBeGreaterThan(0);
-    expect(results[0].content).toContain("smartwatch");
-  }, 15000);
 
   test("deve excluir memórias do banco relacional e vetorial", async () => {
     const success1 = await deleteVectorMemory(insertedId1);

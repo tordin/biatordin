@@ -4,6 +4,32 @@ Este documento estabelece as diretrizes arquiteturais, regras de projeto e padr�
 
 ---
 
+## 0. Documentação Arquitetural de Referência (`docs/architecture/`)
+
+O repositório mantém uma pasta modular de documentação técnica e decisões arquiteturais em [`docs/architecture/`](docs/architecture/README.md).
+
+### Diretrizes Obrigatórias para IAs e Desenvolvedores:
+1. **Consulta Prévia Obrigatória:** Antes de propor ou implementar alterações estruturais, refatorações, criação de nós no LangGraph, novos agentes especialistas, alterações em tabelas do SQLite ou regras de transporte/memória, a IA **DEVE** consultar o documento correspondente em `docs/architecture/`:
+   - [01. Visão Geral & Princípios](docs/architecture/01-visao-geral-e-principios.md)
+   - [02. Fluxo LangGraph & Estado](docs/architecture/02-fluxo-langgraph-e-estado.md)
+   - [03. Supervisora & Cenários](docs/architecture/03-supervisora-e-cenarios.md)
+   - [04. Skills & Tools Registry](docs/architecture/04-skills-e-tools-registry.md)
+   - [05. Agentes Especialistas](docs/architecture/05-agentes-especialistas.md)
+   - [06. Sistema de Memória & RAG](docs/architecture/06-sistema-de-memoria-e-rag.md)
+   - [07. CRM Pessoal & Entidades](docs/architecture/07-crm-e-grafo-de-entidades.md)
+   - [08. Transporte WhatsApp](docs/architecture/08-transporte-whatsapp-baileys.md)
+   - [09. Missões Autônomas](docs/architecture/09-missoes-autonomas.md)
+   - [10. Follow-Up & Cobranças](docs/architecture/10-follow-up-e-cobrancas.md)
+   - [11. Sentinela de E-mail](docs/architecture/11-sentinela-de-email.md)
+   - [12. Avaliação & Segurança](docs/architecture/12-avaliacao-qualidade-e-seguranca.md)
+   - [13. Banco de Dados SQLite](docs/architecture/13-banco-de-dados-e-persistencia.md)
+   - [14. Observabilidade & Debugger](docs/architecture/14-observabilidade-api-e-debugger.md)
+   - [15. Guia de Evolução](docs/architecture/15-guia-de-evolucao-e-manutencao.md)
+2. **Sincronização Contínua pós-Modificação:** Sempre que uma funcionalidade, regra de negócio, ferramenta ou estrutura de banco for criada, alterada ou removida:
+   - A IA **DEVE** atualizar o(s) documento(s) afetado(s) em `docs/architecture/` no mesmo commit/tarefa.
+   - O `AGENTS.md` e o `docs/architecture/README.md` devem ser mantidos coerentes e atualizados como o índice mestre de regras.
+
+
 ## 1. Arquitetura de Tools vs. Skills
 
 O sistema utiliza a distinção clara entre **Tools (Ferramentas)** e **Skills (Habilidades)**:
@@ -30,20 +56,29 @@ Para manter a eficiência de tokens, baixa latência e alta precisão do LLM:
 
 ---
 
-## 3. Arquitetura de Memória & Armazenamento Dedicado
+## 3. Arquitetura de Memória Cognitiva & Armazenamento Dedicado
 
-A memória da Bia é dividida rigorosamente entre **Memória de Perfil (Core)** e **Espaços Operacionais Dedicados**:
+A memória da Bia é unificada 100% no SQLite (`database.sqlite`) e dividida entre **Memória de Trabalho Cognitiva (RAG)** e **Espaços Operacionais Dedicados**:
 
-### A) Memória Core (`data/bia_memory.md`)
-- Contém **exclusivamente informações de perfil e fatos permanentes/semi-permanentes** do usuário e sua família (nome, idade, familiares, hobbies, preferências, contextos de vida).
-- É injetada no contexto da Supervisora para personalizar a interação.
-- **Regra:** NUNCA grave tarefas, listas de afazeres, itens a vender, histórico de preços ou configurações temporárias no arquivo `bia_memory.md`.
+### A) Memória de Trabalho Cognitiva (Working Memory & RAG em SQLite)
+- **Persistência Unificada:** Armazenada nas tabelas `long_term_memories` e `vec_memories` (3072 dimensões via `sqlite-vec`).
+- **Score Contínuo de Ativação & Decay Duplo:** $S(i, t) = I^2 + (1 - I^2) \cdot R(\Delta t) \cdot F(n)$, balanceando **Importância** ($I=1.0$ para fatos vitais de perfil perenes), **Recência** (curva exponencial suave com meia-vida de 7 dias) e **Reforço** (citações e co-ativações). Fatos contextuais/transitórios (`conversa`, `contexto` com $I < 0.85$) possuem **decay duplo de sessão** (meia-vida de 4h) aplicado no componente dinâmico.
+- **Retrieval Híbrido com RRF:** `getWorkingMemoryContext()` executa busca combinada por recência/cobertura (Canal A) e busca semântica vetorial no `sqlite-vec` (Canal B), fundidos via **Reciprocal Rank Fusion (RRF)** ($k=60$) com ponderação equilibrada contra o score cognitivo.
+- **Sistema de Slots Reservados:** Segmentação estruturada do orçamento de contexto com overflow inteligente entre **Slot Core** (30% - perfil/vitais), **Slot Sessão** (25% - últimas 4h) e **Slot Relevância** (45% - longo prazo/semântica).
+- **Reconciliação Semântica na Gravação:** Gravações sensíveis (`perfil`, `fato`, `preferencia`, `combinado`) realizam busca vetorial prévia local e arbitram contradições via `semanticArbiter.ts` (distinção de sujeitos e prevalência de declarações negativas).
+- **Injeção em Tempo Real (Pós-Snapshot):** Fatos criados/atualizados após o último snapshot consolidado ou pertencentes à sessão ativa são injetados imediatamente no bloco `## 🔄 Contexto & Fatos Recentes` em `getWorkingMemoryContext()`, sem filtros restritivos de importância.
+- **Consolidação de Sono Bidirecional & GC:** Síntese diária às 03:05 via LLM que compila o snapshot e expurga contradições/erros (`purgeIds`) da base relacional, acompanhada do Garbage Collector para descarte de fatos transitórios esquecidos.
 
-### B) Espaços de Armazenamento Operacionais Dedicados (SQLite)
-- Dados operacionais dinâmicos devem obrigatoriamente residir em **tabelas SQLite dedicadas** (`database.sqlite`) geridas por suas respectivas Skills/Tools:
+### B) Espaços de Armazenamento Operacionais Dedicados (SQLite & `src/memory/db.ts`)
+- **Conexão Centralizada Obrigatória:** Todos os módulos de persistência **DEVEM** obter a conexão SQLite exclusivamente através de `getDb()` / `getDbPath()` em `src/memory/db.ts`. NUNCA instancie `new sqlite3.Database('database.sqlite')` diretamente.
+- **Isolamento de Testes:** A suíte de testes do Jest roda automaticamente apontando para `database.test.sqlite` via `process.env.SQLITE_DB_PATH`, garantindo que testes automatizados nunca alterem ou poluam a base de produção (`database.sqlite`).
+- Dados operacionais dinâmicos devem residir em **tabelas SQLite dedicadas** gerenciadas por suas respectivas Skills/Tools:
   - **Gestão de Tarefas & Listas**: Tabela `tasks` + `taskAgent` (`add_task`, `list_tasks`, `complete_task`, `delete_task`).
   - **Rotinas e Lembretes**: Tabela `routines` + `routineAgent` (`create_routine`, `list_routines`, `delete_routine`).
+  - **CRM Pessoal & Entidades**: Tabelas `entities` e `entity_relationships` + `crmAgent`.
+  - **Sentinela de E-mails**: Tabelas `email_sentinel_rules` e `email_sentinel_log` + `emailSentinelAgent`.
   - **Monitoramento de Grupos & Segurança**: Tabelas `security` / `ignored_groups` / `topics` + `securityAgent` e `whatsappAgent`.
+
 
 ---
 

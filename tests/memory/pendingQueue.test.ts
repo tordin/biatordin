@@ -1,7 +1,8 @@
 import { 
   savePendingMessage, 
   clearPendingMessagesForQueue, 
-  getAllPendingMessages 
+  getAllPendingMessages,
+  clearStalePendingMessages
 } from "../../src/memory/pendingQueue.js";
 
 describe("Pending Messages Queue DB", () => {
@@ -31,4 +32,30 @@ describe("Pending Messages Queue DB", () => {
     const pending = await getAllPendingMessages();
     expect(pending.some(m => m.id === msgId)).toBe(false);
   });
+
+  test("deve limpar mensagens antigas com base no cutoff de horas", async () => {
+    const oldMsgId = "pending-msg-old";
+    const twoDaysAgo = Date.now() - (48 * 60 * 60 * 1000);
+    await savePendingMessage(
+      oldMsgId,
+      queueKey,
+      "main",
+      "test-queue-chat@s.whatsapp.net",
+      "Mensagem antiga",
+      "Usuario Antigo",
+      "user-old@s.whatsapp.net",
+      twoDaysAgo,
+      { triggerType: "chat" }
+    );
+
+    const pendingBefore = await getAllPendingMessages();
+    expect(pendingBefore.some(m => m.id === oldMsgId)).toBe(true);
+
+    const deletedCount = await clearStalePendingMessages(24);
+    expect(deletedCount).toBeGreaterThanOrEqual(1);
+
+    const pendingAfter = await getAllPendingMessages();
+    expect(pendingAfter.some(m => m.id === oldMsgId)).toBe(false);
+  });
 });
+

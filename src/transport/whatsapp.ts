@@ -12,7 +12,7 @@ import { isTrustedChat, MASTER_NUMBER, MASTER_JIDS } from '../memory/security.js
 import { isGroupIgnored, addIgnoredGroup, removeIgnoredGroup, isGroupManagementCommand } from '../config/ignoredGroups.js';
 import { appendMessageToHistory } from '../memory/chatHistory.js';
 import { isCommand, handleCommand, getChatModelOverride } from '../commands/commandRouter.js';
-import { savePendingMessage, getAllPendingMessages, clearPendingMessagesForQueue } from '../memory/pendingQueue.js';
+import { savePendingMessage, getAllPendingMessages, clearPendingMessagesForQueue, clearStalePendingMessages } from '../memory/pendingQueue.js';
 import { hasActiveMissionForTarget, getActiveMissionsForTarget, getActiveMissionsForChat, getRecentMissionsForChat } from '../memory/missions.js';
 import { autoResolveFollowUpsForChat } from '../memory/followUps.js';
 import { loadLidMappings, registerLidMapping, jidsMatch, canonicalJid } from '../utils/jidResolver.js';
@@ -112,12 +112,20 @@ const subscribedPresenceJids = new Set<string>();
 
 async function recoverPendingMessagesOnStartup(accountName: string, sock: any) {
     try {
+        // 1. Purga mensagens pendentes antigas (> 24h) de execuções ou simulações mortas
+        await clearStalePendingMessages(24).catch(err =>
+            logger.warn(`[RECOVERY] Erro ao purgar mensagens pendentes antigas:`, err)
+        );
+
         const pending = await getAllPendingMessages();
         const accountPending = pending.filter(p => p.accountName === accountName);
         if (accountPending.length > 0) {
             logger.info(`[RECOVERY] Encontradas ${accountPending.length} mensagens pendentes para a conta ${accountName}. Reagendando processamento...`);
+            const recoveredQueueKeys = new Set<string>();
+
             for (const item of accountPending) {
                 const queueKey = item.queueKey;
+                recoveredQueueKeys.add(queueKey);
                 let queue = chatQueues.get(queueKey);
                 if (!queue) {
                     queue = {
@@ -125,9 +133,11 @@ async function recoverPendingMessagesOnStartup(accountName: string, sock: any) {
                         messages: [],
                         timeoutId: null,
                         isProcessing: false,
-                        firstMessageTime: Date.now()
+                        firstMessageTime: item.timestamp || Date.now()
                     };
                     chatQueues.set(queueKey, queue);
+                } else if (item.timestamp && item.timestamp < queue.firstMessageTime) {
+                    queue.firstMessageTime = item.timestamp;
                 }
                 const meta = item.metadata ? (typeof item.metadata === 'string' ? JSON.parse(item.metadata) : item.metadata) : {};
                 queue.messages.push({
@@ -138,6 +148,18 @@ async function recoverPendingMessagesOnStartup(accountName: string, sock: any) {
                     timestamp: item.timestamp,
                     metadata: meta
                 });
+            }
+
+            // 2. Agenda o processamento para todas as filas que tiveram mensagens recuperadas
+            for (const queueKey of recoveredQueueKeys) {
+                const queue = chatQueues.get(queueKey);
+                if (queue && queue.messages.length > 0 && !queue.isProcessing && !queue.timeoutId) {
+                    const delayTime = accountName === 'personal' ? 5000 : 3000;
+                    logger.info(`[RECOVERY] Agendando fila recuperada ${queueKey} (${queue.messages.length} msgs) para processamento em ${delayTime}ms.`);
+                    queue.timeoutId = setTimeout(() => {
+                        processChatQueue(queueKey, sock);
+                    }, delayTime);
+                }
             }
         }
     } catch (e) {
@@ -216,13 +238,24 @@ export function getSilenceDelayForMessage(text: string): number {
 // Função utilitária para normalizar JIDs e remover o sufixo de dispositivo (:xx)
 export function normalizeJid(jid: string | null | undefined): string {
     if (!jid) return "";
-    const [user, server] = jid.split('@');
-    const cleanUser = jid.includes(':') ? user.split(':')[0] + '@' + server : jid;
-    return cleanUser;
+    const [userWithDev, serverWithDev] = jid.split('@');
+    if (!serverWithDev) return userWithDev.split(':')[0];
+    const cleanUser = userWithDev.split(':')[0];
+    const cleanServer = serverWithDev.split(':')[0];
+    return `${cleanUser}@${cleanServer}`;
 }
 
 // Conjunto em memória para rastrear os JIDs dos grupos dos quais a conta main (Bia) faz parte
 const mainGroupJids = new Set<string>();
+
+/**
+ * Verifica se um JID é de transmissão ou Status/Stories do WhatsApp (ex: status@broadcast)
+ */
+export function isBroadcastJid(jid: string | null | undefined): boolean {
+    const norm = normalizeJid(jid);
+    if (!norm) return false;
+    return norm === 'status@broadcast' || norm.endsWith('@broadcast');
+}
 
 /**
  * Verifica se um determinado JID pertence à própria Bia (conta main)
@@ -466,6 +499,7 @@ async function processChatQueue(queueKey: string, sock: any) {
                 contextData: { 
                     active_topic_title: title,
                     topicId: topicId,
+                    isMaster: MASTER_JIDS.includes(canonicalJid(chatJid)) || MASTER_JIDS.includes(canonicalJid(lastMsgUserJid)),
                     isTrustedChat: isTrusted,
                     isGroup: isGroup,
                     chatJid: chatJid,
@@ -518,14 +552,36 @@ async function processChatQueue(queueKey: string, sock: any) {
             // Bloqueio de segurança para a conta pessoal (READ-ONLY)
             if (accountName === 'personal') {
                 if (responseText && responseText.trim().toUpperCase() !== '[SILENT]') {
-                    logger.warn(`[SECURITY] IA gerou resposta na conta pessoal. Encaminhando mensagem gerada como alerta natural para o Master. Chat de origem: ${chatJid}`);
-                    await notifyMaster(responseText);
-                    silenceReason = 'Conta pessoal: Alerta enviado em privado para o Master (silêncio mantido com terceiro).';
+                    const isTechnicalErrorMsg = responseText.toLowerCase().includes('instabilidade') || 
+                                                responseText.toLowerCase().includes('não consegui processar') ||
+                                                responseText.toLowerCase().includes('tente novamente') ||
+                                                responseText.toLowerCase().includes('falha técnica');
+                    if (isTechnicalErrorMsg) {
+                        logger.warn(`[SECURITY] Erro técnico suprimido na conta pessoal (sem envio de alerta espúrio ao Master): "${responseText}"`);
+                        silenceReason = 'Conta pessoal: Erro técnico interno suprimido (silêncio mantido).';
+                    } else {
+                        logger.warn(`[SECURITY] IA gerou resposta na conta pessoal. Encaminhando mensagem gerada como alerta natural para o Master. Chat de origem: ${chatJid}`);
+                        await notifyMaster(responseText);
+                        silenceReason = 'Conta pessoal: Alerta enviado em privado para o Master (silêncio mantido com terceiro).';
+                    }
                 } else {
-                    silenceReason = silenceReason || 'Conta pessoal: Observação passiva silenciosa (sem fatos urgentes para alertar).';
+                    // Usa o silenceReason descritivo gerado pelo supervisor (via contextDataUpdate)
+                    // Fallback: constrói a razão a partir das memórias episódicas salvas
+                    if (!silenceReason) {
+                        const episodicMemories: any[] = result.contextData?.newEpisodicMemories || [];
+                        if (episodicMemories.length > 0) {
+                            const memorySummary = episodicMemories
+                                .map((m: any) => typeof m === 'string' ? m : (m?.content || JSON.stringify(m)))
+                                .join('; ');
+                            silenceReason = `Conta pessoal: Guardei na memória — ${memorySummary}`;
+                        } else {
+                            silenceReason = 'Conta pessoal: Ignorei — sem fatos relevantes para registrar.';
+                        }
+                    }
                 }
                 responseText = ''; // Força silêncio absoluto no socket da conta pessoal
             }
+
 
             // Se a resposta for '[SILENT]' ou vazia/não-AIMessage, não enviamos nenhuma mensagem de volta
             if (!responseText || responseText.trim().toUpperCase() === '[SILENT]') {
@@ -724,6 +780,7 @@ async function executeIsolatedSystemMessage(
                 contextData: {
                     active_topic_title: title,
                     topicId: topicId,
+                    isMaster: MASTER_JIDS.includes(canonicalJid(resolvedChatJid)),
                     isTrustedChat: isTrusted,
                     isGroup: isGroup,
                     chatJid: resolvedChatJid,
@@ -766,7 +823,19 @@ async function executeIsolatedSystemMessage(
                     await notifyMaster(responseText);
                     silenceReason = 'Conta pessoal: Alerta enviado em privado para o Master (silêncio mantido com terceiro).';
                 } else {
-                    silenceReason = silenceReason || 'Conta pessoal: Observação passiva silenciosa (sem fatos urgentes para alertar).';
+                    // Usa o silenceReason descritivo gerado pelo supervisor (via contextDataUpdate)
+                    // Fallback: constrói a razão a partir das memórias episódicas salvas
+                    if (!silenceReason) {
+                        const episodicMemories: any[] = result.contextData?.newEpisodicMemories || [];
+                        if (episodicMemories.length > 0) {
+                            const memorySummary = episodicMemories
+                                .map((m: any) => typeof m === 'string' ? m : (m?.content || JSON.stringify(m)))
+                                .join('; ');
+                            silenceReason = `Conta pessoal: Guardei na memória — ${memorySummary}`;
+                        } else {
+                            silenceReason = 'Conta pessoal: Ignorei — sem fatos relevantes para registrar.';
+                        }
+                    }
                 }
                 responseText = '';
             }
@@ -946,14 +1015,30 @@ export function queueMessageSend(queueKey: string, sendFn: () => Promise<any>): 
 const lastIntermediateTime = new Map<string, number>();
 
 export async function sendIntermediateMessage(chatJidOrThreadId: string, text: string, accountName: string = 'main') {
+    if (!text || typeof text !== 'string') {
+        return;
+    }
+    const cleanText = text.trim();
+    if (cleanText === "" || cleanText.toLowerCase() === "null" || cleanText.toLowerCase() === "undefined" || cleanText.toUpperCase() === "[SILENT]") {
+        return;
+    }
+
     const sock = sockets.get(accountName) || globalSock;
     if (!sock) {
         logger.error(`[INTERMEDIATE MSG] Socket for ${accountName} is not initialized.`);
         return;
     }
     
-    // Extrai o JID real se for um threadId (JID_topicId)
-    const chatJid = chatJidOrThreadId.includes('_') ? chatJidOrThreadId.split('_')[0] : chatJidOrThreadId;
+    // Extrai o JID real se for um threadId (ex: main_5519997064504@s.whatsapp.net_topicId ou JID_topicId)
+    let chatJid = chatJidOrThreadId;
+    if (chatJidOrThreadId.includes('@')) {
+        const match = chatJidOrThreadId.match(/([a-zA-Z0-9.\-_]+@(s\.whatsapp\.net|g\.us|lid))/);
+        if (match) {
+            chatJid = match[1];
+        }
+    } else if (chatJidOrThreadId.includes('_')) {
+        chatJid = chatJidOrThreadId.split('_')[0];
+    }
     const queueKey = `${accountName}:${chatJid}`;
     
     // Previne envio de mensagens intermediárias na conta pessoal
@@ -1450,6 +1535,12 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
 
             const isSelf = chatJid === myJid || chatJid === myLid;
             const isGroup = chatJid.endsWith('@g.us');
+
+            // ===== STATUS/BROADCAST: Ignora atualizações de Status/Stories do WhatsApp =====
+            if (isBroadcastJid(chatJid)) {
+                logger.info(`[IGNORED] Mensagem de broadcast/status (${chatJid}) ignorada no processRawQueue.`);
+                continue;
+            }
 
             // ===== MENSAGENS DA BIA: Ignora qualquer mensagem enviada pela própria Bia =====
             if (isMessageFromBia(userJid)) {
@@ -1978,6 +2069,9 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
         for (const msg of m.messages) {
             const chatJid = normalizeJid(msg.key.remoteJid);
             const userJid = normalizeJid(msg.key.participant || msg.participant || chatJid);
+
+            // Ignora postagens de Status/Stories e Broadcasts do WhatsApp (ex: status@broadcast)
+            if (isBroadcastJid(chatJid)) continue;
 
             // Ignora as próprias mensagens enviadas no socket da Bia (main) para evitar self-loops,
             // mas preserva no socket 'personal' para gravar o histórico do que o usuário humano respondeu.

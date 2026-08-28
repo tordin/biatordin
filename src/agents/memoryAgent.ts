@@ -7,8 +7,17 @@ import { safeAgentNode } from "./workspace/base.js";
 import { modelFlash as model } from "../llm/model.js";
 import { AgentState } from "./state.js";
 import { logger } from "../utils/logger.js";
-import { getMemory, deleteFromMemory } from "../memory/coreMemory.js";
-import { searchVectorMemory, addVectorMemory, searchEntityMemory } from "../memory/vectorMemory.js";
+import { getWorkingMemoryContext } from "../memory/workingMemory.js";
+import { consolidateWorkingMemorySnapshot } from "../memory/memoryConsolidator.js";
+import { 
+  searchVectorMemory, 
+  addVectorMemory, 
+  addVectorMemoryWithReconciliation,
+  searchEntityMemory, 
+  deleteVectorMemory, 
+  reinforceMemory, 
+  updateVectorMemory 
+} from "../memory/vectorMemory.js";
 import { getTasksForChat } from "../memory/tasks.js";
 import { getSkill } from "../skills/registry.js";
 
@@ -27,33 +36,66 @@ export const readMemoryTool = tool(
   async (_params, config) => {
     const { chatJid, isTrustedChat } = getChatContext(config);
     logger.info("[MEMORY_AGENT] Tool readMemory chamada.");
-    const content = getMemory(chatJid, isTrustedChat);
+    const content = await getWorkingMemoryContext(chatJid, isTrustedChat);
     return `<RAW_TOOL_OUTPUT>\n${content}\n</RAW_TOOL_OUTPUT>`;
   },
   {
     name: "readMemory",
-    description: "Lê o conteúdo principal/estruturado do arquivo de memória da Bia.",
+    description: "Lê a Memória de Trabalho Cognitiva atual da Bia (fatos vitais, recentes e consolidados).",
     schema: z.object({}),
   }
 );
 
-export const deleteFromCoreMemoryTool = tool(
-  async ({ exactTextToRemove }, config) => {
+export const consolidateMemoryTool = tool(
+  async (_params, config) => {
     const { chatJid, isTrustedChat } = getChatContext(config);
-    logger.info(`[MEMORY_AGENT] Tool deleteFromCoreMemory chamada para o texto: "${exactTextToRemove.substring(0, 30)}..."`);
-    
-    const success = deleteFromMemory(chatJid, isTrustedChat, exactTextToRemove);
-    if (success) {
-      return `<RAW_TOOL_OUTPUT>\nTexto removido da memória core com sucesso.\n</RAW_TOOL_OUTPUT>`;
-    } else {
-      return `<RAW_TOOL_OUTPUT>\nTexto não encontrado na memória core. Verifique se o trecho exato foi fornecido.\n</RAW_TOOL_OUTPUT>`;
+    logger.info(`[MEMORY_AGENT] Tool consolidateMemory chamada para chat ${chatJid} (trusted: ${isTrustedChat}).`);
+    try {
+      const snapshot = await consolidateWorkingMemorySnapshot(chatJid, isTrustedChat);
+      return `<RAW_TOOL_OUTPUT>\nMemória consolidada com sucesso!\n\nSnapshot gerado:\n${snapshot}\n</RAW_TOOL_OUTPUT>`;
+    } catch (e: any) {
+      logger.error('[MEMORY_AGENT] Erro ao consolidar memória via tool:', e);
+      return `<RAW_TOOL_OUTPUT>\nErro ao consolidar memória: ${e.message}\n</RAW_TOOL_OUTPUT>`;
     }
   },
   {
-    name: "deleteFromCoreMemory",
-    description: "Apaga um trecho de texto exato da memória core (bia_memory.md). Você deve ler a memória antes para copiar o texto exato.",
+    name: "consolidateMemory",
+    description: "Executa a síntese e consolidação imediata da memória de trabalho (sono da Bia), unificando fatos recentes em um snapshot limpo.",
+    schema: z.object({}),
+  }
+);
+
+export const deleteSemanticMemoryTool = tool(
+  async ({ memoryId, searchQuery }, config) => {
+    const { chatJid, isTrustedChat } = getChatContext(config);
+    logger.info(`[MEMORY_AGENT] Tool deleteSemanticMemory chamada (ID: ${memoryId}, Query: "${searchQuery || ''}")`);
+
+    if (typeof memoryId === 'number' && memoryId > 0) {
+      const success = await deleteVectorMemory(memoryId);
+      if (success) {
+        return `<RAW_TOOL_OUTPUT>\nMemória ID ${memoryId} removida com sucesso do banco de dados.\n</RAW_TOOL_OUTPUT>`;
+      }
+      return `<RAW_TOOL_OUTPUT>\nFalha ao remover memória ID ${memoryId}. Verifique se o ID existe.\n</RAW_TOOL_OUTPUT>`;
+    }
+
+    if (searchQuery && searchQuery.trim()) {
+      const results = await searchVectorMemory(searchQuery.trim(), 1, chatJid, isTrustedChat);
+      if (results && results.length > 0) {
+        const target = results[0];
+        await deleteVectorMemory(target.id);
+        return `<RAW_TOOL_OUTPUT>\nMemória ID ${target.id} ("${target.content}") encontrada e removida com sucesso.\n</RAW_TOOL_OUTPUT>`;
+      }
+      return `<RAW_TOOL_OUTPUT>\nNenhuma memória correspondente encontrada para exclusão com a busca "${searchQuery}".\n</RAW_TOOL_OUTPUT>`;
+    }
+
+    return `<RAW_TOOL_OUTPUT>\nInforme o memoryId ou a searchQuery para localizar e excluir a memória.\n</RAW_TOOL_OUTPUT>`;
+  },
+  {
+    name: "deleteSemanticMemory",
+    description: "Apaga uma memória específica do banco relacional e vetorial pelo ID ou por busca do texto.",
     schema: z.object({
-      exactTextToRemove: z.string().describe("O texto EXATO a ser removido da memória, exatamente como retornado por readMemory.")
+      memoryId: z.number().optional().describe("O ID numérico da memória a ser apagada (retornado pelas buscas)."),
+      searchQuery: z.string().optional().describe("Texto ou palavras-chave para encontrar e apagar a memória correspondente.")
     }),
   }
 );
@@ -64,12 +106,19 @@ export const searchSemanticMemoryTool = tool(
     logger.info(`[MEMORY_AGENT] Executando busca semântica RAG para a query: "${query}"`);
 
     const results = await searchVectorMemory(query, 5, chatJid, isTrustedChat);
+
+    // Reforço cognitivo automático nos IDs encontrados
+    if (results.length > 0) {
+      const ids = results.map(r => r.id);
+      reinforceMemory(ids).catch(e => logger.error('[MEMORY_AGENT] Falha no reforço cognitivo:', e));
+    }
+
     let searchSummary =
       results.length > 0
         ? results
             .map(
               (r, i) =>
-                `${i + 1}. [${r.category.toUpperCase()}] (${r.createdAt}): ${r.content}`
+                `${i + 1}. [ID: ${r.id}] [${r.category.toUpperCase()}] (Importância: ${r.importance}, Data: ${r.createdAt}): ${r.content}`
             )
             .join("\n")
         : "Nenhuma memória semântica correspondente foi encontrada no banco.";
@@ -114,8 +163,8 @@ export const searchSemanticMemoryTool = tool(
 );
 
 export const storeSemanticMemoryTool = tool(
-  async ({ content, category }, config) => {
-    const { chatJid } = getChatContext(config);
+  async ({ content, category, importance }, config) => {
+    const { chatJid, isTrustedChat } = getChatContext(config);
     const activeTopicTitle =
       config?.configurable?.contextData?.activeTopicTitle ||
       config?.configurable?.contextData?.active_topic_title ||
@@ -125,8 +174,6 @@ export const storeSemanticMemoryTool = tool(
       config?.configurable?.contextData?.active_topic_id ||
       undefined;
 
-    // Auto-enrich: se o assunto ativo é sobre um evento/projeto e o conteúdo não o menciona,
-    // prefixa automaticamente com o contexto do assunto para evitar memórias órfãs.
     let finalContent = content;
     if (activeTopicTitle && finalContent) {
       const topicWords = activeTopicTitle
@@ -146,18 +193,32 @@ export const storeSemanticMemoryTool = tool(
     }
 
     const finalCategory = category || "anotacao";
+    const finalImportance = typeof importance === 'number' ? importance : (finalCategory === 'perfil' ? 1.0 : 0.5);
 
     logger.info(
-      `[MEMORY_AGENT] Salvando nova memória semântica RAG: "${finalContent}"`
+      `[MEMORY_AGENT] Salvando nova memória cognitiva RAG com reconciliação: "${finalContent}" (Categoria: ${finalCategory}, Importância: ${finalImportance})`
     );
     const metadata = activeTopicId ? { topicId: activeTopicId } : undefined;
-    const memId = await addVectorMemory(finalContent, finalCategory, chatJid, metadata);
-    return `Memória semântica gravada com sucesso no SQLite (ID: ${memId}).`;
+    const result = await addVectorMemoryWithReconciliation(
+      finalContent,
+      finalCategory,
+      chatJid,
+      metadata,
+      finalImportance,
+      isTrustedChat
+    );
+
+    let responseMsg = `Memória semântica gravada com sucesso no SQLite (ID: ${result.memoryId ?? 'nenhum'}, Importância: ${finalImportance}).`;
+    if (result.verdict && result.verdict.decisions.length > 0) {
+      const actions = result.verdict.decisions.map(d => `${d.candidateId}: ${d.action} (${d.reason})`).join("; ");
+      responseMsg += ` [Reconciliação Semântica: ${actions}]`;
+    }
+    return responseMsg;
   },
   {
     name: "storeSemanticMemory",
     description:
-      "Armazena um fato específico, combinado, anotação ou preferência na memória semântica de longo prazo em SQLite (vetorizado via sqlite-vec).",
+      "Armazena um fato específico, combinado, anotação ou preferência na memória cognitiva RAG (vetorizada via sqlite-vec).",
     schema: z.object({
       content: z
         .string()
@@ -168,7 +229,15 @@ export const storeSemanticMemoryTool = tool(
         .string()
         .optional()
         .describe(
-          "Categoria da memória: 'fato', 'preferencia', 'combinado', 'anotacao', 'compra'"
+          "Categoria da memória: 'perfil', 'fato', 'preferencia', 'combinado', 'anotacao', 'compra'"
+        ),
+      importance: z
+        .number()
+        .min(0.0)
+        .max(1.0)
+        .optional()
+        .describe(
+          "Importância/saliência do fato de 0.0 a 1.0. Guia: 1.0 para fatos vitais de família/perfil (permanentes); 0.7-0.8 para preferências consolidadas; 0.3-0.5 para notas pontuais/eventos transitórios."
         ),
     }),
   }
@@ -189,12 +258,18 @@ export const searchEventSummaryTool = tool(
       20,
       isTrustedChat
     );
+
+    if (entityResults.length > 0) {
+      const ids = entityResults.map(r => r.id);
+      reinforceMemory(ids).catch(e => logger.error('[MEMORY_AGENT] Falha no reforço cognitivo em busca por entidade:', e));
+    }
+
     const memorySummary =
       entityResults.length > 0
         ? entityResults
             .map(
               (r, i) =>
-                `${i + 1}. [${r.category.toUpperCase()}] (${r.createdAt}): ${r.content}`
+                `${i + 1}. [ID: ${r.id}] [${r.category.toUpperCase()}] (Importância: ${r.importance}, Data: ${r.createdAt}): ${r.content}`
             )
             .join("\n")
         : "Nenhuma memória encontrada para essas palavras-chave.";
@@ -240,16 +315,18 @@ export const searchEventSummaryTool = tool(
         chatJid,
         isTrustedChat
       );
-      // Filter out duplicates already in entityResults
       const entityIds = new Set(entityResults.map((r) => r.id));
       const newResults = semanticResults.filter((r) => !entityIds.has(r.id));
       if (newResults.length > 0) {
+        const extraIds = newResults.map(r => r.id);
+        reinforceMemory(extraIds).catch(e => logger.error('[MEMORY_AGENT] Falha no reforço complementar:', e));
+
         semanticExtra =
           "\n\nMEMÓRIAS ADICIONAIS (busca semântica):\n" +
           newResults
             .map(
               (r, i) =>
-                `${i + 1}. [${r.category.toUpperCase()}] (${r.createdAt}): ${r.content}`
+                `${i + 1}. [ID: ${r.id}] [${r.category.toUpperCase()}] (Importância: ${r.importance}, Data: ${r.createdAt}): ${r.content}`
             )
             .join("\n");
       }
@@ -276,11 +353,12 @@ export const searchEventSummaryTool = tool(
   }
 );
 
-const memoryAgent = createReactAgent({
+export const memoryAgent = createReactAgent({
   llm: model,
   tools: [
     readMemoryTool,
-    deleteFromCoreMemoryTool,
+    consolidateMemoryTool,
+    deleteSemanticMemoryTool,
     searchSemanticMemoryTool,
     storeSemanticMemoryTool,
     searchEventSummaryTool,

@@ -259,19 +259,31 @@ export const generateDailySummaryTool = tool(
         return "Nenhum grupo está configurado para o resumo diário. Diga ao usuário para usar o comando de adicionar grupo primeiro.";
       }
       
+      const namedGroups = await Promise.all(groups.map(async g => ({
+        jid: g.jid,
+        name: await formatJidForUser(g.jid)
+      })));
+
       const jids = groups.map(g => g.jid);
       let data = getMessagesForGroups(jids, hours || 24);
       
       if (filter && filter.trim()) {
         const lowerFilter = filter.toLowerCase().trim();
+        const matched = namedGroups.filter(g => g.name.toLowerCase().includes(lowerFilter) || g.jid.toLowerCase().includes(lowerFilter));
         data = data.filter(g => g.groupName.toLowerCase().includes(lowerFilter) || g.chatJid.toLowerCase().includes(lowerFilter));
+        
         if (data.length === 0) {
-          return `Nenhum grupo com o termo "${filter}" teve novas mensagens nas últimas ${hours || 24} horas (ou não está configurado na lista do resumo diário).`;
+          if (matched.length > 0) {
+            const checkedList = matched.map(g => `• ${g.name}`).join('\n');
+            return `Verificação concluída com sucesso: Nenhum dos ${matched.length} grupos correspondentes ao filtro "${filter}" teve movimentação ou novas mensagens nas últimas ${hours || 24} horas.\nGrupos verificados:\n${checkedList}\n(Todos os grupos do filtro foram checados e estão sem novidades. Não é necessário buscar esses grupos individualmente).`;
+          } else {
+            return `Nenhum grupo configurado no resumo diário corresponde ao filtro "${filter}". Grupos atualmente configurados:\n${namedGroups.map(g => `• ${g.name}`).join('\n')}`;
+          }
         }
       }
       
       if (data.length === 0) {
-        return `Não houve novas mensagens nos grupos do resumo diário nas últimas ${hours || 24} horas.`;
+        return `Verificação concluída com sucesso: Nenhum dos ${namedGroups.length} grupos configurados no resumo diário teve movimentação nas últimas ${hours || 24} horas.\nGrupos verificados:\n${namedGroups.map(g => `• ${g.name}`).join('\n')}\n(Todos os grupos foram checados e estão silenciosos. Não é necessário buscar cada grupo individualmente).`;
       }
       
       let report = `DADOS BRUTOS DOS GRUPOS DO RESUMO DIÁRIO (ÚLTIMAS ${hours || 24} HORAS)${filter ? ` [FILTRO: "${filter}"]` : ''}:\n\n`;
@@ -299,7 +311,7 @@ export const generateDailySummaryTool = tool(
   }
 );
 
-const whatsappAgent = createReactAgent({
+export const whatsappAgent = createReactAgent({
   llm: model,
   tools: [
     listRecentChatsTool, 

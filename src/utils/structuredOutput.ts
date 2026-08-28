@@ -7,7 +7,9 @@ interface InvokeStructuredOptions {
   metadata?: Record<string, any>;
 }
 
-function extractAndParseJson(rawText: string): any {
+export function extractAndParseJson(rawText: string): any {
+  if (!rawText || typeof rawText !== "string") return null;
+
   // Limpa marcações markdown ```json e ``` se presentes
   const cleaned = rawText
     .replace(/```json\s*/gi, "")
@@ -16,10 +18,23 @@ function extractAndParseJson(rawText: string): any {
 
   const firstBrace = cleaned.indexOf("{");
   const lastBrace = cleaned.lastIndexOf("}");
+  const firstBracket = cleaned.indexOf("[");
+  const lastBracket = cleaned.lastIndexOf("]");
+
+  // Determinar se o JSON principal é um objeto {} ou um array []
+  let jsonSubstring: string | null = null;
 
   if (firstBrace !== -1 && lastBrace !== -1 && lastBrace >= firstBrace) {
-    let jsonSubstring = cleaned.substring(firstBrace, lastBrace + 1);
+    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket >= firstBracket && firstBracket < firstBrace && lastBracket > lastBrace) {
+      jsonSubstring = cleaned.substring(firstBracket, lastBracket + 1);
+    } else {
+      jsonSubstring = cleaned.substring(firstBrace, lastBrace + 1);
+    }
+  } else if (firstBracket !== -1 && lastBracket !== -1 && lastBracket >= firstBracket) {
+    jsonSubstring = cleaned.substring(firstBracket, lastBracket + 1);
+  }
 
+  if (jsonSubstring) {
     // Corrige erros comuns de sintaxe JSON gerados por LLMs:
     // 1. Chaves com valor vazio antes de vírgula ou fecha-chave (ex: "response": , -> "response": null,)
     jsonSubstring = jsonSubstring
@@ -63,19 +78,43 @@ export async function invokeStructuredWithFallback<T>(
     const result = await structuredModel.invoke(messages, {
       metadata: options.metadata
     });
+    // Garante que os defaults do Zod (ex: default(null)) sejam sempre aplicados mesmo se o parser nativo omitir chaves
+    if (result && typeof result === "object") {
+      try {
+        return schema.parse(result);
+      } catch {
+        return result as T;
+      }
+    }
     return result as T;
   } catch (firstError: any) {
-    // 1. Tentar reparar diretamente os argumentos da chamada de ferramenta contidos no erro da primeira tentativa
-    if (firstError?.message) {
+    // 1. Tentar reparar diretamente os argumentos da chamada de ferramenta ou payload contidos no erro da primeira tentativa
+    const errorCandidates: any[] = [
+      firstError?.message,
+      firstError?.args,
+      firstError?.tool_call?.function?.arguments,
+      firstError?.raw,
+      firstError?.output,
+      firstError?.llmOutput
+    ];
+
+    for (const candidate of errorCandidates) {
+      if (!candidate) continue;
       try {
-        const repaired = extractAndParseJson(firstError.message);
-        if (repaired) {
-          const validated = schema.parse(repaired);
-          logger.info(`[STRUCTURED_OUTPUT] Recuperado com sucesso diretamente do payload de '${options.name}' via sanitização JSON.`);
+        let candidateObj: any = null;
+        if (typeof candidate === "object") {
+          candidateObj = candidate;
+        } else if (typeof candidate === "string") {
+          candidateObj = extractAndParseJson(candidate);
+        }
+
+        if (candidateObj) {
+          const validated = schema.parse(candidateObj);
+          logger.info(`[STRUCTURED_OUTPUT] Recuperado com sucesso diretamente do payload de erro de '${options.name}' via sanitização e validação Zod.`);
           return validated;
         }
       } catch {
-        // Se falhar o parse direto do erro, prossegue para o fallback com nova chamada ao LLM
+        // Tenta próximo candidato
       }
     }
 
@@ -94,8 +133,15 @@ export async function invokeStructuredWithFallback<T>(
         ? rawResponse.content
         : JSON.stringify(rawResponse.content);
 
-      const parsed = extractAndParseJson(rawText);
-      if (parsed) {
+      let parsed = extractAndParseJson(rawText);
+      if (!parsed && options.name === "MemoryConsolidatorSleep" && rawText && rawText.trim().length > 10) {
+        parsed = { consolidatedMarkdown: rawText.trim(), purgeIds: [], demoteIds: [] };
+      }
+
+      if (parsed && typeof parsed === "object") {
+        if (options.name === "MemoryConsolidatorSleep" && !parsed.consolidatedMarkdown) {
+          parsed.consolidatedMarkdown = parsed.markdown || parsed.snapshot || parsed.consolidated_markdown || parsed.content;
+        }
         const validated = schema.parse(parsed);
         return validated;
       }

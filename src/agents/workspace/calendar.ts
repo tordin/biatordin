@@ -18,22 +18,14 @@ registerAgentResetCallback(() => {
 async function initCalendarAgent() {
   const tools = await initWorkspaceTools();
   if (!calendarAgent) {
-    const messageModifier = (state: any) => {
-      let prompt = CALENDAR_PROMPT;
-      const isTrusted = state.contextData?.isTrustedChat ?? true;
-      if (!isTrusted) {
-        prompt += "\n\nRESTRIÇÃO DE SEGURANÇA (MODO DE TERCEIROS):\nVocê está consultando a agenda em nome de um terceiro. NUNCA revele o nome, descrição, local ou participantes dos eventos existentes. Responda APENAS informando se o horário está 'ocupado' ou 'livre'. Você tem permissão para encontrar espaços na agenda e agendar novos compromissos se solicitado.";
-      }
-      if (tools.length === 0) {
-        prompt += "\n\nAviso: As ferramentas do MCP falharam ao carregar.";
-      }
-      return new SystemMessage(prompt);
-    };
+    const messageModifier = tools.length > 0 
+      ? CALENDAR_PROMPT 
+      : CALENDAR_PROMPT + "\n\nAviso: As ferramentas do MCP falharam ao carregar.";
     
     calendarAgent = createReactAgent({
       llm: model,
       tools,
-      prompt: messageModifier as any,
+      messageModifier,
     });
   }
 }

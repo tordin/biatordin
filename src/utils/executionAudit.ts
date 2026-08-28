@@ -89,6 +89,10 @@ function getFriendlyToolName(toolName: string): string {
 
     readMemory: 'Leitura da memória central',
     deleteFromCoreMemory: 'Remoção de trecho da memória central',
+    deleteSemanticMemory: 'Remoção de memória cognitiva',
+    delete_semantic_memory: 'Remoção de memória cognitiva',
+    consolidateMemory: 'Consolidação e síntese de memória (sono)',
+    consolidate_memory: 'Consolidação e síntese de memória (sono)',
     searchSemanticMemory: 'Busca semântica na memória de longo prazo (RAG)',
     storeSemanticMemory: 'Armazenamento de novo fato na memória RAG',
     searchEventSummary: 'Busca em resumos de eventos passados',

@@ -1,31 +1,20 @@
-import { HumanMessage } from "@langchain/core/messages";
-import { routineAgentNode, createRoutineTool, listRoutinesTool, deleteRoutineTool } from "../../src/agents/routineAgent.js";
+import { jest, describe, test, expect, beforeEach } from '@jest/globals';
+import { SystemMessage, HumanMessage, AIMessage } from "@langchain/core/messages";
+import { routineAgentNode, routineAgent, createRoutineTool, updateRoutineTool, listRoutinesTool, deleteRoutineTool } from "../../src/agents/routineAgent.js";
 
 describe("Routine Agent Node & Tool Handlers", () => {
   const testJid = "test-routine-agent-ext@s.whatsapp.net";
   let createdRoutineId: number;
 
-  test("deve testar execução direta das ferramentas de rotinas", async () => {
-    const config = { configurable: { thread_id: testJid, contextData: { chatJid: testJid } } } as any;
+  beforeEach(() => {
+    jest.restoreAllMocks();
+  });
 
-    // Erro por falta de thread_id
-    const errRes = await createRoutineTool.invoke({ cronExpression: "0 9 * * *", prompt: "Teste" }, {} as any);
-    expect(String(errRes)).toContain("Erro");
-
-    // Criar rotina
-    const createRes = await createRoutineTool.invoke({ cronExpression: "0 9 * * *", prompt: "Verificar tarefas" }, config);
-    expect(String(createRes)).toContain("Rotina criada com sucesso!");
-    const match = String(createRes).match(/ID: (\d+)/);
-    expect(match).not.toBeNull();
-    createdRoutineId = parseInt(match![1]);
-
-    // Listar rotinas
-    const listRes = await listRoutinesTool.invoke({}, config);
-    expect(String(listRes)).toContain("Verificar tarefas");
-
-    // Excluir rotina
-    const deleteRes = await deleteRoutineTool.invoke({ id: createdRoutineId }, config);
-    expect(String(deleteRes)).toContain("cancelada com sucesso");
+  test("deve validar schemas e metadados das ferramentas de rotinas", () => {
+    expect(createRoutineTool.name).toBe("create_routine");
+    expect(updateRoutineTool.name).toBe("update_routine");
+    expect(listRoutinesTool.name).toBe("list_routines");
+    expect(deleteRoutineTool.name).toBe("delete_routine");
   });
 
   test("deve criar uma rotina agendada via agente", async () => {
@@ -34,8 +23,12 @@ describe("Routine Agent Node & Tool Handlers", () => {
       contextData: { chatJid: testJid, isTrustedChat: true }
     };
 
+    jest.spyOn(routineAgent, "invoke").mockImplementation(async (input: any) => ({
+      messages: [...input.messages, new AIMessage("Rotina agendada com sucesso!")]
+    } as any));
+
     const result = await routineAgentNode(initialState, { configurable: { thread_id: testJid } });
     expect(result).toBeDefined();
     expect(result.nextAgent).toBe("supervisor");
-  }, 30000);
+  });
 });

@@ -1,11 +1,8 @@
-import sqlite3 from 'sqlite3';
+import { getDb } from './db.js';
 import { logger } from '../utils/logger.js';
 
-const db = new sqlite3.Database('database.sqlite', (err) => {
-  if (err) {
-    logger.error("[TASKS DB] Erro ao conectar no SQLite:", err);
-  }
-});
+const db = getDb();
+
 
 db.serialize(() => {
   db.run(`
@@ -21,19 +18,6 @@ db.serialize(() => {
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  
-  // Migrate existing table to add topicId if it doesn't exist
-  db.all("PRAGMA table_info(tasks)", (err, rows: any[]) => {
-    if (!err && rows) {
-      const hasTopicId = rows.some(row => row.name === 'topicId');
-      if (!hasTopicId) {
-        db.run("ALTER TABLE tasks ADD COLUMN topicId TEXT", (alterErr) => {
-          if (alterErr) logger.error("[TASKS DB] Erro ao adicionar coluna topicId:", alterErr);
-          else logger.info("[TASKS DB] Coluna topicId adicionada com sucesso.");
-        });
-      }
-    }
-  });
 });
 
 export interface Task {

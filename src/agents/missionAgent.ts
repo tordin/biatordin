@@ -256,7 +256,7 @@ export const updateMissionNotesTool = tool(
 
 const MISSION_PROMPT = getSkill("missionAgent")?.detailedPrompt || "";
 
-const missionAgent = createReactAgent({
+export const missionAgent = createReactAgent({
     llm: model,
     tools: [startMissionTool, listMissionsTool, completeMissionTool, updateMissionNotesTool, sendMessageToTargetTool, notifyMasterTool],
     messageModifier: MISSION_PROMPT,

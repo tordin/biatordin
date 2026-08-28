@@ -22,11 +22,9 @@ const CLASSIFICATION_PROMPT =
   "7. Se for assunto novo (topicId = 'new'), forneça um newTitle curto (até 4 palavras) descrevendo o assunto.";
 
 const classificationSchema = z.object({
-  topicId: z.string().describe("O ID do assunto onde a mensagem se encaixa, ou 'new' para novo assunto"),
-  // `.nullable()` (não `.optional()`) para compatibilidade com strict mode da DeepSeek:
-  // o LangChain força strict:true e a DeepSeek exige TODAS as props em `required`.
-  newTitle: z.string().nullable().describe("Título curto (até 4 palavras) se for novo assunto"),
-  reason: z.string().describe("Justificativa da decisão")
+  topicId: z.string().default("new").describe("O ID do assunto onde a mensagem se encaixa, ou 'new' para novo assunto"),
+  newTitle: z.string().nullable().default(null).describe("Título curto (até 4 palavras) se for novo assunto"),
+  reason: z.string().nullable().default(null).describe("Justificativa da decisão")
 });
 
 export async function resolveTopicForMessage(chatJid: string, messageText: string, accountName?: string): Promise<{ topicId: string, title: string }> {

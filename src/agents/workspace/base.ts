@@ -181,15 +181,19 @@ export async function safeAgentNode(
     
     const newMessages = response.messages.slice(messagesWithTime.length);
     
-    // Extract executed tools from the new messages
+    // Extract executed tools from the new messages (deduplicated)
     const executedTools: string[] = [];
     for (const msg of newMessages) {
         if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
             for (const tc of msg.tool_calls) {
-                if (tc.name) executedTools.push(tc.name);
+                if (tc.name && !executedTools.includes(tc.name)) {
+                    executedTools.push(tc.name);
+                }
             }
         } else if (msg.name && msg.getType && msg.getType() === 'tool') {
-            executedTools.push(msg.name);
+            if (!executedTools.includes(msg.name)) {
+                executedTools.push(msg.name);
+            }
         }
     }
     

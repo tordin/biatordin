@@ -1,11 +1,8 @@
-import sqlite3 from 'sqlite3';
+import { getDb } from './db.js';
 import { logger } from '../utils/logger.js';
 
-const db = new sqlite3.Database('database.sqlite', (err) => {
-  if (err) {
-    logger.error("[TRACKERS DB] Erro ao conectar no SQLite:", err);
-  }
-});
+const db = getDb();
+
 
 db.serialize(() => {
   db.run(`

@@ -29,7 +29,9 @@ export interface ContextData {
   specialistTask?: string;
   evaluationAttempts?: number;
   evaluationFeedback?: string;
+  evaluationSuggestedAction?: "ROUTE_TO_SPECIALIST" | "FIX_RESPONSE_TEXT" | "PASS";
   proposedResponse?: string;
+  isMaster?: boolean;
   silenceReason?: string;
   outputMessages?: { targetJid: string; message: string; accountName: string }[];
   [key: string]: any;

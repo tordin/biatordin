@@ -1,8 +1,16 @@
-import { jest, describe, test, expect } from '@jest/globals';
+import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 import { safeAgentNode } from "../../src/agents/workspace/base.js";
-import { HumanMessage } from "@langchain/core/messages";
+import { HumanMessage, AIMessage } from "@langchain/core/messages";
+import { modelFlash } from "../../src/llm/model.js";
 
 describe("Base Agent Wrapper (safeAgentNode)", () => {
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    jest.spyOn(modelFlash, "invoke").mockResolvedValue(
+      new AIMessage("Ocorreu uma instabilidade técnica no especialista.") as any
+    );
+  });
+
   test("deve capturar erro gracioso e retornar aviso ao exceder limites ou lançar exceção", async () => {
     const failingAgent = {
       invoke: jest.fn<any>().mockRejectedValue(new Error("Erro simulado no especialista"))
@@ -24,5 +32,5 @@ describe("Base Agent Wrapper (safeAgentNode)", () => {
     expect(result).toBeDefined();
     expect(result.nextAgent).toBe("supervisor");
     expect(result.contextData.lastError).toContain("testAgent: Erro simulado no especialista");
-  }, 30000);
+  });
 });

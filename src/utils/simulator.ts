@@ -1,16 +1,17 @@
-import { ChatPromptTemplate } from "@langchain/core/prompts";
+import { SystemMessage, HumanMessage, AIMessage, BaseMessage } from "@langchain/core/messages";
 import { modelFlashStructured } from "../llm/model.js";
+import { invokeStructuredWithFallback } from "./structuredOutput.js";
 import { logger } from "./logger.js";
 import { z } from "zod";
 
 // Histórico efêmero para manter o contexto das simulações durante a execução
 const simulatorHistory = new Map<string, { role: 'system' | 'user' | 'assistant', content: string }[]>();
 
-const SimResponseSchema = z.object({
+export const SimResponseSchema = z.object({
     messages: z.array(z.object({
         text: z.string().describe("O texto da mensagem."),
-        delayMs: z.number().describe("Tempo de espera (em milissegundos) antes de enviar esta mensagem, simulando a digitação ou pausa para pensar. Use 1000 a 3000 para quebras normais de parágrafos. Use 5000 a 8000 para simular uma resposta de follow-up mais tarde (ex: 'e aí, pensou?').")
-    })).describe("Lista de mensagens que a pessoa enviou em sequência para responder. Retorne uma lista VAZIA se a conversa chegou a uma conclusão natural e você não tem mais nada a acrescentar (evita loop infinito).")
+        delayMs: z.number().default(1500).describe("Tempo de espera (em milissegundos) antes de enviar esta mensagem, simulando a digitação ou pausa para pensar. Use 1000 a 3000 para quebras normais de parágrafos. Use 5000 a 8000 para simular uma resposta de follow-up mais tarde (ex: 'e aí, pensou?').")
+    })).default([]).describe("Lista de mensagens que a pessoa enviou em sequência para responder. Retorne uma lista VAZIA se a conversa chegou a uma conclusão natural e você não tem mais nada a acrescentar (evita loop infinito).")
 });
 
 /**
@@ -40,18 +41,24 @@ REGRAS IMPORTANTES:
         const history = simulatorHistory.get(targetJid)!;
         history.push({ role: 'user', content: message });
 
-
-        const messagesForModel = history.map(h => [h.role, h.content] as [string, string]);
-        const prompt = ChatPromptTemplate.fromMessages(messagesForModel);
+        const messagesForModel: BaseMessage[] = history.map(h => {
+            if (h.role === 'system') return new SystemMessage(h.content);
+            if (h.role === 'assistant') return new AIMessage(h.content);
+            return new HumanMessage(h.content);
+        });
         
-        const structuredModel = modelFlashStructured.withStructuredOutput(SimResponseSchema);
-        const chain = prompt.pipe(structuredModel);
-        const response = await chain.invoke({});
+        const response = await invokeStructuredWithFallback(
+            modelFlashStructured,
+            SimResponseSchema,
+            messagesForModel,
+            { name: "SimulatorResponse", metadata: { targetJid } }
+        );
         
-        const combinedText = response.messages.map((m: any) => m.text).join(" | ");
+        const messages = response.messages || [];
+        const combinedText = messages.map((m: any) => m.text).join(" | ");
         history.push({ role: 'assistant', content: combinedText });
 
-        return response.messages;
+        return messages;
     } catch (error) {
         logger.error(`[SIMULATOR] Erro ao simular resposta para ${targetJid}:`, error);
         return [{ text: "Erro interno no simulador.", delayMs: 1000 }];

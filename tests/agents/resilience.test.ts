@@ -2,12 +2,16 @@ import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 import { SystemMessage, HumanMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
 import { supervisorNode } from "../../src/agents/supervisor.js";
 import { recordExecutionEvent, getLastTurnEvents, formatAuditExplanation } from "../../src/utils/executionAudit.js";
+import { modelFlash } from "../../src/llm/model.js";
 
 describe("Resilience & Transparency (Self-Healing, Circuit Breaker, /explicar)", () => {
   const testChatJid = "test-resilience@s.whatsapp.net";
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    jest.restoreAllMocks();
+    jest.spyOn(modelFlash, "invoke").mockResolvedValue(
+      new AIMessage("Ocorreu uma instabilidade temporária. Por favor tente novamente em instantes.") as any
+    );
   });
 
   describe("Requisito 2: /explicar & Auditoria de Execução", () => {

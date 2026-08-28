@@ -1,14 +1,23 @@
-import sqlite3 from 'sqlite3';
+import { getDb } from './db.js';
 import crypto from 'crypto';
 import { logger } from '../utils/logger.js';
 
-const db = new sqlite3.Database('database.sqlite', (err) => {
-  if (err) {
-    logger.error("[TOPICS DB] Erro ao conectar no SQLite:", err);
-  }
+const db = getDb();
+
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS topics (
+      id TEXT PRIMARY KEY,
+      chatJid TEXT NOT NULL,
+      title TEXT NOT NULL,
+      lastActive INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active'
+    )
+  `);
 });
 
 export interface Topic {
+
   id: string;
   chatJid: string;
   title: string;

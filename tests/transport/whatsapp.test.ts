@@ -3,6 +3,7 @@ import {
   BASE_SILENCE_THRESHOLD_MS, 
   INCOMPLETE_SILENCE_THRESHOLD_MS,
   isMessageFromBia,
+  isBroadcastJid,
   normalizeJid
 } from '../../src/transport/whatsapp.js';
 
@@ -54,6 +55,28 @@ describe('WhatsApp Message Filtering & Account Isolation', () => {
   it('should return false for isMessageFromBia when botJids is empty or user is external', () => {
     expect(isMessageFromBia('5511888888888@s.whatsapp.net')).toBe(false);
     expect(isMessageFromBia('120363425678591898@g.us')).toBe(false);
+  });
+
+  it('should correctly identify status and broadcast JIDs', () => {
+    expect(isBroadcastJid('status@broadcast')).toBe(true);
+    expect(isBroadcastJid('12345678@broadcast')).toBe(true);
+    expect(isBroadcastJid('status@broadcast:12')).toBe(true);
+    expect(isBroadcastJid('5511999999999@s.whatsapp.net')).toBe(false);
+    expect(isBroadcastJid('120363425678591898@g.us')).toBe(false);
+    expect(isBroadcastJid(null)).toBe(false);
+    expect(isBroadcastJid(undefined)).toBe(false);
+  });
+});
+
+describe('WhatsApp sendIntermediateMessage JID resolution', () => {
+  it('should safely extract JID from composite thread IDs with account prefix and topic UUID', async () => {
+    const { sendIntermediateMessage } = await import('../../src/transport/whatsapp.js');
+    // Calling with no initialized socket should log error and return undefined without crashing
+    const res = await sendIntermediateMessage(
+      'main_5519997064504@s.whatsapp.net_92f74c9f-921d-463b-be32-9180db7a08c2',
+      'Mensagem intermediária de teste'
+    );
+    expect(res).toBeUndefined();
   });
 });
 

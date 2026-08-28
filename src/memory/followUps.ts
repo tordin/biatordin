@@ -1,12 +1,10 @@
 import sqlite3 from 'sqlite3';
+import { getDb } from './db.js';
 import { logger } from '../utils/logger.js';
 import { getEquivalentJids, jidsMatch } from '../utils/jidResolver.js';
 
-const db = new sqlite3.Database('database.sqlite', (err) => {
-  if (err) {
-    logger.error("[FOLLOWUPS DB] Erro ao conectar no SQLite:", err);
-  }
-});
+const db = getDb();
+
 
 export type FollowUpType = 'waiting_for_them' | 'promised_by_me';
 export type FollowUpStatus = 'pending' | 'resolved' | 'cancelled' | 'overdue';

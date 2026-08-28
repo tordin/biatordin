@@ -1,8 +1,10 @@
 import { createTopic, getRecentTopics } from '../memory/topics.js';
+import { clearChatHistory } from '../memory/chatHistory.js';
 import { getTasksForChat } from '../memory/tasks.js';
 import { getRoutinesForChat } from '../memory/routines.js';
 import { addVectorMemory, searchVectorMemory } from '../memory/vectorMemory.js';
-import { getMemory } from '../memory/coreMemory.js';
+import { getWorkingMemoryContext } from '../memory/workingMemory.js';
+import { consolidateWorkingMemorySnapshot } from '../memory/memoryConsolidator.js';
 import { addIgnoredGroup, removeIgnoredGroup, isGroupIgnored } from '../config/ignoredGroups.js';
 import { isTrustedChat, listTrustedChats, MASTER_JIDS } from '../memory/security.js';
 import { logger } from '../utils/logger.js';
@@ -47,8 +49,12 @@ export async function handleCommand(ctx: CommandContext): Promise<boolean> {
       case 'limpar':
       case 'reset': {
         await createTopic(ctx.chatJid, 'Nova Conversa');
+        clearChatHistory(ctx.accountName, ctx.chatJid);
+        if (ctx.clearQueue) {
+          ctx.clearQueue();
+        }
         await ctx.sock.sendMessage(ctx.chatJid, {
-          text: `🧹 *Contexto Zerado!*\n\nIniciamos um novo tópico de conversa. A memória de longo prazo (perfil e RAG) continua salva, mas a janela recente foi limpa.`
+          text: `🧹 *Contexto Zerado!*\n\nIniciamos um novo tópico de conversa e o histórico de mensagens deste chat foi limpo. A memória de longo prazo (perfil e RAG) continua preservada.`
         });
         return true;
       }
@@ -154,7 +160,7 @@ export async function handleCommand(ctx: CommandContext): Promise<boolean> {
           return true;
         }
 
-        await addVectorMemory(ctx.chatJid, argsText, 'anotacao');
+        await addVectorMemory(argsText, 'anotacao', ctx.chatJid, undefined, 0.7);
         await ctx.sock.sendMessage(ctx.chatJid, {
           text: `🧠 *Memória Salva com Sucesso!*\n\nGuardo: "${argsText}"`
         });
@@ -176,18 +182,34 @@ export async function handleCommand(ctx: CommandContext): Promise<boolean> {
         let msg = `🔍 *Resultados na Memória RAG para "${argsText}":*\n\n`;
         results.slice(0, 5).forEach((r: any, idx: number) => {
           const content = typeof r === 'string' ? r : (r.content || JSON.stringify(r));
-          msg += `${idx + 1}. ${content}\n\n`;
+          msg += `${idx + 1}. [ID: ${r.id}] ${content}\n\n`;
         });
 
         await ctx.sock.sendMessage(ctx.chatJid, { text: msg.trim() });
         return true;
       }
 
-      case 'perfil': {
-        const memoryContent = await getMemory(ctx.chatJid, true);
+      case 'perfil':
+      case 'memoria': {
+        const memoryContent = await getWorkingMemoryContext(ctx.chatJid, true);
         await ctx.sock.sendMessage(ctx.chatJid, {
-          text: `👤 *Memória Core de Perfil (Bia)*\n\n${memoryContent}`
+          text: `🧠 *Memória de Trabalho Cognitiva (Bia)*\n\n${memoryContent}`
         });
+        return true;
+      }
+
+      case 'consolidar':
+      case 'consolidar-memoria':
+      case 'sono': {
+        await ctx.sock.sendMessage(ctx.chatJid, { text: `🌙 *Iniciando consolidação de sono da memória...*` });
+        try {
+          const snapshot = await consolidateWorkingMemorySnapshot(ctx.chatJid, true);
+          await ctx.sock.sendMessage(ctx.chatJid, {
+            text: `✨ *Memória Consolidada com Sucesso!*\n\n${snapshot}`
+          });
+        } catch (e: any) {
+          await ctx.sock.sendMessage(ctx.chatJid, { text: `❌ *Erro na consolidação:* ${e.message}` });
+        }
         return true;
       }
 

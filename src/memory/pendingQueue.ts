@@ -1,11 +1,9 @@
 import sqlite3 from 'sqlite3';
+import { getDb } from './db.js';
 import { logger } from '../utils/logger.js';
 
-const db = new sqlite3.Database('database.sqlite', (err) => {
-  if (err) {
-    logger.error("[PENDING_QUEUE DB] Erro ao conectar no SQLite:", err);
-  }
-});
+const db = getDb();
+
 
 db.serialize(() => {
   db.run(`
@@ -82,6 +80,19 @@ export function getAllPendingMessages(): Promise<PersistedBufferedMessage[]> {
         return reject(err);
       }
       resolve(rows as PersistedBufferedMessage[]);
+    });
+  });
+}
+
+export function clearStalePendingMessages(maxAgeHours: number = 24): Promise<number> {
+  const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000;
+  return new Promise((resolve, reject) => {
+    db.run(`DELETE FROM pending_messages WHERE timestamp < ?`, [cutoff], function(this: sqlite3.RunResult, err: Error | null) {
+      if (err) {
+        logger.error("[PENDING_QUEUE DB] Erro ao limpar mensagens pendentes antigas:", err);
+        return reject(err);
+      }
+      resolve(this?.changes || 0);
     });
   });
 }

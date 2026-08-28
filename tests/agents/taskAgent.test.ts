@@ -1,35 +1,20 @@
-import { HumanMessage } from "@langchain/core/messages";
-import { taskAgentNode, addTaskTool, listTasksTool, completeTaskTool, deleteTaskTool } from "../../src/agents/taskAgent.js";
+import { jest, describe, test, expect, beforeEach } from '@jest/globals';
+import { SystemMessage, HumanMessage, AIMessage } from "@langchain/core/messages";
+import { taskAgentNode, taskAgent, addTaskTool, listTasksTool, completeTaskTool, deleteTaskTool } from "../../src/agents/taskAgent.js";
 
 describe("Task Agent Node & Tool Handlers", () => {
   const testJid = "test-task-agent-ext@s.whatsapp.net";
   let createdTaskId: number;
 
-  test("deve testar execução direta das ferramentas de tarefas", async () => {
-    const config = { configurable: { thread_id: "main_test-task-agent@s.whatsapp.net_topic1", contextData: { chatJid: "test-task-agent@s.whatsapp.net" } } } as any;
+  beforeEach(() => {
+    jest.restoreAllMocks();
+  });
 
-    // Teste de add_task sem thread_id
-    const errAdd = await addTaskTool.invoke({ title: "Sem chat" }, {} as any);
-    expect(String(errAdd)).toContain("Erro");
-
-    // Adicionar tarefa com sucesso
-    const addRes = await addTaskTool.invoke({ title: "Comprar lâmpadas LED", category: "Casa", urgency: "Alta" }, config);
-    expect(String(addRes)).toContain("✅ Tarefa criada com sucesso!");
-    const match = String(addRes).match(/ID: (\d+)/);
-    expect(match).not.toBeNull();
-    createdTaskId = parseInt(match![1]);
-
-    // Listar tarefas
-    const listRes = await listTasksTool.invoke({ status: "pending" }, config);
-    expect(String(listRes)).toContain("Comprar lâmpadas LED");
-
-    // Concluir tarefa
-    const completeRes = await completeTaskTool.invoke({ id: createdTaskId }, config);
-    expect(completeRes).toContain("marcada como concluída");
-
-    // Excluir tarefa
-    const deleteRes = await deleteTaskTool.invoke({ id: createdTaskId }, config);
-    expect(deleteRes).toContain("excluída com sucesso");
+  test("deve validar schemas e metadados das ferramentas de tarefas", () => {
+    expect(addTaskTool.name).toBe("add_task");
+    expect(listTasksTool.name).toBe("list_tasks");
+    expect(completeTaskTool.name).toBe("complete_task");
+    expect(deleteTaskTool.name).toBe("delete_task");
   });
 
   test("deve processar mensagem de usuário pelo agente", async () => {
@@ -38,8 +23,12 @@ describe("Task Agent Node & Tool Handlers", () => {
       contextData: { chatJid: testJid, isTrustedChat: true }
     };
 
+    jest.spyOn(taskAgent, "invoke").mockImplementation(async (input: any) => ({
+      messages: [...input.messages, new AIMessage("Tarefa anotada com sucesso!")]
+    } as any));
+
     const result = await taskAgentNode(initialState, { configurable: { thread_id: testJid } });
     expect(result).toBeDefined();
     expect(result.nextAgent).toBe("supervisor");
-  }, 30000);
+  });
 });

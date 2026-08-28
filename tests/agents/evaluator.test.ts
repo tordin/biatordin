@@ -223,6 +223,50 @@ describe("Evaluator / Critic Node & Quality Control", () => {
       expect(result.contextData?.evaluationFeedback).toContain("Você não chamou o calendarAgent");
     });
 
+    test("deve aprovar (PASS) quando agente de ação/criação (ex: routineAgent) executa create_routine com sucesso", async () => {
+      const mockEvaluation = {
+        verdict: "PASS",
+        reasoning: "O routineAgent executou a ferramenta create_routine com sucesso e a resposta resume com precisão a criação da rotina de monitoramento.",
+        critique: {
+          isComplete: true,
+          isGrounded: true,
+          isPersonaCompliant: true,
+        },
+        suggestedAction: "PASS",
+      };
+
+      jest.spyOn(modelEvaluator, "withStructuredOutput").mockReturnValue({
+        invoke: jest.fn<any>().mockResolvedValue(mockEvaluation)
+      } as any);
+
+      const state: any = {
+        messages: [
+          new HumanMessage({ content: "Monitore o preço do ACC toda quinta de manhã", id: "msg-h" }),
+          new AIMessage({
+            content: '<specialist_return agent="routineAgent">\n<collected_data>\nRotina criada com sucesso! ID: 533. Cron: 0 9 * * 4. Prompt: "Monitore o preço do jogo Assetto Corsa..."\n</collected_data>\n</specialist_return>',
+            id: "msg-spec"
+          })
+        ],
+        contextData: {
+          accountName: "main",
+          chatJid: "5519997064504@s.whatsapp.net",
+          isTrustedChat: true,
+          proposedResponse: "Prontinho, Luiz! Criei a rotina de monitoramento do ACC toda quinta às 9h.",
+          executedTools: ["create_routine"],
+          executionLog: ["routineAgent"],
+          evaluationAttempts: 0
+        }
+      };
+
+      const result = await evaluatorNode(state, { configurable: { thread_id: "test-eval-routine-pass" } });
+
+      expect(result.nextAgent).toBe("outputGateway");
+      expect(result.contextData?.evaluationAttempts).toBe(0);
+      expect(result.contextData?.evaluationFeedback).toBeUndefined();
+      expect(result.messages).toBeDefined();
+      expect(result.messages!.length).toBeGreaterThan(0);
+    });
+
     test("deve lidar com falhas técnicas no LLM do avaliador sem quebrar a execução", async () => {
       jest.spyOn(modelEvaluator, "withStructuredOutput").mockReturnValue({
         invoke: jest.fn<any>().mockRejectedValue(new Error("LLM API Timeout"))
@@ -253,6 +297,39 @@ describe("Evaluator / Critic Node & Quality Control", () => {
       // Em fallback de erro, não bloqueia o fluxo e roteia para outputGateway
       expect(result.nextAgent).toBe("outputGateway");
       expect(result.contextData?.evaluationAttempts).toBe(0);
+    });
+
+    test("deve processar com sucesso payload parcial do avaliador (apenas verdict PASS)", async () => {
+      // Simula resposta enxuta omitindo critique, reasoning, feedback e suggestedAction
+      const mockPartialEvaluation = {
+        verdict: "PASS"
+      };
+
+      jest.spyOn(modelEvaluator, "withStructuredOutput").mockReturnValue({
+        invoke: jest.fn<any>().mockResolvedValue(mockPartialEvaluation)
+      } as any);
+
+      const state: any = {
+        messages: [
+          new HumanMessage({ content: "Pesquise sobre X", id: "msg-h" }),
+          new AIMessage({ content: '<specialist_return agent="searchAgent"><collected_data>Info</collected_data></specialist_return>', id: "msg-spec" })
+        ],
+        contextData: {
+          accountName: "main",
+          chatJid: "5519997064504@s.whatsapp.net",
+          isTrustedChat: true,
+          proposedResponse: "Aqui está o resultado sobre X.",
+          executedTools: ["google_search"],
+          executionLog: ["searchAgent"],
+          evaluationAttempts: 0
+        }
+      };
+
+      const result = await evaluatorNode(state, { configurable: { thread_id: "test-eval-partial" } });
+
+      expect(result.nextAgent).toBe("outputGateway");
+      expect(result.contextData?.evaluationAttempts).toBe(0);
+      expect(result.messages).toBeDefined();
     });
   });
 });

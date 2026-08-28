@@ -1,31 +1,24 @@
-import sqlite3 from 'sqlite3';
+import { getDb } from './db.js';
 import { logger } from "../utils/logger.js";
 
-const db = new sqlite3.Database('database.sqlite', (err: any) => {
-  if (err) {
-    logger.error("[DAILY SUMMARY DB] Erro ao conectar no SQLite:", err);
-  }
-});
+const db = getDb();
+
 
 export function initializeDailySummaryDB(): Promise<void> {
   return new Promise((resolve, reject) => {
-    // Tenta renomear a tabela antiga se ela existir
-    db.run(`ALTER TABLE monitored_groups RENAME TO daily_summary_groups`, (err: any) => {
-      // Ignora erro se a tabela nova já existe ou a antiga não existe
-      db.run(
-        `CREATE TABLE IF NOT EXISTS daily_summary_groups (
-            jid TEXT PRIMARY KEY,
-            addedAt INTEGER NOT NULL
-        )`,
-        (err2: any) => {
-          if (err2) {
-            logger.error("[DAILY SUMMARY DB] Erro ao criar tabela daily_summary_groups:", err2);
-            return reject(err2);
-          }
-          resolve();
+    db.run(
+      `CREATE TABLE IF NOT EXISTS daily_summary_groups (
+          jid TEXT PRIMARY KEY,
+          addedAt INTEGER NOT NULL
+      )`,
+      (err: any) => {
+        if (err) {
+          logger.error("[DAILY SUMMARY DB] Erro ao criar tabela daily_summary_groups:", err);
+          return reject(err);
         }
-      );
-    });
+        resolve();
+      }
+    );
   });
 }
 

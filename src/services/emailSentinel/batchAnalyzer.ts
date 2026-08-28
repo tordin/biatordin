@@ -9,16 +9,16 @@ import { enrichEmailBody } from './gmailFetcher.js';
 const batchAnalysisSchema = z.object({
   analysis: z.array(
     z.object({
-      emailId: z.string().describe("ID exato do e-mail analisado"),
-      sender: z.string().describe("Nome ou remetente identificado do e-mail"),
-      subject: z.string().describe("Assunto do e-mail"),
-      priority: z.enum(["HIGH", "MEDIUM", "LOW"]).describe("Classificação de prioridade"),
-      isImportant: z.boolean().describe("True se exige decisão, ação ou atenção do Luiz, ou se tem relevância real (pessoal/profissional/financeira). False se for ruído, recibo rotineiro ou informativo irrelevante."),
-      summary: z.string().describe("Resumo executivo de 1 a 2 frases do que se trata"),
-      actionRequired: z.string().describe("Ação prática ou decisão requerida do Luiz (ex: 'Aprovar proposta', 'Pagar boleto até 25/08', 'Confirmar presença na reunião', 'Apenas ciência')"),
-      reason: z.string().describe("Motivo da classificação de prioridade"),
+      emailId: z.string().default("").describe("ID exato do e-mail analisado"),
+      sender: z.string().nullable().default(null).describe("Nome ou remetente identificado do e-mail"),
+      subject: z.string().nullable().default(null).describe("Assunto do e-mail"),
+      priority: z.enum(["HIGH", "MEDIUM", "LOW"]).default("MEDIUM").describe("Classificação de prioridade"),
+      isImportant: z.boolean().default(false).describe("True se exige decisão, ação ou atenção do Luiz, ou se tem relevância real (pessoal/profissional/financeira). False se for ruído, recibo rotineiro ou informativo irrelevante."),
+      summary: z.string().nullable().default(null).describe("Resumo executivo de 1 a 2 frases do que se trata"),
+      actionRequired: z.string().nullable().default(null).describe("Ação prática ou decisão requerida do Luiz (ex: 'Aprovar proposta', 'Pagar boleto até 25/08', 'Confirmar presença na reunião', 'Apenas ciência')"),
+      reason: z.string().nullable().default(null).describe("Motivo da classificação de prioridade"),
     })
-  ).describe("Lista de análises individuais para cada e-mail do lote"),
+  ).default([]).describe("Lista de análises individuais para cada e-mail do lote"),
 });
 
 const BATCH_ANALYZER_SYSTEM_PROMPT =
@@ -85,13 +85,13 @@ export async function analyzeEmailBatchWithLLM(
 
     return analyzedList.map((item) => ({
       emailId: item.emailId,
-      sender: item.sender,
-      subject: item.subject,
+      sender: item.sender || "Desconhecido",
+      subject: item.subject || "(sem assunto)",
       priority: item.priority,
       isImportant: item.isImportant,
-      summary: item.summary,
-      actionRequired: item.actionRequired,
-      reason: item.reason,
+      summary: item.summary || "",
+      actionRequired: item.actionRequired || "Apenas ciência",
+      reason: item.reason || "",
     }));
   } catch (err: any) {
     logger.error("[EMAIL_SENTINEL] Erro na análise estruturada de e-mails em lote:", err.message || err);

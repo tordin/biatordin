@@ -54,7 +54,7 @@ describe("Skills Registry & Directory Catalog", () => {
 
   test("getSkillTools retorna ferramentas da skill", () => {
     expect(getSkillTools("taskAgent")).toEqual(["add_task", "list_tasks", "complete_task", "delete_task"]);
-    expect(getSkillTools("routineAgent")).toEqual(["create_routine", "list_routines", "delete_routine"]);
+    expect(getSkillTools("routineAgent")).toEqual(["create_routine", "update_routine", "list_routines", "delete_routine"]);
     expect(getSkillTools("weatherAgent")).toEqual(["get_weather"]);
   });
 

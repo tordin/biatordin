@@ -1,8 +1,19 @@
-import { jest, describe, test, expect, beforeEach } from '@jest/globals';
+import { jest, describe, test, expect, beforeAll, beforeEach } from '@jest/globals';
 import { isCommand, handleCommand, getChatModelOverride, CommandContext } from '../src/commands/commandRouter.js';
+import { setAIClient } from '../src/memory/embeddings.js';
 
 describe('Command Router System', () => {
   let mockSock: { sendMessage: any };
+
+  beforeAll(() => {
+    setAIClient({
+      models: {
+        embedContent: async () => ({
+          embeddings: [{ values: new Array(3072).fill(0.1) }]
+        })
+      }
+    });
+  });
 
   beforeEach(() => {
     mockSock = {

@@ -8,6 +8,8 @@ import { initRoutineManager } from './utils/routineManager.js';
 import { initEmailSentinel, stopEmailSentinel } from './services/emailSentinel/sentinelService.js';
 import { initFollowUpWorker, stopFollowUpWorker } from './services/followUp/followUpWorker.js';
 import { initFollowUpsTable } from './memory/followUps.js';
+import { initDailyMaintenance } from './utils/maintenance.js';
+import { scheduleDailyMemoryConsolidation } from './memory/memoryConsolidator.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -88,6 +90,9 @@ async function bootstrap() {
     initFollowUpWorker().catch((err) => {
       logger.error('Falha ao iniciar o worker de follow-up:', err);
     });
+
+    initDailyMaintenance('0 3 * * *', 14);
+    scheduleDailyMemoryConsolidation();
   } catch (err) {
     logger.error('Erro crítico no bootstrap da aplicação:', err);
     process.exit(1);

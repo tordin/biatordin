@@ -335,7 +335,7 @@ import { getSkill } from "../skills/registry.js";
 
 const SECURITY_PROMPT = getSkill("securityAgent")?.detailedPrompt || "";
 
-const securityReactAgent = createReactAgent({
+export const securityReactAgent = createReactAgent({
   llm: model,
   tools: securityTools,
   messageModifier: SECURITY_PROMPT

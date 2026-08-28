@@ -3,8 +3,10 @@ import {
   setActiveTrigger, 
   getActiveTrigger, 
   clearActiveTrigger, 
-  logger 
+  logger,
+  loggerCallbackHandler
 } from "../../src/utils/logger.js";
+import { ToolMessage } from "@langchain/core/messages";
 
 describe("Logger & Trigger Tracking System", () => {
   const threadId = "test-thread-logger";
@@ -56,6 +58,35 @@ describe("Logger & Trigger Tracking System", () => {
         agentsUsed: ["supervisor"],
         durationMs: 150
       });
+    }).not.toThrow();
+  });
+
+  test("deve processar handleToolStart e handleToolEnd com ToolMessage e extrair texto", () => {
+    const runId = "test-tool-run-123";
+    const toolMessage = new ToolMessage({
+      content: "Rotina ID 533 foi cancelada com sucesso.",
+      name: "delete_routine",
+      tool_call_id: "call_abc"
+    });
+
+    expect(() => {
+      loggerCallbackHandler.handleToolStart(
+        { name: "delete_routine" } as any,
+        '{"id":533}',
+        runId,
+        undefined,
+        undefined,
+        { thread_id: "test-thread-tool", agentName: "routineAgent" },
+        "delete_routine"
+      );
+
+      loggerCallbackHandler.handleToolEnd(
+        toolMessage,
+        runId,
+        undefined,
+        undefined,
+        undefined
+      );
     }).not.toThrow();
   });
 });

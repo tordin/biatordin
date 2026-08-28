@@ -134,7 +134,7 @@ export const weatherTool = tool(
 
 const WEATHER_PROMPT = getSkill("weatherAgent")?.detailedPrompt || "";
 
-const weatherAgent = createReactAgent({
+export const weatherAgent = createReactAgent({
   llm: model,
   tools: [weatherTool],
   messageModifier: WEATHER_PROMPT,

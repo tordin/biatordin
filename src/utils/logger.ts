@@ -174,6 +174,7 @@ function writeDetailedLog(
    ============================================================ */
 
 const runToThreadMap = new Map<string, string>();
+const runToAgentMap = new Map<string, string>();
 
 /* ============================================================
    LLM_START / LLM_END DEDUPLICATION BY RUN ID
@@ -270,7 +271,7 @@ function isDuplicateToolEnd(runId: string): boolean {
 }
 
 function resolveThreadId(runId: string, parentRunId?: string, tags?: string[], metadata?: any): string | undefined {
-    let threadId = metadata?.threadId || metadata?.configurable?.thread_id;
+    let threadId = metadata?.threadId || metadata?.thread_id || metadata?.configurable?.thread_id || metadata?.configurable?.threadId;
     
     if (!threadId && tags) {
         const threadTag = tags.find(t => t.startsWith("thread_id:"));
@@ -280,6 +281,10 @@ function resolveThreadId(runId: string, parentRunId?: string, tags?: string[], m
     if (threadId) {
         runToThreadMap.set(runId, threadId);
         return threadId;
+    }
+
+    if (runToThreadMap.has(runId)) {
+        return runToThreadMap.get(runId);
     }
     
     if (parentRunId && runToThreadMap.has(parentRunId)) {
@@ -305,6 +310,7 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
   ) {
     const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
     const agentName = metadata?.agentName;
+    if (agentName) runToAgentMap.set(runId, agentName);
 
     let structuredMessages: any[] = [];
     if (messages && messages[0]) {
@@ -335,6 +341,7 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
   ) {
     const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
     const agentName = metadata?.agentName;
+    if (agentName) runToAgentMap.set(runId, agentName);
     queueLlmStart(runId, threadId, agentName, { prompts });
   }
 
@@ -346,7 +353,7 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
     metadata?: Record<string, any>
   ) {
     const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
-    const agentName = metadata?.agentName;
+    const agentName = metadata?.agentName || runToAgentMap.get(runId);
 
     const generations = output.generations || [];
     const structuredGenerations = generations.map(genList =>
@@ -378,7 +385,10 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
     toolCallId?: string
   ) {
     const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
-    const agentName = metadata?.agentName;
+    const agentName = metadata?.agentName || (parentRunId ? runToAgentMap.get(parentRunId) : undefined);
+    if (agentName) runToAgentMap.set(runId, agentName);
+    if (threadId) runToThreadMap.set(runId, threadId);
+
     // O nome real da tool vem no runName (config.runName = tool.name). O objeto
     // serializado (toJSON) de DynamicStructuredTool só expõe a classe genérica
     // ("DynamicStructuredTool") e perde o nome real — por isso o fallback antigo
@@ -396,19 +406,36 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
   }
 
   handleToolEnd(
-    output: string,
+    output: any,
     runId: string,
     parentRunId?: string,
     tags?: string[],
     metadata?: Record<string, any>
   ) {
     const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
-    const agentName = metadata?.agentName;
+    const agentName = metadata?.agentName || runToAgentMap.get(runId) || (parentRunId ? runToAgentMap.get(parentRunId) : undefined);
+
+    let cleanOutput: any = output;
+    if (output && typeof output === 'object') {
+      if (typeof output.content === 'string') {
+        cleanOutput = output.content;
+      } else if (output.kwargs && typeof output.kwargs.content === 'string') {
+        cleanOutput = output.kwargs.content;
+      } else if (typeof output.text === 'string') {
+        cleanOutput = output.text;
+      } else {
+        try {
+          cleanOutput = JSON.stringify(output);
+        } catch {
+          cleanOutput = String(output);
+        }
+      }
+    }
 
     console.log(`[🕒 ${new Date().toLocaleTimeString()}] [${agentName || 'SYSTEM'}] Tool execution finished.`);
 
     if (isDuplicateToolEnd(runId)) return;
-    writeDetailedLog("TOOL_END", threadId, agentName, { output, runId });
+    writeDetailedLog("TOOL_END", threadId, agentName, { output: cleanOutput, runId });
   }
 
   handleToolError(
@@ -419,7 +446,7 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
     metadata?: Record<string, any>
   ) {
     const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
-    const agentName = metadata?.agentName;
+    const agentName = metadata?.agentName || runToAgentMap.get(runId) || (parentRunId ? runToAgentMap.get(parentRunId) : undefined);
     const errorStr = typeof err === "string" ? err : (err?.message || JSON.stringify(err));
 
     console.error(`[🕒 ${new Date().toLocaleTimeString()}] [${agentName || 'SYSTEM'}] Tool execution failed:`, errorStr);

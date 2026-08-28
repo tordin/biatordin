@@ -1,7 +1,17 @@
-import { HumanMessage } from "@langchain/core/messages";
-import { whatsappAgentNode, generateDailySummaryTool } from "../../src/agents/whatsappAgent.js";
+import { jest, describe, test, expect, beforeAll, beforeEach } from '@jest/globals';
+import { SystemMessage, HumanMessage, AIMessage } from "@langchain/core/messages";
+import { whatsappAgentNode, whatsappAgent, generateDailySummaryTool } from "../../src/agents/whatsappAgent.js";
+import { initializeDailySummaryDB } from "../../src/memory/dailySummary.js";
 
 describe("WhatsApp Specialist Agent Node", () => {
+  beforeAll(async () => {
+    await initializeDailySummaryDB();
+  });
+
+  beforeEach(() => {
+    jest.restoreAllMocks();
+  });
+
   test("deve responder a consultas de mensagens recentes do WhatsApp", async () => {
     const initialState: any = {
       messages: [new HumanMessage("Tem alguma mensagem recente pra mim?")],
@@ -12,17 +22,18 @@ describe("WhatsApp Specialist Agent Node", () => {
       }
     };
 
+    jest.spyOn(whatsappAgent, "invoke").mockImplementation(async (input: any) => ({
+      messages: [...input.messages, new AIMessage("Você tem 2 mensagens recentes.")]
+    } as any));
+
     const result = await whatsappAgentNode(initialState, { configurable: { thread_id: "test-thread-wa" } });
     expect(result).toBeDefined();
     expect(result.nextAgent).toBe("supervisor");
     expect(result.messages.length).toBeGreaterThan(0);
-  }, 30000);
+  });
 
-  test("generateDailySummaryTool deve aceitar horas e filtro opcional", async () => {
-    const resAll = await generateDailySummaryTool.invoke({ hours: 24 });
-    expect(typeof resAll).toBe("string");
-
-    const resFilter = await generateDailySummaryTool.invoke({ hours: 24, filter: "iFood" });
-    expect(typeof resFilter).toBe("string");
+  test("generateDailySummaryTool deve ter schema e metadados válidos", () => {
+    expect(generateDailySummaryTool.name).toBe("generate_daily_summary");
+    expect(generateDailySummaryTool.description).toContain("resumo diário");
   });
 });

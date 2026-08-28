@@ -202,3 +202,37 @@ export function getMessagesForGroups(jids: string[], hours: number = 24): { chat
   return result;
 }
 
+export function clearChatHistory(accountName: string, chatJid: string): void {
+  const accountsToClean = [accountName];
+  if (!accountsToClean.includes('main')) accountsToClean.push('main');
+  if (!accountsToClean.includes('personal')) accountsToClean.push('personal');
+
+  const canonicalKey = canonicalJid(chatJid);
+
+  for (const acc of accountsToClean) {
+    const accountDir = path.join(HISTORY_DIR, acc);
+    if (!fs.existsSync(accountDir)) continue;
+
+    const canonicalPath = path.join(accountDir, `${canonicalKey}.json`);
+    const legacyPath = path.join(accountDir, `${chatJid}.json`);
+
+    if (fs.existsSync(canonicalPath)) {
+      try {
+        fs.unlinkSync(canonicalPath);
+        logger.info(`[CHAT HISTORY] Histórico removido para ${canonicalKey} na conta ${acc}`);
+      } catch (e) {
+        logger.error(`[CHAT HISTORY] Falha ao remover arquivo de histórico ${canonicalPath}:`, e);
+      }
+    }
+
+    if (chatJid !== canonicalKey && fs.existsSync(legacyPath)) {
+      try {
+        fs.unlinkSync(legacyPath);
+        logger.info(`[CHAT HISTORY] Histórico legado removido para ${chatJid} na conta ${acc}`);
+      } catch (e) {
+        logger.error(`[CHAT HISTORY] Falha ao remover arquivo de histórico legado ${legacyPath}:`, e);
+      }
+    }
+  }
+}
+

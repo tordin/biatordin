@@ -2,6 +2,8 @@ import {
   saveRoutine, 
   getAllActiveRoutines, 
   getRoutinesForChat, 
+  getRoutineById,
+  updateRoutine,
   deleteRoutine, 
   deactivateRoutine 
 } from "../../src/memory/routines.js";
@@ -18,6 +20,23 @@ describe("Routines SQLite Storage", () => {
     expect(routine.prompt).toBe("Lembrar de tomar o remédio");
     expect(routine.isActive).toBe(true);
     createdRoutineId = routine.id;
+  });
+
+  test("deve buscar rotina por ID", async () => {
+    const found = await getRoutineById(createdRoutineId);
+    expect(found).toBeDefined();
+    expect(found?.id).toBe(createdRoutineId);
+    expect(found?.prompt).toBe("Lembrar de tomar o remédio");
+  });
+
+  test("deve atualizar o prompt e cron de uma rotina", async () => {
+    const updated = await updateRoutine(createdRoutineId, {
+      cronExpression: "0 10 * * *",
+      prompt: "Lembrar de tomar o remédio e medir a pressão"
+    });
+    expect(updated).toBeDefined();
+    expect(updated?.cronExpression).toBe("0 10 * * *");
+    expect(updated?.prompt).toBe("Lembrar de tomar o remédio e medir a pressão");
   });
 
   test("deve listar rotinas ativas por chat", async () => {

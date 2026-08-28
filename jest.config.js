@@ -7,6 +7,7 @@ export default {
       'ts-jest',
       {
         useESM: true,
+        isolatedModules: true,
       },
     ],
   },
@@ -16,6 +17,8 @@ export default {
   },
   testPathIgnorePatterns: ['<rootDir>/dist/'],
   maxWorkers: 1,
+  setupFiles: ['<rootDir>/tests/setupEnv.js'],
+  globalSetup: '<rootDir>/tests/globalSetup.js',
   globalTeardown: '<rootDir>/tests/globalTeardown.js',
   collectCoverageFrom: [
     'src/**/*.ts',

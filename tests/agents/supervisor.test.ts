@@ -15,7 +15,7 @@
 import { jest, describe, test, it, expect, beforeEach } from '@jest/globals';
 import { HumanMessage } from "@langchain/core/messages";
 
-import { supervisorNode, cleanDsmlTags } from "../../src/agents/supervisor.js";
+import { supervisorNode, cleanDsmlTags, buildSupervisorPrompt } from "../../src/agents/supervisor.js";
 import { modelFlashStructured } from "../../src/llm/model.js";
 
 // Helper: define a decisão que o supervisor "recebe" do LLM mockado
@@ -299,5 +299,124 @@ describe("Supervisor — Tolerância a decisões estruturadas incompletas", () =
     const result = await supervisorNode(state, { configurable: { thread_id: "test-tolerance-omitted-fields" } });
     expect(result.nextAgent).toBe("gmailAgent");
     expect(result.contextData?.specialistTask).toBe("Verificar e-mails importantes na caixa de entrada dos últimos dias.");
+  });
+
+  it("deve sanitizar intermediateMessage e specialistTask quando o modelo retornar string 'null'", async () => {
+    mockSupervisorDecision({
+      nextAgent: "FINISH",
+      specialistTask: "null",
+      response: "Olá! Tudo bem?",
+      intermediateMessage: "null",
+      reason: "Resposta direta ao usuário."
+    });
+
+    const state: any = {
+      messages: [new HumanMessage("Oi Bia")],
+      nextAgent: "",
+      contextData: {
+        chatJid: "5519997064504@s.whatsapp.net",
+        isTrustedChat: true,
+        accountName: "main"
+      }
+    };
+
+    const result = await supervisorNode(state, { configurable: { thread_id: "test-sanitize-null-intermediate" } });
+    expect(result.nextAgent).toBe("FINISH");
+    expect(result.contextData?.specialistTask).toBeUndefined();
+    expect(result.contextData?.sentIntermediate).toBeFalsy();
+  });
+
+  it("deve processar com perfeição decisão ultra-enxuta com apenas nextAgent e response [SILENT]", async () => {
+    mockSupervisorDecision({
+      nextAgent: "FINISH",
+      response: "[SILENT]"
+    });
+
+    const state: any = {
+      messages: [new HumanMessage("Conversa trivial")],
+      nextAgent: "",
+      contextData: {
+        chatJid: "5519997064504@s.whatsapp.net",
+        isTrustedChat: true,
+        accountName: "main"
+      }
+    };
+
+    const result = await supervisorNode(state, { configurable: { thread_id: "test-minimal-silent-decision" } });
+    expect(result.nextAgent).toBe("FINISH");
+    expect(result.messages?.[0]?.content).toBe("[SILENT]");
+  });
+});
+
+describe("Supervisor — Precedência e Conteúdo dos Cenários (buildSupervisorPrompt)", () => {
+  test("Cenário 3: Conta pessoal passiva tem prioridade máxima", () => {
+    const prompt = buildSupervisorPrompt({ accountName: "personal", isMaster: true, isTrustedChat: true, isGroup: false });
+    expect(prompt).toContain("observadora passiva");
+    expect(prompt).toContain("SILÊNCIO (99% dos casos)");
+    expect(prompt).not.toContain("CATÁLOGO DE AGENTES");
+  });
+
+  test("Cenário 1A: Interação direta com o Criador (isMaster: true)", () => {
+    const prompt = buildSupervisorPrompt({ accountName: "main", isMaster: true, isTrustedChat: true, isGroup: false });
+    expect(prompt).toContain("CENÁRIO 1A: INTERAÇÃO DIRETA COM O CRIADOR (ACESSO TOTAL)");
+    expect(prompt).toContain("securityAgent:");
+    expect(prompt).toContain("emailSentinelAgent:");
+  });
+
+  test("Cenário 1B: Interação 1-1 com Contato Confiável", () => {
+    const prompt = buildSupervisorPrompt({ accountName: "main", isMaster: false, isTrustedChat: true, isGroup: false });
+    expect(prompt).toContain("CENÁRIO 1B: INTERAÇÃO 1-1 COM CONTATO CONFIÁVEL");
+    // Contatos confiáveis não recebem skills que exigem requiresCreator
+    expect(prompt).not.toContain("securityAgent:");
+    expect(prompt).not.toContain("emailSentinelAgent:");
+    // Mas recebem skills confiáveis normais
+    expect(prompt).toContain("searchAgent:");
+    expect(prompt).toContain("gmailAgent:");
+  });
+
+  test("Cenário 1C: Interação em Grupo Confiável", () => {
+    const prompt = buildSupervisorPrompt({ accountName: "main", isMaster: false, isTrustedChat: true, isGroup: true });
+    expect(prompt).toContain("CENÁRIO 1C: INTERAÇÃO EM GRUPO CONFIÁVEL");
+    expect(prompt).toContain("participar ativamente deste grupo");
+    expect(prompt).not.toContain("securityAgent:");
+  });
+
+  test("Cenário 2B: Interação em Grupos Não-Confiáveis", () => {
+    const prompt = buildSupervisorPrompt({ accountName: "main", isMaster: false, isTrustedChat: false, isGroup: true });
+    expect(prompt).toContain("CENÁRIO 2B: INTERAÇÃO EM GRUPOS (NÃO-CONFIÁVEIS)");
+    expect(prompt).toContain("Regra de silêncio: responda apenas se for chamada explicitamente");
+    expect(prompt).toContain("AGENTES ESPECIALISTAS DISPONÍVEIS (MODO RESTRITO)");
+    expect(prompt).not.toContain("gmailAgent:");
+  });
+
+  test("Cenário 2A: Interação 1-1 Não-Confiável (Terceiros / Missões)", () => {
+    const prompt = buildSupervisorPrompt({ accountName: "main", isMaster: false, isTrustedChat: false, isGroup: false });
+    expect(prompt).toContain("CENÁRIO 2A: INTERAÇÃO 1-1 (NÃO-CONFIÁVEL / TERCEIROS)");
+    expect(prompt).toContain("assistente pessoal EXCLUSIVA do seu criador");
+    expect(prompt).toContain("AGENTES ESPECIALISTAS DISPONÍVEIS (MODO RESTRITO)");
+    expect(prompt).not.toContain("gmailAgent:");
+  });
+
+  test("Trava defensiva do Cenário 3: força nextAgent = FINISH mesmo se LLM tentar rotear", async () => {
+    mockSupervisorDecision({
+      ...DEFAULT_DECISION,
+      nextAgent: "searchAgent",
+      specialistTask: "Pesquisar algo indevido",
+      response: "[SILENT]"
+    });
+
+    const state: any = {
+      messages: [new HumanMessage("Conversa interceptada na conta pessoal")],
+      nextAgent: "",
+      contextData: {
+        chatJid: "5519999999999@s.whatsapp.net",
+        accountName: "personal",
+        isTrustedChat: false
+      }
+    };
+
+    const result = await supervisorNode(state, { configurable: { thread_id: "test-personal-guard" } });
+    expect(result.nextAgent).toBe("FINISH");
+    expect(result.contextData?.specialistTask).toBeUndefined();
   });
 });

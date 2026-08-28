@@ -1,15 +1,21 @@
-import sqlite3 from 'sqlite3';
+import { getDb } from './db.js';
 import { logger } from '../utils/logger.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const db = new sqlite3.Database('database.sqlite', (err) => {
-  if (err) {
-    logger.error("[SECURITY DB] Erro ao conectar no SQLite:", err);
-  }
+const db = getDb();
+
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS trusted_chats (
+      jid TEXT PRIMARY KEY,
+      addedAt INTEGER NOT NULL
+    )
+  `);
 });
 
 export const MASTER_NUMBER = process.env.MASTER_NUMBER || "5519997064504@s.whatsapp.net";
+
 export const MASTER_JIDS = [MASTER_NUMBER, "233070879867118@lid"];
 
 

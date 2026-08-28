@@ -21,9 +21,19 @@ const CLAIM_AGENT_MAP: Array<{ pattern: RegExp; requiredAgents: string[]; claimD
     claimDescription: "criação de tarefa",
   },
   {
+    pattern: /(?:modifiquei|alterei|atualizei|conclu[íi]|completei|removi|exclu[íi]|deletei)\s+(?:a\s+)?(?:tarefa|item|afazer)/i,
+    requiredAgents: ["taskAgent"],
+    claimDescription: "atualização/conclusão de tarefa",
+  },
+  {
     pattern: /(?:criei|agendei|configurei)\s+(?:o\s+)?(?:lembrete|rotina|alarme)/i,
     requiredAgents: ["routineAgent"],
     claimDescription: "criação de rotina/lembrete",
+  },
+  {
+    pattern: /(?:modifiquei|alterei|atualizei|ajustei|mudei|reconfigurei)\s+(?:a\s+|o\s+)?(?:rotina|lembrete|alarme)/i,
+    requiredAgents: ["routineAgent"],
+    claimDescription: "modificação de rotina/lembrete",
   },
   {
     pattern: /(?:agendei|marquei|criei)\s+(?:a\s+)?(?:reuni[ãa]o|compromisso|evento|na agenda)/i,

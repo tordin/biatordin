@@ -4,9 +4,13 @@ import { logger } from '../utils/logger.js';
 
 dotenv.config();
 
-let aiInstance: GoogleGenAI | null = null;
+let aiInstance: any = null;
 
-function getAIClient(): GoogleGenAI {
+export function setAIClient(client: any): void {
+  aiInstance = client;
+}
+
+function getAIClient(): any {
   if (!aiInstance) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {

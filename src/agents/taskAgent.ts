@@ -152,7 +152,7 @@ const TASK_PROMPT = getSkill("taskAgent")?.detailedPrompt ||
   "Sempre use as ferramentas apropriadas (`add_task`, `list_tasks`, `complete_task`, `delete_task`).\n" +
   "Seja objetivo e informe os resultados com clareza.";
 
-const taskAgent = createReactAgent({
+export const taskAgent = createReactAgent({
   llm: model,
   tools: [addTaskTool, listTasksTool, completeTaskTool, deleteTaskTool],
   messageModifier: TASK_PROMPT,
