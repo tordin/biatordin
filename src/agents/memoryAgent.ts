@@ -20,6 +20,8 @@ import {
 } from "../memory/vectorMemory.js";
 import { getTasksForChat } from "../memory/tasks.js";
 import { getSkill } from "../skills/registry.js";
+import { resolveTopicId, getContextDocument, appendToContextDocument, saveContextDocument } from "../memory/contextDocuments.js";
+import { checkAndCompactContextDocument } from "../memory/documentCompactor.js";
 
 const MEMORY_PROMPT = getSkill("memoryAgent")?.detailedPrompt || "";
 
@@ -353,6 +355,73 @@ export const searchEventSummaryTool = tool(
   }
 );
 
+export const getContextDocumentTool = tool(
+  async ({ topicTitleOrId }, config) => {
+    const { chatJid } = getChatContext(config);
+    const { topicId } = await resolveTopicId(chatJid, topicTitleOrId);
+    const doc = await getContextDocument(topicId);
+    if (!doc) {
+      return `<RAW_TOOL_OUTPUT>\nNenhum documento encontrado para o tópico "${topicTitleOrId}". Você pode criá-hor chamando overwrite_context_document ou append_context_document.\n</RAW_TOOL_OUTPUT>`;
+    }
+    return `<RAW_TOOL_OUTPUT>\n=== DOCUMENTO VIVO: ${doc.title} ===\n\n${doc.content}\n\n(Tamanho: ${doc.content.length}/${doc.max_characters})\n</RAW_TOOL_OUTPUT>`;
+  },
+  {
+    name: "get_context_document",
+    description: "Retorna o documento Markdown completo (todas as regras e histórico) de um assunto.",
+    schema: z.object({ topicTitleOrId: z.string().describe("Título ou ID do tópico (ex: 'Cardápios semanais')") })
+  }
+);
+
+export const appendContextDocumentTool = tool(
+  async ({ topicTitleOrId, text }, config) => {
+    const { chatJid, isTrustedChat } = getChatContext(config);
+    const { topicId, title } = await resolveTopicId(chatJid, topicTitleOrId);
+    await appendToContextDocument(topicId, title, text);
+    await checkAndCompactContextDocument(topicId, chatJid, isTrustedChat);
+    return `<RAW_TOOL_OUTPUT>\nTexto adicionado com sucesso ao documento "${title}".\n</RAW_TOOL_OUTPUT>`;
+  },
+  {
+    name: "append_context_document",
+    description: "Concatena texto/diário/histórico ao final do documento vivo do tópico.",
+    schema: z.object({ 
+      topicTitleOrId: z.string().describe("Título ou ID do tópico"),
+      text: z.string().describe("Texto Markdown a ser concatenado no final do documento")
+    })
+  }
+);
+
+export const overwriteContextDocumentTool = tool(
+  async ({ topicTitleOrId, content }, config) => {
+    const { chatJid, isTrustedChat } = getChatContext(config);
+    const { topicId, title } = await resolveTopicId(chatJid, topicTitleOrId);
+    await saveContextDocument(topicId, title, content);
+    await checkAndCompactContextDocument(topicId, chatJid, isTrustedChat);
+    return `<RAW_TOOL_OUTPUT>\nDocumento "${title}" sobrescrito com sucesso.\n</RAW_TOOL_OUTPUT>`;
+  },
+  {
+    name: "overwrite_context_document",
+    description: "Substitui todo o conteúdo do documento vivo do tópico. Use apenas se precisar reescrever regras no meio do texto.",
+    schema: z.object({ 
+      topicTitleOrId: z.string().describe("Título ou ID do tópico"),
+      content: z.string().describe("Novo conteúdo completo do documento em Markdown")
+    })
+  }
+);
+
+export const compactContextDocumentTool = tool(
+  async ({ topicTitleOrId }, config) => {
+    const { chatJid, isTrustedChat } = getChatContext(config);
+    const { topicId, title } = await resolveTopicId(chatJid, topicTitleOrId);
+    await checkAndCompactContextDocument(topicId, chatJid, isTrustedChat, true);
+    return `<RAW_TOOL_OUTPUT>\nSolicitação de compactação processada para "${title}".\n</RAW_TOOL_OUTPUT>`;
+  },
+  {
+    name: "compact_context_document",
+    description: "Força a sumarização do documento imediatamente, expurgando trivialidades pro RAG.",
+    schema: z.object({ topicTitleOrId: z.string().describe("Título ou ID do tópico") })
+  }
+);
+
 export const memoryAgent = createReactAgent({
   llm: model,
   tools: [
@@ -362,6 +431,10 @@ export const memoryAgent = createReactAgent({
     searchSemanticMemoryTool,
     storeSemanticMemoryTool,
     searchEventSummaryTool,
+    getContextDocumentTool,
+    appendContextDocumentTool,
+    overwriteContextDocumentTool,
+    compactContextDocumentTool
   ],
   messageModifier: MEMORY_PROMPT,
 });

@@ -33,4 +33,40 @@ describe("Base Agent Wrapper (safeAgentNode)", () => {
     expect(result.nextAgent).toBe("supervisor");
     expect(result.contextData.lastError).toContain("testAgent: Erro simulado no especialista");
   });
+
+  test("deve injetar HumanMessage com specialistTask para turno conversacional válido no ReAct agent", async () => {
+    let passedMessages: any[] = [];
+    const successfulAgent = {
+      invoke: jest.fn<any>().mockImplementation(async (input: any) => {
+        passedMessages = input.messages;
+        return {
+          messages: [
+            ...input.messages,
+            new AIMessage("Compromissos do dia: 14h Reunião")
+          ]
+        };
+      })
+    };
+
+    const state: any = {
+      messages: [new HumanMessage("Veja meus compromissos de hoje")],
+      contextData: {
+        chatJid: "test-base@s.whatsapp.net",
+        specialistTask: "Consultar eventos no Google Calendar para hoje"
+      }
+    };
+
+    const result = await safeAgentNode(
+      "calendarAgent",
+      () => successfulAgent,
+      state,
+      undefined,
+      { configurable: { thread_id: "test-thread-base-success" } }
+    );
+
+    expect(result).toBeDefined();
+    expect(result.nextAgent).toBe("supervisor");
+    expect(passedMessages.some(m => m instanceof HumanMessage && m.content === "Consultar eventos no Google Calendar para hoje")).toBe(true);
+    expect(result.messages[0].content).toContain("<specialist_return agent=\"calendarAgent\">");
+  });
 });

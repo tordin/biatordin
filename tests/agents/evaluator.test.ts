@@ -2,10 +2,16 @@ import { jest, describe, test, it, expect, beforeEach } from "@jest/globals";
 import { HumanMessage, AIMessage, ToolMessage, RemoveMessage } from "@langchain/core/messages";
 import { evaluatorNode, buildFinalMessages, MAX_EVALUATION_CYCLES, EvaluationSchema } from "../../src/agents/evaluator.js";
 import { modelEvaluator } from "../../src/llm/model.js";
+import * as dynamicErrorModule from "../../src/utils/dynamicErrorResponse.js";
+import { modelFlash } from "../../src/llm/model.js";
+
+// Mock the LLM call for structure output
+jest.mock("../../src/utils/structuredOutput.js");
 
 describe("Evaluator / Critic Node & Quality Control", () => {
   beforeEach(() => {
     jest.restoreAllMocks();
+    jest.spyOn(modelFlash, "invoke").mockResolvedValue({ content: "Erro dinâmico gerado pelo LLM fake" } as any);
   });
 
   describe("buildFinalMessages helper", () => {
@@ -114,7 +120,7 @@ describe("Evaluator / Critic Node & Quality Control", () => {
   });
 
   describe("Circuit Breaker / Loop Protection", () => {
-    test("deve forçar PASS e rotear para outputGateway quando atingir o limite máximo de tentativas", async () => {
+    test("deve forçar rotear para outputGateway e injetar erro quando atingir o limite máximo de tentativas", async () => {
       const state: any = {
         messages: [new HumanMessage("Faça X")],
         contextData: {
@@ -132,6 +138,9 @@ describe("Evaluator / Critic Node & Quality Control", () => {
       expect(result.nextAgent).toBe("outputGateway");
       expect(result.contextData?.evaluationAttempts).toBe(0);
       expect(result.contextData?.evaluationFeedback).toBeUndefined();
+      
+      const lastMsg = result.messages![result.messages!.length - 1] as AIMessage;
+      expect(lastMsg.content).toContain("Erro dinâmico gerado");
     });
   });
 
@@ -331,5 +340,90 @@ describe("Evaluator / Critic Node & Quality Control", () => {
       expect(result.contextData?.evaluationAttempts).toBe(0);
       expect(result.messages).toBeDefined();
     });
+
+    test("deve aprovar (PASS) resposta [SILENT] quando a instrução do usuário/rotina pede silêncio condicional", async () => {
+      const mockEvaluation = {
+        verdict: "PASS",
+        reasoning: "O usuário pediu para verificar o clima e ficar em silêncio se a temperatura máxima fosse alta e sem chuva. O weatherAgent foi executado, confirmou tempo bom (31.5°C) e a resposta proposta [SILENT] respeita fielmente a instrução.",
+        critique: {
+          isComplete: true,
+          isGrounded: true,
+          isPersonaCompliant: true,
+        },
+        suggestedAction: "PASS",
+      };
+
+      jest.spyOn(modelEvaluator, "withStructuredOutput").mockReturnValue({
+        invoke: jest.fn<any>().mockResolvedValue(mockEvaluation)
+      } as any);
+
+      const state: any = {
+        messages: [
+          new HumanMessage({ content: "Consulte o clima. Se o dia estiver ensolarado, não envie nenhuma mensagem (fique em silêncio).", id: "msg-h" }),
+          new AIMessage({
+            content: '<specialist_return agent="weatherAgent"><collected_data>31.5°C Ensolarado</collected_data></specialist_return>',
+            id: "msg-spec"
+          })
+        ],
+        contextData: {
+          accountName: "main",
+          chatJid: "5519997064504@s.whatsapp.net",
+          isTrustedChat: true,
+          proposedResponse: "[SILENT]",
+          executedTools: ["get_weather"],
+          executionLog: ["weatherAgent"],
+          evaluationAttempts: 0
+        }
+      };
+
+      const result = await evaluatorNode(state, { configurable: { thread_id: "test-eval-conditional-silence" } });
+
+      expect(result.nextAgent).toBe("outputGateway");
+      expect(result.contextData?.evaluationAttempts).toBe(0);
+      expect(result.contextData?.evaluationFeedback).toBeUndefined();
+    });
+
+    test("deve aprovar (PASS) quando o especialista é executado e constata que o item/rotina não existe", async () => {
+      const mockEvaluation = {
+        verdict: "PASS",
+        reasoning: "O routineAgent foi executado com a ferramenta list_routines e confirmou que a rotina solicitada não existe. A resposta da supervisora informando que não encontrou o item é factual e correta.",
+        critique: {
+          isComplete: true,
+          isGrounded: true,
+          isPersonaCompliant: true,
+        },
+        suggestedAction: "PASS",
+      };
+
+      jest.spyOn(modelEvaluator, "withStructuredOutput").mockReturnValue({
+        invoke: jest.fn<any>().mockResolvedValue(mockEvaluation)
+      } as any);
+
+      const state: any = {
+        messages: [
+          new HumanMessage({ content: "Exclua a rotina do boiler solar", id: "msg-h" }),
+          new AIMessage({
+            content: '<specialist_return agent="routineAgent"><collected_data>Nenhuma rotina ativa encontrada para "boiler solar".</collected_data></specialist_return>',
+            id: "msg-spec"
+          })
+        ],
+        contextData: {
+          accountName: "main",
+          chatJid: "5519997064504@s.whatsapp.net",
+          isTrustedChat: true,
+          proposedResponse: "Consultei suas rotinas ativas e não encontrei nenhuma relacionada ao boiler solar para excluir.",
+          executedTools: ["list_routines"],
+          executionLog: ["routineAgent"],
+          evaluationAttempts: 0
+        }
+      };
+
+      const result = await evaluatorNode(state, { configurable: { thread_id: "test-eval-negative-search" } });
+
+      expect(result.nextAgent).toBe("outputGateway");
+      expect(result.contextData?.evaluationAttempts).toBe(0);
+      expect(result.contextData?.evaluationFeedback).toBeUndefined();
+    });
   });
 });
+

@@ -35,8 +35,11 @@ flowchart TD
    - Se houver falsa afirmação de ação → **Reprova (`NEEDS_CORRECTION`)** e define `suggestedAction = 'ROUTE_TO_SPECIALIST'`.
 2. **Ordens de Ação vs. Consulta Passiva:** O usuário solicitou explicitamente a alteração/criação/exclusão de um registro (rotina, tarefa, evento, email) e a IA respondeu apenas textualmente sem acionar a ferramenta correspondente?
    - O Evaluator **reprova obrigatoriamente**, emitindo feedback para a Supervisora executar o especialista de ação (`routineAgent`, `taskAgent`, etc.), bloqueando o encerramento do turno com `FINISH`.
-3. **Completude:** Todas as perguntas ou etapas solicitadas pelo usuário foram respondidas?
-4. **Persona & Segurança:** Respeita o tom amigável e feminino? Não chamou o usuário de "Master"? Não vazou dados confidenciais para terceiros?
+3. **Resultados Negativos & Registros Inexistentes:** Se o especialista foi executado e constatou que o registro não existe (ex: rotina não encontrada, tarefa inexistente, sem e-mails), a resposta informando claramente a não localização é 100% CORRETA e DEVE receber `verdict = 'PASS'`. O Evaluator é proibido de forçar `ROUTE_TO_SPECIALIST` para tentar deletar ou modificar itens inexistentes.
+4. **Completude:** Todas as perguntas ou etapas solicitadas pelo usuário foram respondidas?
+5. **Persona & Segurança:** Respeita o tom amigável e feminino? Não chamou o usuário de "Master"? Não vazou dados confidenciais para terceiros?
+6. **Silêncio Intencional / Condicional:** Quando o usuário ou rotina pedir explicitamente para não enviar mensagem / ficar em silêncio se uma condição for atendida, e os dados coletados confirmarem que a condição foi satisfeita, a resposta `[SILENT]` é 100% CORRETA e deve receber `verdict = 'PASS'`. O Avaliador é terminantemente proibido de exigir que a assistente envie mensagens apenas para "avisar que decidiu ficar em silêncio".
+7. **Flexibilidade Estilística no WhatsApp:** Variações normais de formato ou a ausência de jargões técnicos internos (ex: "busquei na minha memória" ou "encontrei na conta personal") NÃO constituem falhas e devem ser aprovadas com `verdict = 'PASS'`.
 
 ---
 

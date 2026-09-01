@@ -1,5 +1,5 @@
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
-import { AIMessage, SystemMessage, RemoveMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, SystemMessage, RemoveMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { sanitizeMessagesForModel, buildRecencyAnchoredHistory } from "../../utils/sanitize.js";
 import { generateDynamicErrorResponse } from "../../utils/dynamicErrorResponse.js";
@@ -141,6 +141,9 @@ export async function safeAgentNode(
         const sanitizedHistory = sanitizeMessagesForModel(cleanHistory);
         const slicedHistory = buildRecencyAnchoredHistory(sanitizedHistory, 6);
         messagesWithTime.push(...slicedHistory);
+      } else {
+        // Injeta a tarefa como HumanMessage para fornecer um turno conversacional explícito ao ReAct executor
+        messagesWithTime.push(new HumanMessage(specialistTask));
       }
     } else {
       const cleanHistory = state.messages.filter(msg => !(msg instanceof SystemMessage) && !(msg instanceof RemoveMessage));
@@ -237,7 +240,8 @@ export async function safeAgentNode(
 
     const userNotice = await generateDynamicErrorResponse({
       messages: state.messages,
-      problemDescription
+      problemDescription,
+      isTrustedContext: !!state.contextData?.isMaster || !!state.contextData?.isTrustedChat
     });
 
     const errorMessage = new AIMessage(

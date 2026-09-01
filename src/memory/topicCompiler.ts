@@ -2,6 +2,7 @@ import { getTopic } from './topics.js';
 import { getTasksForChat } from './tasks.js';
 import { getRoutinesForChat } from './routines.js';
 import { getMemoriesByTopicId } from './vectorMemory.js';
+import { getContextDocument } from './contextDocuments.js';
 
 export async function compileActiveTopicContext(chatJid: string, topicId: string, isTrustedChat: boolean): Promise<string> {
   if (!topicId) return "";
@@ -11,6 +12,13 @@ export async function compileActiveTopicContext(chatJid: string, topicId: string
 
   let hasContent = false;
   let context = `[ASSUNTO ATIVO: ${topic.title}]\n\n`;
+
+  // Documento de Contexto (Scoped Living Document)
+  const doc = await getContextDocument(topicId);
+  if (doc) {
+    hasContent = true;
+    context += `=== DOCUMENTO DE CONTEXTO ===\n${doc.content}\n==============================\n\n`;
+  }
 
   // Tarefas
   const tasks = await getTasksForChat(chatJid, 'all', undefined, isTrustedChat, topicId);

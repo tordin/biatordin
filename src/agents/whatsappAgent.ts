@@ -113,7 +113,7 @@ export const searchChatByNameTool = tool(
 
     let content = result.length > 0
       ? result.slice(0, 5).map(r => `- ${r.name} (ID: ${r.chatJid})`).join('\n') + (result.length > 5 ? `\n...e mais ${result.length - 5} resultados.` : '')
-      : `Nenhum chat encontrado com o nome '${queryName}' na conta '${accountName}'. DICA: Você DEVE tentar pesquisar na outra conta (se usou 'main', tente 'personal', e vice-versa) ou usar listRecentChats.`;
+      : `Nenhum chat encontrado com o nome '${queryName}' na conta '${accountName}'.`;
 
     return `<RAW_TOOL_OUTPUT>\n${content}\n</RAW_TOOL_OUTPUT>`;
   },
@@ -139,16 +139,16 @@ export const searchGroupsTool = tool(
       ? allGroups.filter((g: any) => g.name && g.name.toLowerCase().includes(query))
       : allGroups;
     let content = filtered.length > 0
-      ? filtered.slice(0, 5).map((g: any) => `- ${g.name} (JID: ${g.jid})`).join('\n') + (filtered.length > 5 ? `\n...e mais ${filtered.length - 5} grupos.` : '')
-      : `Nenhum grupo encontrado com o nome '${query}' na conta '${accountName}'. Tente usar um nome parcial.`;
+      ? filtered.slice(0, 10).map((g: any) => `- ${g.name} (JID: ${g.jid})`).join('\n') + (filtered.length > 10 ? `\n...e mais ${filtered.length - 10} grupos.` : '')
+      : `Nenhum grupo encontrado com o nome '${query}' na conta '${accountName}'.`;
     return `<RAW_TOOL_OUTPUT source="whatsapp:groups">\n${content}\n</RAW_TOOL_OUTPUT>`;
   },
   {
     name: "searchGroups",
-    description: "Busca todos os grupos que o usuário participa no WhatsApp. Use isso se não encontrar um grupo no histórico recente, ou para ver todos os grupos disponíveis.",
+    description: "Busca todos os grupos que o usuário participa no WhatsApp. A busca é CASE-INSENSITIVE (não diferencia maiúsculas de minúsculas) e aceita trechos parciais. NUNCA faça múltiplas buscas variando apenas maiúsculas/minúsculas.",
     schema: z.object({
       accountName: z.enum(["main", "personal"]).describe("A conta do WhatsApp ('main' ou 'personal')."),
-      queryName: z.string().optional().describe("Nome parcial do grupo para filtrar. Se não tiver certeza, deixe vazio para retornar todos."),
+      queryName: z.string().optional().describe("Nome parcial do grupo para filtrar (case-insensitive). Se não tiver certeza, deixe vazio para retornar todos."),
     }),
   }
 );
@@ -184,7 +184,7 @@ export const addDailySummaryGroupTool = tool(
   async ({ jid, name }) => {
     try {
       await addDailySummaryGroup(jid);
-      let responseMsg = `O grupo ${name || await formatJidForUser(jid)} foi adicionado à lista de grupos do resumo diário.`;
+      let responseMsg = `O grupo ${name || await formatJidForUser(jid, 'personal')} foi adicionado à lista de grupos do resumo diário.`;
       
       const activeRoutines = await getAllActiveRoutines();
       const hasSummaryRoutine = activeRoutines.some(r => r.prompt.includes("generate_daily_summary"));
@@ -217,7 +217,7 @@ export const removeDailySummaryGroupTool = tool(
   async ({ jid }) => {
     try {
       await removeDailySummaryGroup(jid);
-      return `O grupo ${await formatJidForUser(jid)} foi removido da lista de grupos do resumo diário.`;
+      return `O grupo ${await formatJidForUser(jid, 'personal')} foi removido da lista de grupos do resumo diário.`;
     } catch (e: any) {
       return `Erro ao remover grupo do resumo diário: ${e.message}`;
     }
@@ -238,7 +238,7 @@ export const listDailySummaryGroupsTool = tool(
       if (groups.length === 0) {
         return "Atualmente não há nenhum grupo na lista do resumo diário.";
       }
-      const list = await Promise.all(groups.map(async g => `- ${await formatJidForUser(g.jid)} (Adicionado em: ${new Date(g.addedAt).toLocaleString('pt-BR')})`));
+      const list = await Promise.all(groups.map(async g => `- ${await formatJidForUser(g.jid, 'personal')} (Adicionado em: ${new Date(g.addedAt).toLocaleString('pt-BR')})`));
       return `Grupos no resumo diário atualmente:\n${list.join('\n')}`;
     } catch (e: any) {
       return `Erro ao listar grupos do resumo diário: ${e.message}`;
@@ -261,11 +261,19 @@ export const generateDailySummaryTool = tool(
       
       const namedGroups = await Promise.all(groups.map(async g => ({
         jid: g.jid,
-        name: await formatJidForUser(g.jid)
+        name: await formatJidForUser(g.jid, 'personal')
       })));
 
       const jids = groups.map(g => g.jid);
-      let data = getMessagesForGroups(jids, hours || 24);
+      
+      // Se hours não for especificado, calcula dinamicamente: 72h na segunda-feira para cobrir o fim de semana, 24h nos demais dias
+      let effectiveHours = hours;
+      if (!effectiveHours || effectiveHours <= 0) {
+        const isMonday = new Date().getDay() === 1;
+        effectiveHours = isMonday ? 72 : 24;
+      }
+
+      let data = getMessagesForGroups(jids, effectiveHours);
       
       if (filter && filter.trim()) {
         const lowerFilter = filter.toLowerCase().trim();
@@ -275,7 +283,7 @@ export const generateDailySummaryTool = tool(
         if (data.length === 0) {
           if (matched.length > 0) {
             const checkedList = matched.map(g => `• ${g.name}`).join('\n');
-            return `Verificação concluída com sucesso: Nenhum dos ${matched.length} grupos correspondentes ao filtro "${filter}" teve movimentação ou novas mensagens nas últimas ${hours || 24} horas.\nGrupos verificados:\n${checkedList}\n(Todos os grupos do filtro foram checados e estão sem novidades. Não é necessário buscar esses grupos individualmente).`;
+            return `Verificação concluída com sucesso: Nenhum dos ${matched.length} grupos correspondentes ao filtro "${filter}" teve movimentação ou novas mensagens nas últimas ${effectiveHours} horas.\nGrupos verificados:\n${checkedList}\n(Todos os grupos do filtro foram checados e estão sem novidades. Não é necessário buscar esses grupos individualmente).`;
           } else {
             return `Nenhum grupo configurado no resumo diário corresponde ao filtro "${filter}". Grupos atualmente configurados:\n${namedGroups.map(g => `• ${g.name}`).join('\n')}`;
           }
@@ -283,10 +291,10 @@ export const generateDailySummaryTool = tool(
       }
       
       if (data.length === 0) {
-        return `Verificação concluída com sucesso: Nenhum dos ${namedGroups.length} grupos configurados no resumo diário teve movimentação nas últimas ${hours || 24} horas.\nGrupos verificados:\n${namedGroups.map(g => `• ${g.name}`).join('\n')}\n(Todos os grupos foram checados e estão silenciosos. Não é necessário buscar cada grupo individualmente).`;
+        return `Verificação concluída com sucesso: Nenhum dos ${namedGroups.length} grupos configurados no resumo diário teve movimentação nas últimas ${effectiveHours} horas.\nGrupos verificados:\n${namedGroups.map(g => `• ${g.name}`).join('\n')}\n(Todos os grupos foram checados e estão silenciosos. Não é necessário buscar cada grupo individualmente).`;
       }
       
-      let report = `DADOS BRUTOS DOS GRUPOS DO RESUMO DIÁRIO (ÚLTIMAS ${hours || 24} HORAS)${filter ? ` [FILTRO: "${filter}"]` : ''}:\n\n`;
+      let report = `DADOS BRUTOS DOS GRUPOS DO RESUMO DIÁRIO (ÚLTIMAS ${effectiveHours} HORAS)${filter ? ` [FILTRO: "${filter}"]` : ''}:\n\n`;
       for (const group of data) {
         report += `--- GRUPO: ${group.groupName} ---\n`;
         for (const msg of group.messages) {
@@ -303,9 +311,9 @@ export const generateDailySummaryTool = tool(
   },
   {
     name: "generate_daily_summary",
-    description: "Obtém as mensagens recentes de todos os grupos do resumo diário de forma consolidada e instantânea. Use SEMPRE esta ferramenta para resumos diários, podendo passar `filter` para focar em um grupo ou assunto específico.",
+    description: "Obtém as mensagens recentes de todos os grupos do resumo diário de forma consolidada e instantânea. Use SEMPRE esta ferramenta para resumos diários, podendo passar `filter` para focar em um grupo ou assunto específico. Se `hours` for omitido, calcula automaticamente (72h na segunda-feira para cobrir o fim de semana, 24h nos demais dias úteis).",
     schema: z.object({
-      hours: z.number().optional().describe("Quantas horas de histórico buscar (padrão 24). Para resumos de fim de dia, use 10 ou 12. Para resumos matinais, use 24."),
+      hours: z.number().optional().describe("Quantas horas de histórico buscar. Se omitido, usa automaticamente 72h na segunda-feira e 24h nos outros dias."),
       filter: z.string().optional().describe("Filtro opcional por nome do grupo ou assunto (ex: 'iFood', 'CRM', 'Condomínio'). Se omitido, busca todos os grupos configurados."),
     }),
   }

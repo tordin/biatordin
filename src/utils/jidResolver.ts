@@ -139,18 +139,34 @@ export async function formatJidForUser(jid?: string, accountName?: string): Prom
   
   if (jid.endsWith('@g.us')) {
     // É grupo
-    if (accountName) {
-      try {
-        const { getAllGroups } = await import('../transport/whatsapp.js');
-        const groups = await getAllGroups(accountName);
+    const accountsToCheck = accountName ? [accountName] : ['personal', 'main'];
+    try {
+      const { getAllGroups } = await import('../transport/whatsapp.js');
+      for (const acc of accountsToCheck) {
+        const groups = await getAllGroups(acc);
         const group = groups.find((g: any) => g.jid === jid);
         if (group && group.name) {
           return group.name; // Retorna só o nome do grupo
         }
-      } catch (err) {
-        logger.error(`Erro ao buscar nome do grupo ${jid} em formatJidForUser:`, err);
       }
+    } catch (err) {
+      logger.error(`Erro ao buscar nome do grupo ${jid} em formatJidForUser:`, err);
     }
+
+    // Fallback: busca no histórico persistido em disco se o socket não souber o nome
+    try {
+      const { getChatHistory } = await import('../memory/chatHistory.js');
+      for (const acc of ['personal', 'main']) {
+        const history = getChatHistory(acc, jid, 10);
+        const lastWithChatName = history.slice().reverse().find(m => m.chatName);
+        if (lastWithChatName?.chatName) {
+          return lastWithChatName.chatName;
+        }
+      }
+    } catch (err) {
+      logger.debug(`Erro ao buscar nome do grupo ${jid} no histórico local:`, err);
+    }
+
     // Se não achou nome, retorna o prefixo numérico do grupo (sem @g.us)
     return jid.split('@')[0];
   }

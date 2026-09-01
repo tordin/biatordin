@@ -37,6 +37,7 @@ Todas as conexões com o SQLite são obtidas exclusivamente através de [`src/me
 | `long_term_memories` | `src/memory/vectorMemory.ts` | Metadados e pontuações cognitivas (`importance`, `access_count`, `last_accessed_at`) das memórias RAG. |
 | `vec_memories` | `src/memory/vectorMemory.ts` | Tabela virtual `sqlite-vec` (vetores de 3072 dimensões com Gemini embeddings). |
 | `working_memory_snapshot` | `src/memory/workingMemory.ts` | Snapshot sintetizado e cacheado da Memória de Trabalho consolidada. |
+| `context_documents` | `src/memory/contextDocuments.ts` | Documentos Vivos por Contexto (Scoped Living Documents) estruturados em Markdown. |
 | `email_sentinel_rules` | `src/memory/emailSentinel.ts` | Regras de descarte (`ignore`) e prioridade (`priority`) do Inbox Watcher. |
 | `email_sentinel_logs` | `src/memory/emailSentinel.ts` | Histórico de e-mails processados e classificados pelo sentinela. |
 | `daily_summary_groups` | `src/memory/dailySummary.ts` | JIDs dos grupos selecionados para gerar o resumo diário automatizado. |

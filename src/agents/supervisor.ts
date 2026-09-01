@@ -37,7 +37,7 @@ const SHARED_ROUTING_BASE =
   "- AÇÕES OPERACIONAIS VS CONSULTA PASSIVA: Quando o usuário der uma ordem de AÇÃO (criar, modificar, atualizar, cancelar ou listar rotinas, tarefas, eventos de calendário, e-mails, planilhas, trackers), você DEVE rotear para o especialista correspondente (ex: `routineAgent`, `taskAgent`, `calendarAgent`, `gmailAgent`, `sheetsAgent`, `trackerAgent`). NUNCA use o `memoryAgent` como substituto para executar ou verificar alterações em bancos de dados operacionais.\n" +
   "- DELEGAÇÃO DE TAREFA (`specialistTask`): Quando definir `nextAgent` para qualquer especialista (diferente de 'FINISH'), você DEVE preencher o campo `specialistTask` com uma instrução clara, objetiva e cirúrgica do que o especialista deve fazer. Consolide nomes, termos de busca, datas, JIDs ou valores explicitados na conversa. Evite pronomes vagos como 'isso' ou 'aquele produto'.\n" +
   "- PLANEJAMENTO: Para tarefas de múltiplas etapas, defina a sequência no campo `plan` e siga a ordem.\n" +
-  "- ENCERRAMENTO (`FINISH`): Ao concluir o objetivo ou se um agente falhar, defina `nextAgent = 'FINISH'` e formule a resposta final no campo `response`. Nunca chame um agente que acabou de falhar.\n" +
+  "- ENCERRAMENTO (`FINISH`): Ao concluir o objetivo ou se um agente falhar, defina `nextAgent = 'FINISH'` e formule a resposta final no campo `response`. Se a instrução do usuário ou da rotina pedir para ficar em silêncio / não enviar mensagem quando certas condições forem atendidas ou se não houver nada a reportar, use `response = '[SILENT]'`. Nunca chame um agente que acabou de falhar.\n" +
   "- MENSAGENS INTERMEDIÁRIAS VS RESPOSTA FINAL: O campo `response` deve ser preenchido SOMENTE quando `nextAgent` for 'FINISH'. Se for rotear para qualquer especialista (ex: memoryAgent, searchAgent), deixe `response` VAZIO e use APENAS `intermediateMessage` para avisar proativamente o usuário (ex: 'Consultando memória...'). Deixe `intermediateMessage` vazio nas passagens seguintes.\n\n";
 
 const SHARED_ROUTING_TRUSTED =
@@ -312,13 +312,21 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
   }
   
   let topicContext = "";
-  if (currentContext.active_topic_title) {
+  const topicIdToLoad = currentContext.topicId || currentContext.activeTopicId || currentContext.active_topic_id;
+  
+  if (topicIdToLoad) {
+    try {
+      topicContext = await compileActiveTopicContext(currentContext.chatJid || "unknown", topicIdToLoad, !!currentContext.isTrustedChat);
+    } catch (e) {
+      logger.error("[SUPERVISOR] Erro ao compilar contexto do assunto por ID:", e);
+    }
+  } else if (currentContext.active_topic_title) {
     try {
       const topic = await getOrCreateTopicByTitle(currentContext.chatJid || "unknown", currentContext.active_topic_title);
       currentContext.activeTopicId = topic.id;
       topicContext = await compileActiveTopicContext(currentContext.chatJid || "unknown", topic.id, !!currentContext.isTrustedChat);
     } catch (e) {
-      logger.error("[SUPERVISOR] Erro ao compilar contexto do assunto:", e);
+      logger.error("[SUPERVISOR] Erro ao compilar contexto do assunto por título:", e);
     }
   }
 
@@ -372,6 +380,14 @@ Feedback do auditor: "${currentContext.evaluationFeedback}"
 INSTRUÇÃO OBRIGATÓRIA:
 1. Você NÃO PODE finalizar com nextAgent = 'FINISH' agora.
 2. Você DEVE acionar o especialista necessário no campo 'nextAgent' com uma 'specialistTask' clara e detalhada para efetivar a ação solicitada antes de responder ao usuário.`;
+    } else if (suggestedAction === "FIX_RESPONSE_TEXT") {
+      evaluatorFeedbackPrompt = `[FEEDBACK DO AUDITOR / AVALIADOR DE QUALIDADE]:
+A resposta anterior foi REPROVADA e precisa de correção textual ou factual na mensagem para o usuário:
+"${currentContext.evaluationFeedback}"
+INSTRUÇÃO OBRIGATÓRIA:
+1. Os dados necessários JÁ ESTÃO no seu contexto (você já executou o especialista necessário).
+2. Você NÃO PODE acionar nenhum especialista agora.
+3. Você DEVE definir nextAgent = 'FINISH' e redigir a resposta corrigida e completa no campo 'response'.`;
     } else {
       evaluatorFeedbackPrompt = `[FEEDBACK DO AUDITOR / AVALIADOR DE QUALIDADE]:
 A resposta anterior precisa de correção ou esclarecimento:
@@ -419,7 +435,7 @@ INSTRUÇÃO:
       return trimmed === "" || trimmed.toLowerCase() === "null" || trimmed.toLowerCase() === "undefined" ? null : trimmed;
     }).describe("Instrução clara, objetiva e cirúrgica do que o especialista deve fazer. Preencher OBRIGATORIAMENTE quando nextAgent não for FINISH."),
     reason: z.string().nullable().default(null),
-    response: z.string().nullable().default(null).describe("Resposta final para o usuário. Preencher SOMENTE quando nextAgent for 'FINISH'. Deixar vazio ao chamar um especialista."),
+    response: z.string().nullable().default(null).describe("Resposta final para o usuário. Preencher SOMENTE quando nextAgent for 'FINISH'. Se a instrução do usuário/rotina pedir para ficar em silêncio ou não enviar mensagem, use '[SILENT]'. Deixar vazio ao chamar um especialista."),
     intermediateMessage: z.string().nullable().default(null).transform(val => {
       if (!val) return null;
       const trimmed = val.trim();
@@ -443,7 +459,8 @@ INSTRUÇÃO:
       reason: "Circuit Breaker ativado por limite de execuções ou timeout.",
       response: await generateDynamicErrorResponse({
         problemDescription: "O limite de tempo (120s) ou o limite de execuções de ferramentas (30) foi atingido pela supervisora, ativando a trava de segurança técnica.",
-        userGuidance: "Diga que ocorreu uma instabilidade técnica ou lentidão ao consultar os dados e peça para o usuário tentar novamente em instantes de forma carinhosa."
+        userGuidance: "Diga que ocorreu uma instabilidade técnica ou lentidão ao consultar os dados e peça para o usuário tentar novamente em instantes de forma carinhosa.",
+        isTrustedContext: !!currentContext.isMaster || !!currentContext.isTrustedChat
       }),
       intermediateMessage: null,
       contextDataUpdate: null
@@ -465,7 +482,8 @@ INSTRUÇÃO:
     } catch (fallbackErr: any) {
       logger.error("[SUPERVISOR] Falha total ao obter decisão. Forçando FINISH para evitar loop.", fallbackErr);
       const dynamicMsg = await generateDynamicErrorResponse({
-        problemDescription: "Falha técnica no processamento da decisão de roteamento."
+        problemDescription: "Falha técnica no processamento da decisão de roteamento.",
+        isTrustedContext: !!currentContext.isMaster || !!currentContext.isTrustedChat
       });
       parsed = {
         plan: null,
@@ -613,7 +631,8 @@ INSTRUÇÃO:
     parsed.response = await generateDynamicErrorResponse({
       messages: state.messages,
       problemDescription: "A supervisora entrou em um loop infinito repetindo chamadas ao memoryAgent repetidas vezes e não conseguiu ler as anotações desejadas.",
-      userGuidance: "Diga que você está com alguma dificuldade técnica para acessar as anotações no momento e pergunte se o usuário pode repetir ou reformular o que precisa."
+      userGuidance: "Diga que você está com alguma dificuldade técnica para acessar as anotações no momento e pergunte se o usuário pode repetir ou reformular o que precisa.",
+      isTrustedContext: !!currentContext.isMaster || !!currentContext.isTrustedChat
     });
   }
 
@@ -630,8 +649,6 @@ INSTRUÇÃO:
     if (!parsed.response || parsed.response.trim() === "" || parsed.response.toUpperCase() === "[SILENT]") {
       if (currentContext.proposedResponse && currentContext.proposedResponse.toUpperCase() !== "[SILENT]") {
         parsed.response = currentContext.proposedResponse;
-      } else if (currentContext.isTrustedChat) {
-        parsed.response = "Prontinho! Concluí o que você pediu.";
       } else {
         parsed.response = "[SILENT]";
       }
@@ -642,8 +659,6 @@ INSTRUÇÃO:
     if (!parsed.response || parsed.response.trim() === "" || parsed.response.toUpperCase() === "[SILENT]") {
       if (currentContext.proposedResponse && currentContext.proposedResponse.toUpperCase() !== "[SILENT]") {
         parsed.response = currentContext.proposedResponse;
-      } else if (currentContext.isTrustedChat) {
-        parsed.response = "Prontinho! Concluí o que você pediu.";
       } else {
         parsed.response = "[SILENT]";
       }
@@ -665,14 +680,7 @@ INSTRUÇÃO:
     if (supervisorText && supervisorText.toUpperCase() !== "[SILENT]") {
       finalResponseText = supervisorText;
     } else {
-      if (!parsed.response) {
-        finalResponseText = await generateDynamicErrorResponse({
-          messages: state.messages,
-          problemDescription: "A supervisora interrompeu o fluxo e precisa pedir esclarecimentos ao usuário."
-        });
-      } else {
-        finalResponseText = "[SILENT]";
-      }
+      finalResponseText = "[SILENT]";
     }
 
     // Se o missionAgent já tratou a comunicação (enviou msg ao target, notificou master, ou iniciou missão),

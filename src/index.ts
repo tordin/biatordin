@@ -38,6 +38,7 @@ import { initTopicsTable } from './memory/topics.js';
 import { initSecurityTable } from './memory/security.js';
 import { initializeDailySummaryDB } from './memory/dailySummary.js';
 import { initEntitiesTable } from './memory/entities.js';
+import { initContextDocumentsTable } from './memory/contextDocuments.js';
 import { loadLidMappings } from './utils/jidResolver.js';
 
 // Captura sinais de terminação
@@ -60,6 +61,7 @@ async function bootstrap() {
     await initializeDailySummaryDB();
     await initFollowUpsTable();
     await initEntitiesTable();
+    await initContextDocumentsTable();
 
     // Carrega mapeamentos LID↔número antes de qualquer processamento de mensagens
     // (essencial para missões: alvo responde via @lid, missões salvas com número)

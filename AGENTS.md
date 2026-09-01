@@ -68,6 +68,7 @@ A memória da Bia é unificada 100% no SQLite (`database.sqlite`) e dividida ent
 - **Reconciliação Semântica na Gravação:** Gravações sensíveis (`perfil`, `fato`, `preferencia`, `combinado`) realizam busca vetorial prévia local e arbitram contradições via `semanticArbiter.ts` (distinção de sujeitos e prevalência de declarações negativas).
 - **Injeção em Tempo Real (Pós-Snapshot):** Fatos criados/atualizados após o último snapshot consolidado ou pertencentes à sessão ativa são injetados imediatamente no bloco `## 🔄 Contexto & Fatos Recentes` em `getWorkingMemoryContext()`, sem filtros restritivos de importância.
 - **Consolidação de Sono Bidirecional & GC:** Síntese diária às 03:05 via LLM que compila o snapshot e expurga contradições/erros (`purgeIds`) da base relacional, acompanhada do Garbage Collector para descarte de fatos transitórios esquecidos.
+- **Documentos Vivos por Contexto (Scoped Living Documents):** Documentos Markdown contínuos na tabela `context_documents` associados a `topicId`. Permitem injeção direta (*Direct Fetch / Zero-RAG*) em rotinas, missões e conversas com tópicos ativos, com compactação semântica síncrona (preservando regras sagradas e arquivando excessos em `long_term_memories`).
 
 ### B) Espaços de Armazenamento Operacionais Dedicados (SQLite & `src/memory/db.ts`)
 - **Conexão Centralizada Obrigatória:** Todos os módulos de persistência **DEVEM** obter a conexão SQLite exclusivamente através de `getDb()` / `getDbPath()` em `src/memory/db.ts`. NUNCA instancie `new sqlite3.Database('database.sqlite')` diretamente.
@@ -75,6 +76,8 @@ A memória da Bia é unificada 100% no SQLite (`database.sqlite`) e dividida ent
 - Dados operacionais dinâmicos devem residir em **tabelas SQLite dedicadas** gerenciadas por suas respectivas Skills/Tools:
   - **Gestão de Tarefas & Listas**: Tabela `tasks` + `taskAgent` (`add_task`, `list_tasks`, `complete_task`, `delete_task`).
   - **Rotinas e Lembretes**: Tabela `routines` + `routineAgent` (`create_routine`, `list_routines`, `delete_routine`).
+  - **Documentos Vivos de Contexto**: Tabela `context_documents` + `memoryAgent` (`get_context_document`, `append_context_document`, `overwrite_context_document`, `compact_context_document`).
+  - **Missões Autônomas**: Tabela `missions` (com suporte a `topicId`) + `missionAgent`.
   - **CRM Pessoal & Entidades**: Tabelas `entities` e `entity_relationships` + `crmAgent`.
   - **Sentinela de E-mails**: Tabelas `email_sentinel_rules` e `email_sentinel_log` + `emailSentinelAgent`.
   - **Monitoramento de Grupos & Segurança**: Tabelas `security` / `ignored_groups` / `topics` + `securityAgent` e `whatsappAgent`.

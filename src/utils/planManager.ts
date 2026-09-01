@@ -29,6 +29,11 @@ export function normalizePlan(rawPlan: (PlanStep | string | any)[] | null | unde
         task = trimmed.substring(colonIndex + 1).trim();
       }
 
+      // "FINISH", "END", "NONE" não são agentes especialistas e não devem ser tratados como etapas pendentes
+      if (agent.toUpperCase() === "FINISH" || agent.toUpperCase() === "END" || agent.toUpperCase() === "NONE") {
+        continue;
+      }
+
       normalized.push({
         agent,
         task: task || `Executar ${agent}`,
@@ -36,7 +41,7 @@ export function normalizePlan(rawPlan: (PlanStep | string | any)[] | null | unde
       });
     } else if (typeof item === "object") {
       const agent = String(item.agent || item.name || "").trim();
-      if (!agent) continue;
+      if (!agent || agent.toUpperCase() === "FINISH" || agent.toUpperCase() === "END" || agent.toUpperCase() === "NONE") continue;
 
       const task = String(item.task || item.description || item.instruction || `Executar ${agent}`).trim();
       const status: PlanStepStatus = (["pending", "in_progress", "completed", "failed"].includes(item.status))

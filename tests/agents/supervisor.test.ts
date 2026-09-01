@@ -419,4 +419,28 @@ describe("Supervisor — Precedência e Conteúdo dos Cenários (buildSupervisor
     expect(result.nextAgent).toBe("FINISH");
     expect(result.contextData?.specialistTask).toBeUndefined();
   });
+
+  test("Normalização de Silêncio: deve converter response vazio ('') em [SILENT] sem gerar mensagem de erro", async () => {
+    mockSupervisorDecision({
+      ...DEFAULT_DECISION,
+      nextAgent: "FINISH",
+      response: "",
+      reason: "Condição de silêncio atendida"
+    });
+
+    const state: any = {
+      messages: [new HumanMessage("Se o dia for de sol, fique em silêncio")],
+      nextAgent: "",
+      contextData: {
+        chatJid: "5519997064504@s.whatsapp.net",
+        isTrustedChat: true,
+        accountName: "main"
+      }
+    };
+
+    const result = await supervisorNode(state, { configurable: { thread_id: "test-silent-empty-response" } });
+    expect(result.nextAgent).toBe("FINISH");
+    expect(result.contextData?.proposedResponse).toBe("[SILENT]");
+  });
 });
+

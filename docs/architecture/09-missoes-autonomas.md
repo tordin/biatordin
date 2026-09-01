@@ -64,7 +64,8 @@ CREATE TABLE missions (
   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
   updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
   expiresAt DATETIME,               -- Data/hora de expiração baseada no TTL
-  ttlHours INTEGER
+  ttlHours INTEGER,
+  topicId TEXT                      -- Tópico contextual vinculado (para injeção de Living Documents)
 );
 
 CREATE UNIQUE INDEX idx_unique_active_mission 

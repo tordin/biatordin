@@ -52,6 +52,15 @@ Para evitar o consumo desnecessário de processamento, análise visual e tokens 
 
 ---
 
+## 👥 Descoberta de Grupos & Resolução Resiliente de Nomes
+
+Para permitir consultas instantâneas e seguras de grupos e relatórios de resumo diário:
+- **`getAllGroups(accountName, forceRefresh)`:** Consulta os grupos em que o socket participa (`groupFetchAllParticipating`) com cache em memória com TTL de 10 minutos. Caso o socket esteja desconectado ou em modo passivo, combina e enriquece a lista com os grupos registrados no histórico local em disco (`data/history/{acc}/*.json`).
+- **`formatJidForUser(jid, accountName)`:** Para JIDs de grupo (`@g.us`), busca o nome amigável no cache de grupos e, caso ausente, realiza fallback consultando o atributo `chatName` nas mensagens do histórico persistido.
+- **`generateDailySummaryTool`:** Opera diretamente sobre os JIDs persistidos no SQLite (`daily_summary_groups`), calculando dinamicamente uma janela de **72 horas às segundas-feiras** (para cobrir o fim de semana e o fechamento de sexta) e **24 horas nos demais dias úteis**.
+
+---
+
 ## 🔁 Deduplicação de Saídas & Proteção contra Loops
 
 Para garantir que a Bia nunca entre em loop infinito conversando consigo mesma ou reenviando mensagens duplicadas em caso de reconexão de socket:

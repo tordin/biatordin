@@ -1206,10 +1206,34 @@ export function isWhatsAppConnected(accountName: string): boolean {
     return sockets.has(accountName) || (accountName === 'main' && !!globalSock);
 }
 
-export async function getAllGroups(accountName?: string): Promise<{jid: string, name: string}[]> {
-    const groupMap = new Map<string, string>();
+const lastFullGroupFetch = new Map<string, number>();
 
-    // 1. Coleta do cache em memória (groupNameCache)
+export async function getAllGroups(accountName?: string, forceRefresh: boolean = false): Promise<{jid: string, name: string}[]> {
+    const groupMap = new Map<string, string>();
+    const targetAccounts = accountName ? [accountName] : ['main', 'personal'];
+
+    // 1. Tenta atualizar via conexões ativas do Baileys se não foi feito nos últimos 10 minutos ou se forçado
+    const now = Date.now();
+    for (const acc of targetAccounts) {
+        const lastFetch = lastFullGroupFetch.get(acc) || 0;
+        const sock = sockets.get(acc) || (acc === 'main' ? globalSock : null);
+        if (sock && (forceRefresh || now - lastFetch > 600_000)) {
+            try {
+                const groups = await sock.groupFetchAllParticipating();
+                for (const g of Object.values(groups) as any[]) {
+                    if (g && g.id && g.subject) {
+                        groupNameCache.set(`${acc}:${g.id}`, g.subject);
+                        if (acc === 'main') mainGroupJids.add(g.id);
+                    }
+                }
+                lastFullGroupFetch.set(acc, now);
+            } catch (e) {
+                logger.error(`Erro ao buscar grupos ativos de ${acc}:`, e);
+            }
+        }
+    }
+
+    // 2. Coleta do cache em memória (groupNameCache)
     for (const [key, name] of groupNameCache.entries()) {
         const [acc, jid] = key.split(':');
         if (!accountName || acc === accountName) {
@@ -1217,26 +1241,33 @@ export async function getAllGroups(accountName?: string): Promise<{jid: string, 
         }
     }
 
-    // 2. Se o cache estiver vazio para esta conta, busca uma única vez nas conexões ativas
-    if (groupMap.size === 0) {
-        const targetAccounts = accountName ? [accountName] : ['main', 'personal'];
+    // 3. Fallback e enriquecimento a partir do histórico local (data/history/{acc}/*.json)
+    try {
+        const historyDir = path.join(process.cwd(), 'data', 'history');
         for (const acc of targetAccounts) {
-            const sock = sockets.get(acc) || (acc === 'main' ? globalSock : null);
-            if (sock) {
-                try {
-                    const groups = await sock.groupFetchAllParticipating();
-                    for (const g of Object.values(groups) as any[]) {
-                        if (g && g.id && g.subject) {
-                            groupMap.set(g.id, g.subject);
-                            groupNameCache.set(`${acc}:${g.id}`, g.subject);
-                            if (acc === 'main') mainGroupJids.add(g.id);
-                        }
+            const accDir = path.join(historyDir, acc);
+            if (fs.existsSync(accDir)) {
+                const files = fs.readdirSync(accDir).filter(f => f.endsWith('@g.us.json'));
+                for (const file of files) {
+                    const jid = file.replace('.json', '');
+                    if (!groupMap.has(jid)) {
+                        try {
+                            const data = fs.readFileSync(path.join(accDir, file), 'utf-8');
+                            const history = JSON.parse(data);
+                            if (Array.isArray(history) && history.length > 0) {
+                                const lastWithChatName = history.slice().reverse().find((m: any) => m.chatName);
+                                if (lastWithChatName?.chatName) {
+                                    groupMap.set(jid, lastWithChatName.chatName);
+                                    groupNameCache.set(`${acc}:${jid}`, lastWithChatName.chatName);
+                                }
+                            }
+                        } catch {}
                     }
-                } catch (e) {
-                    logger.error(`Erro ao buscar grupos de ${acc}:`, e);
                 }
             }
         }
+    } catch (e) {
+        logger.debug('[getAllGroups] Erro ao carregar grupos do histórico local:', e);
     }
 
     return Array.from(groupMap.entries()).map(([jid, name]) => ({ jid, name }));

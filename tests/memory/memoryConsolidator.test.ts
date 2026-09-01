@@ -104,4 +104,34 @@ describe("Memory Consolidator (Bidirectional Sleep Consolidation & GC)", () => {
 
     await deleteVectorMemory(memId);
   });
+
+  test("deve se recuperar no fallback quando o LLM retorna snapshot como objeto JSON em vez de string", async () => {
+    const memId = await addVectorMemory("Fato para teste de fallback", "fato", testChatJid, undefined, 0.9);
+
+    // Simula erro no parser nativo
+    jest.spyOn(model, "withStructuredOutput").mockReturnValue({
+      invoke: jest.fn<any>().mockRejectedValue(new Error("400 Invalid schema for response_format"))
+    } as any);
+
+    // Simula resposta bruta do modelo com snapshot em formato de objeto JSON
+    const rawFallbackResponse = {
+      content: JSON.stringify({
+        snapshot: {
+          perfil: { nome: "Luiz", residencia: "Campinas" },
+          interesses: "Tecnologia e IA"
+        },
+        purgeIds: [],
+        demoteIds: []
+      })
+    };
+
+    jest.spyOn(model, "invoke").mockResolvedValue(rawFallbackResponse as any);
+
+    const snapshot = await consolidateWorkingMemorySnapshot(testChatJid, true);
+    expect(snapshot).toBeDefined();
+    expect(snapshot).toContain("PERFIL");
+    expect(snapshot).toContain("Campinas");
+
+    await deleteVectorMemory(memId);
+  });
 });

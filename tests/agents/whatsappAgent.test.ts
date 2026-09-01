@@ -35,5 +35,31 @@ describe("WhatsApp Specialist Agent Node", () => {
   test("generateDailySummaryTool deve ter schema e metadados válidos", () => {
     expect(generateDailySummaryTool.name).toBe("generate_daily_summary");
     expect(generateDailySummaryTool.description).toContain("resumo diário");
+    expect(generateDailySummaryTool.description).toContain("72h");
+  });
+
+  test("searchGroupsTool deve ter descrição explicativa de case-insensitive", async () => {
+    const { searchGroupsTool } = await import("../../src/agents/whatsappAgent.js");
+    expect(searchGroupsTool.name).toBe("searchGroups");
+    expect(searchGroupsTool.description).toContain("CASE-INSENSITIVE");
+  });
+
+  test("formatJidForUser deve resolver nome de grupo via fallback do histórico local", async () => {
+    const { formatJidForUser } = await import("../../src/utils/jidResolver.js");
+    const { appendMessageToHistory } = await import("../../src/memory/chatHistory.js");
+
+    const testGroupJid = "120363999999999999@g.us";
+    appendMessageToHistory("personal", testGroupJid, {
+      id: "msg-test-1",
+      timestamp: Date.now(),
+      sender: "551999999999@s.whatsapp.net",
+      senderName: "João",
+      chatName: "Grupo Teste Fallback",
+      content: "Olá mundo",
+      isFromMe: false
+    });
+
+    const resolvedName = await formatJidForUser(testGroupJid);
+    expect(resolvedName).toBe("Grupo Teste Fallback");
   });
 });

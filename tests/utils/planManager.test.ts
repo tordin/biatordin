@@ -57,6 +57,17 @@ describe("Plan Manager Unit Tests", () => {
         status: "pending"
       });
     });
+
+    test("deve ignorar 'FINISH', 'END' e 'NONE' para não transformá-los em etapas pendentes", () => {
+      const raw = ["FINISH"];
+      const result = normalizePlan(raw);
+      expect(result).toHaveLength(0);
+
+      const mixed = ["taskAgent", "FINISH", { agent: "END", status: "pending" }];
+      const mixedResult = normalizePlan(mixed);
+      expect(mixedResult).toHaveLength(1);
+      expect(mixedResult[0].agent).toBe("taskAgent");
+    });
   });
 
   describe("updatePlanProgress", () => {
@@ -174,6 +185,11 @@ describe("Plan Manager Unit Tests", () => {
 
     test("não deve interceptar se o plano estiver vazio", () => {
       const result = shouldEnforcePlan([], "FINISH");
+      expect(result.shouldEnforce).toBe(false);
+    });
+
+    test("não deve interceptar se o plano contiver apenas 'FINISH'", () => {
+      const result = shouldEnforcePlan(["FINISH"], "FINISH");
       expect(result.shouldEnforce).toBe(false);
     });
 

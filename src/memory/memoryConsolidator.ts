@@ -9,13 +9,13 @@ import { logger } from '../utils/logger.js';
 
 export const DemoteItemSchema = z.object({
   id: z.number().describe("ID da memória a ser rebaixada"),
-  newImportance: z.number().min(0.0).max(1.0).nullable().default(null).describe("Nova importância reduzida (ex: 0.1 a 0.3) para fatos antigos ou transitórios superados.")
+  newImportance: z.number().min(0.0).max(1.0).nullable().default(null).describe("Nova importância reduzida (ex: 0.1 a 0.3) para fatos antigos ou transitórios superados. null = reduz 20% do valor atual.")
 });
 
 export const ConsolidationResultSchema = z.object({
   consolidatedMarkdown: z.string().describe("O snapshot Markdown sintetizado, coeso, hierarquizado e limpo."),
-  purgeIds: z.array(z.number()).nullable().default([]).describe("Array com os IDs das memórias que devem ser EXPURGADAS do banco SQLite (contradições diretas, fatos cancelados/superados, erros)."),
-  demoteIds: z.array(DemoteItemSchema).nullable().default([]).describe("Lista de memórias cujo valor de importância deve ser rebaixado.")
+  purgeIds: z.array(z.number()).default([]).describe("Array com os IDs das memórias que devem ser EXPURGADAS do banco SQLite (contradições diretas, fatos cancelados/superados, erros). Se não houver, envie lista vazia []."),
+  demoteIds: z.array(DemoteItemSchema).default([]).describe("Lista de memórias cujo valor de importância deve ser rebaixado. Se não houver, envie lista vazia [].")
 });
 
 export type ConsolidationResult = z.infer<typeof ConsolidationResultSchema>;
@@ -123,7 +123,10 @@ ${topMemories.map((m) => `- [ID: ${m.id}] [${m.category.toUpperCase()}] (Import�
       ],
       {
         name: "MemoryConsolidatorSleep",
-        metadata: { chatJid }
+        metadata: { chatJid },
+        fieldAliases: {
+          consolidatedMarkdown: ["snapshot", "markdown", "consolidated_markdown", "content"]
+        }
       }
     );
 

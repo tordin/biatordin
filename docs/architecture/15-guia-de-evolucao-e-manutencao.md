@@ -41,7 +41,20 @@ Cadastre a nova definição com `id`, `name`, `summary` (máximo 1 linha), `cate
 2. **NUNCA Salve Dados Operacionais no `bia_memory.md`:** Informações temporárias, tarefas, cotações e status devem residir no SQLite (`database.sqlite`), nunca no arquivo de perfil.
 3. **Respeite a Precedência Estrita de Cenários:** Não permita que contas de terceiros acessem informações pessoais ou executem comandos de segurança.
 4. **Mantenha os Tipos ESM Atualizados:** O projeto é ESM puro (`"type": "module"`). Todos os imports devem incluir a extensão `.js`.
-5. **Padrão de Schemas Zod & Structured Output (DeepSeek vs Zod):** Em saídas estruturadas (`withStructuredOutput` / `invokeStructuredWithFallback`), use sempre `.nullable().default(null)` ou `.nullish().default(null)` para campos opcionais. Isso garante que a propriedade seja incluída no array `required` do JSON Schema enviado ao DeepSeek (evitando o erro HTTP 400) e que o parser Zod preencha automaticamente `null` caso o modelo gere um JSON enxuto omitindo propriedades (evitando erros de `undefined`).
+5. **Schemas Zod Strict-Mode Compliant (OpenAI/DeepSeek):** Em TODOS os schemas usados com `withStructuredOutput` / `invokeStructuredWithFallback`:
+   - ❌ **NUNCA** use `.optional()` isolado — gera campos fora do `required` do JSON Schema, rejeitado com HTTP 400.
+   - ✅ Use `strictOptional(z.string())` de `src/utils/zodStrict.ts` para campos opcionais.
+   - ✅ Use `.nullable().default(null)` diretamente (equivalente manual de `strictOptional`).
+   - ✅ Use `strictArray(z.string())` ou `.default([])` em arrays que podem ser omitidos.
+   - ✅ Para remapear chaves alternativas que o LLM pode gerar no fallback, use `fieldAliases` na chamada:
+     ```typescript
+     invokeStructuredWithFallback(model, schema, messages, {
+       name: "MySchema",
+       fieldAliases: { myField: ["alias1", "alias2"] }
+     });
+     ```
+   - ✅ **NUNCA** adicione `if (options.name === "AlgumSchema")` em `structuredOutput.ts` — toda normalização específica deve ser declarada como `fieldAliases` no call site.
+   - O motor de resiliência (`src/utils/structuredOutput.ts`) aplica automaticamente 4 camadas: invocação nativa → recuperação de erro → fallback com schema signature → normalizador semântico.
 6. **Atualize a Documentação Arquitetural:** Toda vez que um módulo for alterado ou criado, atualize os documentos correspondentes em `docs/architecture/` e o [`AGENTS.md`](../../AGENTS.md).
 
 ---

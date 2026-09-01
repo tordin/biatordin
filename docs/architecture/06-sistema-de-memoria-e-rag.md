@@ -94,10 +94,11 @@ A função `getWorkingMemoryContext` combina a estabilidade do snapshot consolid
 ## 🌙 4. Consolidação de Sono Bidirecional & GC (`src/memory/memoryConsolidator.ts`)
 
 Às **03:05 da manhã** (durante o repouso diário da assistente):
-1. **Síntese Estruturada:** O consolidador analisa os top 60 fatos da base cognitiva e o snapshot anterior, gerando:
-   - `consolidatedMarkdown`: O documento estruturado e limpo.
+1. **Síntese Estruturada & Resiliência de Schema:** O consolidador analisa os top 180 fatos da base cognitiva e o snapshot anterior, gerando via Structured Output estrito:
+   - `consolidatedMarkdown`: O documento estruturado, denso e limpo.
    - `purgeIds`: Lista de IDs que devem ser expurgados da base relacional e vetorial.
-   - `demoteIds`: Lista de IDs cuja importância deve ser rebaixada.
+   - `demoteIds`: Lista de IDs cuja importância deve ser rebaixada (`id`, `newImportance`).
+   - O schema Zod e o fallback em `src/utils/structuredOutput.ts` possuem recuperação determinística contra inconsistências de serialização JSON de objetos aninhados.
 2. **Precedência de Declarações Negativas:** Correções explícitas forçam a remoção definitiva do fato incorreto tanto do Markdown compilado quanto da base SQLite.
 3. **Garbage Collector Noturno (`runMemoryGarbageCollector`):** Remove itens com score cognitivo $S < 0.05$, criados há mais de 90 dias, sem acessos posteriores e com importância inicial $< 0.3$. Fatos de perfil vital ($I = 1.0$) são 100% imunes ao GC.
 
@@ -119,6 +120,10 @@ A função `getWorkingMemoryContext` combina a estabilidade do snapshot consolid
 - `readMemory()`: Retorna a Memória de Trabalho Cognitiva atual compilada.
 - `consolidateMemory()`: Força a consolidação bidirecional imediata sob demanda.
 - `deleteSemanticMemory(memoryId, searchQuery)`: Remove fatos da base relacional e vetorial.
+- `get_context_document(topicTitleOrId)`: Retorna o documento Markdown completo do tópico.
+- `append_context_document(topicTitleOrId, text)`: Concatena anotações/histórico ao final do documento com compactação síncrona se exceder limite.
+- `overwrite_context_document(topicTitleOrId, content)`: Sobrescreve o documento Markdown completo (para alteração estrutural de regras).
+- `compact_context_document(topicTitleOrId)`: Força a compactação e arquivamento imediato do documento sob demanda.
 
 ---
 
@@ -127,6 +132,20 @@ A função `getWorkingMemoryContext` combina a estabilidade do snapshot consolid
 - As conversas são associadas a tópicos com status `active` ou `archived`.
 - O `topicCompiler.ts` compila as anotações e tarefas vinculadas ao tópico em discussão e as apresenta como contexto relevante para a Supervisora.
 - O comando `/novo` ou `/reset` arquiva o tópico atual e inicia uma conversa limpa sem apagar memórias perenes.
+
+---
+
+## 📄 7. Documentos Vivos por Contexto (Scoped Living Documents)
+
+O sistema de memória utiliza Documentos Vivos por Contexto (`context_documents` associados a `topicId`) para resolver limitações da busca vetorial em processos contínuos (como cardápios semanais, negociações ou manuais).
+
+- **O Problema do RAG Aberto:** Recuperar fragmentos vetoriais falha quando a IA precisa de uma visão holística e contínua do estado atual e das regras em vigor.
+- **Direct Fetch Determinístico (Zero-RAG Ingestion):** Quando uma missão, rotina agendada (Cron) ou o chat aciona um Tópico, o `topicCompiler.ts` puxa 100% do documento de contexto associado e injeta diretamente no System Prompt.
+- **Compactação Semântica Síncrona:** O documento tem um orçamento estrito (ex: 6.000 caracteres). Se o limite for estourado após o salvamento, o `documentCompactor.ts` aciona a LLM síncronamente para:
+  1. Preservar regras "sagradas" e permanentes sem alterá-las.
+  2. Sumarizar e destilar os históricos diários.
+  3. Extrair as anotações transitórias e enviá-las para o arquivamento seguro no RAG vetorial (`long_term_memories`).
+- **Ferramentas (`memoryAgent`):** Oferecem à Bia a capacidade de fazer _append_ logando diários rápidos ou sobrescrever (_overwrite_) caso haja necessidade de edição estrutural de regras no meio do texto, sempre prezando a manutenção orgânica.
 
 ---
 

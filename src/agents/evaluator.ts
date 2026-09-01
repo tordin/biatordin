@@ -7,6 +7,7 @@ import { invokeStructuredWithFallback } from "../utils/structuredOutput.js";
 import { logger } from "../utils/logger.js";
 import { validateResponseConsistency } from "../utils/responseValidator.js";
 import { applyToolSeals } from "../utils/toolSeals.js";
+import { generateDynamicErrorResponse } from "../utils/dynamicErrorResponse.js";
 
 export const MAX_EVALUATION_CYCLES = 2;
 
@@ -48,14 +49,21 @@ const EVALUATOR_SYSTEM_PROMPT =
   "     B) O usuário solicitou uma AÇÃO de modificação, criação ou cancelamento (ex: 'modifique a rotina X', 'crie o evento Y') e a Supervisora apenas respondeu com texto ou consultou a memória passiva sem acionar o agente operacional correspondente. Defina `suggestedAction = 'ROUTE_TO_SPECIALIST'`.\n" +
   "     C) O usuário pediu múltiplas ações distintas (ex: consultar o tempo E criar uma tarefa) e uma das ações foi completamente ignorada sem que o especialista correspondente tenha sido executado.\n" +
   "     D) A resposta contradiz diretamente os dados recuperados em [DADOS COLETADOS NOS BASTIDORES].\n\n" +
-  "3. MULTI-CONTAS (main vs personal):\n" +
+  "3. RESULTADOS NEGATIVOS & ITENS INEXISTENTES (MUITO IMPORTANTE):\n" +
+  "   - Se o usuário pediu para consultar, alterar ou excluir um item (ex: 'exclua a rotina do boiler', 'cancele a tarefa X', 'procure a mensagem Y') e o especialista correspondente foi executado (ex: `routineAgent`, `taskAgent`, `whatsappAgent`, `calendarAgent`), mas constatou nos dados coletados que o item NÃO existe ou não foi encontrado: a resposta da supervisora informando claramente que o registro não foi encontrado é 100% CORRETA e DEVE ser aprovada com `verdict: 'PASS'`.\n" +
+  "   - NUNCA reprove nem exija `ROUTE_TO_SPECIALIST` para tentar deletar ou modificar um item inexistente quando a consulta já foi realizada pelo especialista.\n\n" +
+  "4. MULTI-CONTAS & FLEXIBILIDADE ESTILÍSTICA:\n" +
   "   - A Bia pode buscar dados tanto na conta 'main' quanto na conta 'personal'.\n" +
-  "   - Se a resposta da supervisora menciona que o grupo/conversa foi encontrado na conta 'personal', isso é perfeitamente válido e NÃO deve ser motivo de reprovação.\n\n" +
-  "4. PERSONA & FORMATO (isPersonaCompliant):\n" +
+  "   - Se a resposta menciona ou omite detalhes técnicos internos como 'encontrado na conta personal' ou 'buscado na memória', isso é estilístico e NÃO deve ser motivo de reprovação.\n" +
+  "   - Respostas diretas, prestativas e amigáveis para WhatsApp devem ser prontamente aprovadas (`verdict: 'PASS'`). Não faça exigências pedantes sobre preâmbulos ou formatação se o conteúdo for verdadeiro e útil.\n\n" +
+  "5. PERSONA & FORMATO (isPersonaCompliant):\n" +
   "   - Tom conversacional, empático, feminino (Bia) e adequado para WhatsApp.\n" +
   "   - NUNCA chame o usuário de 'Master' ou 'Mestre'.\n\n" +
+  "6. SILÊNCIO INTENCIONAL OU CONDICIONAL:\n" +
+  "   - Se a solicitação do usuário ou instrução da rotina especificar para NÃO enviar mensagem / ficar em silêncio caso uma condição seja atendida ou se nada precisar ser feito/avisado, e a resposta proposta for '[SILENT]' ou vazia e fundamentada nos dados coletados: a decisão é 100% CORRETA e DEVE ser aprovada com verdict = 'PASS'.\n" +
+  "   - NUNCA exija que a assistente envie uma mensagem apenas para 'avisar que decidiu ficar em silêncio' quando o pedido original pediu silêncio.\n\n" +
   "DECISÃO:\n" +
-  "- Se tudo estiver correto, factual e completo: verdict = 'PASS'.\n" +
+  "- Se tudo estiver correto, factual e completo (ou se for silêncio legítimo solicitado ou busca negativa legítima): verdict = 'PASS'.\n" +
   "- Se houver falha real comprovada: verdict = 'NEEDS_CORRECTION', defina 'suggestedAction' ('ROUTE_TO_SPECIALIST' se faltou chamar um especialista, ou 'FIX_RESPONSE_TEXT' se for ajuste redacional) e forneça 'feedback' cirúrgico para a Supervisora.";
 
 /**
@@ -195,9 +203,19 @@ export async function evaluatorNode(
   // 2. CIRCUIT BREAKER / LOOP PROTECTION: Limite estrito de ciclos de autocorreção
   if (currentAttempts >= MAX_EVALUATION_CYCLES) {
     logger.warn(
-      `[EVALUATOR] Limite máximo de ciclos de autocorreção (${MAX_EVALUATION_CYCLES}) atingido. Forçando PASS com sanitização determinística.`
+      `[EVALUATOR] Limite máximo de ciclos de autocorreção (${MAX_EVALUATION_CYCLES}) atingido. Substituindo resposta por erro dinâmico detalhado.`
     );
-    const finalMessages = buildFinalMessages(state.messages, proposedResponse, executedTools, executedAgents);
+    
+    const problemDescription = `A Supervisora entrou em um loop com o Evaluator. O Evaluator apontou o seguinte erro: "${currentContext.evaluationFeedback || "Resposta omissa ou incompleta"}". No entanto, a Supervisora não conseguiu corrigir o problema após ${MAX_EVALUATION_CYCLES} tentativas e continuou enviando a mesma resposta incorreta ou entrando em loop com agentes.`;
+    const userGuidance = "Informe ao usuário a verdade sobre o problema (que a resposta pretendida falhou na auditoria e não pôde ser corrigida automaticamente), não encubra a falha, e pergunte se o usuário deseja que você tente novamente do zero ou reformule o pedido.";
+
+    const dynamicMsg = await generateDynamicErrorResponse({
+      problemDescription,
+      userGuidance,
+      isTrustedContext: !!currentContext.isMaster || !!currentContext.isTrustedChat
+    });
+
+    const finalMessages = buildFinalMessages(state.messages, dynamicMsg, executedTools, executedAgents);
     return {
       messages: finalMessages,
       nextAgent: "outputGateway",

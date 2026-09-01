@@ -40,7 +40,8 @@ export async function reasoningAgentNode(state: typeof AgentState.State, config?
     logger.error("[REASONING AGENT ERROR]", error.message || error);
     const dynamicMsg = await generateDynamicErrorResponse({
       messages: state.messages,
-      problemDescription: `Falha ao processar raciocínio complexo: ${error.message || 'erro desconhecido'}`
+      problemDescription: `Falha ao processar raciocínio complexo: ${error.message || 'erro desconhecido'}`,
+      isTrustedContext: !!state.contextData?.isMaster || !!state.contextData?.isTrustedChat
     });
     return {
       messages: [new AIMessage(dynamicMsg)],

@@ -17,7 +17,8 @@ db.serialize(() => {
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       expiresAt DATETIME,
-      ttlHours INTEGER
+      ttlHours INTEGER,
+      topicId TEXT
     )
   `);
 
@@ -39,6 +40,12 @@ db.serialize(() => {
     }
   });
 
+  db.run(`ALTER TABLE missions ADD COLUMN topicId TEXT`, (err) => {
+    if (err && !err.message.includes("duplicate column name")) {
+      logger.error("[MISSIONS DB] Erro ao adicionar coluna topicId:", err);
+    }
+  });
+
   db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_active_mission ON missions(masterJid, targetJid) WHERE status = 'active'`, (err) => {
     if (err && !err.message.includes("already exists")) {
       logger.error("[MISSIONS DB] Erro ao criar índice único de missões ativas:", err);
@@ -57,6 +64,7 @@ export interface Mission {
   updatedAt: string;
   expiresAt?: string | null;
   ttlHours?: number | null;
+  topicId?: string | null;
 }
 
 export function expireOldMissions(): Promise<void> {
@@ -79,11 +87,11 @@ export function expireOldMissions(): Promise<void> {
   });
 }
 
-export function saveMission(masterJid: string, targetJid: string, objective: string, ttlHours: number = 72): Promise<Mission> {
+export function saveMission(masterJid: string, targetJid: string, objective: string, ttlHours: number = 72, topicId?: string): Promise<Mission> {
   return new Promise((resolve, reject) => {
     const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19);
-    const stmt = db.prepare("INSERT INTO missions (masterJid, targetJid, objective, status, ttlHours, expiresAt) VALUES (?, ?, ?, 'active', ?, ?)");
-    stmt.run(masterJid, targetJid, objective, ttlHours, expiresAt, function (this: sqlite3.RunResult, err: Error | null) {
+    const stmt = db.prepare("INSERT INTO missions (masterJid, targetJid, objective, status, ttlHours, expiresAt, topicId) VALUES (?, ?, ?, 'active', ?, ?, ?)");
+    stmt.run(masterJid, targetJid, objective, ttlHours, expiresAt, topicId || null, function (this: sqlite3.RunResult, err: Error | null) {
       if (err) return reject(err);
       resolve(getMissionById(this.lastID));
     });

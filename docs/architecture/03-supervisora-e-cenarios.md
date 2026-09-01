@@ -9,7 +9,7 @@ A **Supervisora** ([`src/agents/supervisor.ts`](../../src/agents/supervisor.ts))
 1. **Classificação & Roteamento:** Seleciona o especialista mais adequado a partir do resumo do catálogo.
 2. **Delegação Cirúrgica (`specialistTask`):** Em vez de repassar todo o histórico sem contexto, formula uma ordem direta e contextualizada para o especialista (ex: `"Buscar no Google o preço do iPhone 16 128GB na Amazon Brasil"`).
 3. **Planejamento Sequencial (`plan`):** Decompõe objetivos multi-etapas em uma lista de passos e rastreia o progresso através de [`src/utils/planManager.ts`](../../src/utils/planManager.ts).
-4. **Formulação da Resposta Final:** Sintetiza os dados retornados pelos especialistas em uma mensagem natural, acolhedora e formatada para o WhatsApp.
+4. **Formulação da Resposta Final:** Sintetiza os dados retornados pelos especialistas em uma mensagem natural, acolhedora e formatada para o WhatsApp. Quando a solicitação ou rotina instruir silêncio sob determinada condição ou ausência de novidades, define deterministicamente `response = '[SILENT]'`.
 5. **Mensagens Intermediárias (`intermediateMessage`):** Quando necessário, avisa proativamente o usuário antes de tarefas mais longas (ex: `"Consultando sua agenda..."`).
 
 ---
