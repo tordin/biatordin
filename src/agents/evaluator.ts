@@ -250,8 +250,10 @@ export async function evaluatorNode(
 
   // 3. Montar contexto de inspeção imparcial
   let latestUserMessage = "";
+  let lastHumanIdx = -1;
   for (let i = state.messages.length - 1; i >= 0; i--) {
     if (state.messages[i] instanceof HumanMessage) {
+      lastHumanIdx = i;
       latestUserMessage = typeof state.messages[i].content === "string" 
         ? (state.messages[i].content as string) 
         : JSON.stringify(state.messages[i].content);
@@ -259,7 +261,8 @@ export async function evaluatorNode(
     }
   }
 
-  const collectedData = extractCollectedData(state.messages);
+  const currentTurnMessages = lastHumanIdx !== -1 ? state.messages.slice(lastHumanIdx + 1) : state.messages;
+  const collectedData = extractCollectedData(currentTurnMessages);
 
   const passiveReferencesUsed = currentContext.passiveReferencesUsed || [];
 

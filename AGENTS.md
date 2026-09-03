@@ -69,6 +69,7 @@ A memória da Bia é unificada 100% no SQLite (`database.sqlite`) e dividida ent
 - **Reconciliação Semântica na Gravação:** Gravações sensíveis (`perfil`, `fato`, `preferencia`, `combinado`) realizam busca vetorial prévia local e arbitram contradições via `semanticArbiter.ts` (distinção de sujeitos e prevalência de declarações negativas).
 - **Injeção em Tempo Real (Pós-Snapshot):** Fatos criados/atualizados após o último snapshot consolidado ou pertencentes à sessão ativa são injetados imediatamente no bloco `## 🔄 Contexto & Fatos Recentes` em `getWorkingMemoryContext()`, sem filtros restritivos de importância.
 - **Consolidação de Sono Bidirecional & GC:** Síntese diária às 03:05 via LLM que compila o snapshot e expurga contradições/erros (`purgeIds`) da base relacional, acompanhada do Garbage Collector para descarte de fatos transitórios esquecidos.
+- **Marcadores Epistêmicos na Injeção:** Fatos injetados na memória de trabalho recebem sufixos `[MemID: {id}]`. A Supervisora reporta as fontes usadas no campo `passiveReferencesUsed`, permitindo que o Evaluator aprove respostas baseadas em RAG sem acionamento ativo de ferramentas (evitando falsos positivos de groundedness).
 - **Documentos Vivos por Contexto (Scoped Living Documents):** Documentos Markdown contínuos na tabela `context_documents` associados a `topicId`. Permitem injeção direta (*Direct Fetch / Zero-RAG*) em rotinas, missões e conversas com tópicos ativos, com compactação semântica síncrona (preservando regras sagradas e arquivando excessos em `long_term_memories`).
 
 ### B) Espaços de Armazenamento Operacionais Dedicados (SQLite & `src/memory/db.ts`)
@@ -90,6 +91,7 @@ A memória da Bia é unificada 100% no SQLite (`database.sqlite`) e dividida ent
 ## 4. Padrões de Roteamento & LangGraph
 
 - As transições no fluxo LangGraph em `src/graph/workflow.ts` devem ser declarativas.
+- **Subversão de Controle com Command API (The Ralph Loop / LLM-Modulo):** Em caso de falha de groundedness estrutural (Supervisora afirmou ação mas omitiu o especialista), o `evaluatorNode` utiliza `new Command({ goto: requiredCorrectionAgent, update: { specialistTask, ... } })` para forçar o roteamento imperativo direto para o especialista alvo, quebrando deadlocks de autocorreção.
 - Quando uma nova Skill especialista é criada:
   1. Registrar em `src/skills/registry.ts`.
   2. Implementar a Skill/Node em `src/agents/`.

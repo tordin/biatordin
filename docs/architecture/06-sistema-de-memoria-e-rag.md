@@ -87,6 +87,7 @@ A função `getWorkingMemoryContext` combina a estabilidade do snapshot consolid
   - **Slot Sessão (25%):** Fatos recentes (últimas 4h) não-vitais, decaem rápido.
   - **Slot Relevância (45%):** Demais fatos ordenados por relevância híbrida/cognitiva.
 - **Comparação de Timestamps & Reatividade:** Fatos registrados após a consolidação (`m.updatedAt > snapshotUpdatedAt`) ou pertencentes ao Slot Sessão são injetados diretamente no bloco `## 🔄 Contexto & Fatos Recentes`.
+- **Marcadores Epistêmicos (`[MemID: {id}]`):** Cada fato renderizado nos blocos de Working Memory recebe o sufixo `[MemID: {id}]`. Isso permite que a Supervisora reporte os IDs usados via `passiveReferencesUsed` e o Evaluator aprove a resposta sem exigir chamadas ativas de ferramentas (prevenção de falsos positivos de groundedness em respostas baseadas em RAG).
 - **Deduplicação Inteligente:** Impede a repetição de fatos já consolidados textualmente no Markdown.
 
 ---

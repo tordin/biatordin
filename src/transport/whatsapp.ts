@@ -711,7 +711,10 @@ async function executeIsolatedSystemMessage(
         title = resolved.title;
     }
 
-    const threadId = `${accountName}_${resolvedChatJid}_${topicId}`;
+    let threadId = `${accountName}_${resolvedChatJid}_${topicId}`;
+    if (options.triggerType === 'cron_routine') {
+        threadId = `${accountName}_${resolvedChatJid}_cron_${options.routineId || 'sys'}_${Date.now()}`;
+    }
     logger.info(`[ISOLATED SYSTEM EXECUTION] Executando mensagem de sistema no assunto: "${title}" (Thread: ${threadId}, Routine ID: ${options.routineId || 'N/A'})`);
 
     const dateStr = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });

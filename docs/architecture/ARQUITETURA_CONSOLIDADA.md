@@ -162,7 +162,7 @@ flowchart TD
     CHK_CB -->|Sim (Circuit Breaker)| DYN_ERR["generateDynamicErrorResponse<br/>(Aviso honesto ao usuário sobre a falha técnica)"]
     DYN_ERR --> SANITIZE_ERR["buildFinalMessages + validateResponseConsistency"] --> GATEWAY
     
-    CHK_CB -->|Não| AUDIT_PROMPT["Monta Contexto de Auditoria:<br/>• Solicitação original do usuário<br/>• Ferramentas executadas (executedTools)<br/>• Agentes executados (executionLog)<br/>• Dados brutos coletados (<specialist_return>)<br/>• proposedResponse da Supervisora"]
+    CHK_CB -->|Não| AUDIT_PROMPT["Monta Contexto de Auditoria:<br/>• Solicitação original do usuário<br/>• Ferramentas executadas (executedTools)<br/>• Agentes executados (executionLog)<br/>• Referências passivas (passiveReferencesUsed - MemIDs)<br/>• Dados brutos coletados (<specialist_return>)<br/>• proposedResponse da Supervisora"]
     
     AUDIT_PROMPT --> LLM_EVAL["modelEvaluator (gpt-4o-mini, temp: 0.0)<br/>EvaluationSchema"]
     
@@ -171,44 +171,48 @@ flowchart TD
     VERDICT -->|PASS| FINAL_BUILD["buildFinalMessages:<br/>• RemoveMessage dos nós intermediários<br/>• validateResponseConsistency (Regex guard)<br/>• applyToolSeals (Assinatura determinística)<br/>• Append do AIMessage final"]
     FINAL_BUILD --> GATEWAY
     
-    VERDICT -->|NEEDS_CORRECTION| RETRY["Incrementa evaluationAttempts (+1)<br/>Injeta evaluationFeedback e evaluationSuggestedAction<br/>nextAgent = 'supervisor'"]
-    RETRY --> SUP_RETRY["Supervisora recebe feedback<br/>• Repetition Guard ISENTO ([EVALUATOR_RETRY])<br/>• Orçamento dinâmico: 5 + attempts"]
+    VERDICT -->|NEEDS_CORRECTION| CHK_ACTION{"suggestedAction"}
+    CHK_ACTION -->|ROUTE_TO_SPECIALIST<br/>(Ralph Loop / LLM-Modulo)| CMD["Command API (LangGraph)<br/>goto: requiredCorrectionAgent<br/>specialistTask: inferredSpecialistTask"] --> SPECIALIST["Especialista Alvo"] --> RET_SUP["Retorna para Supervisora<br/>(com resultado real no log)"]
+    CHK_ACTION -->|FIX_RESPONSE_TEXT| RETRY_TXT["nextAgent = 'supervisor'<br/>Injeta feedback redacional"] --> SUP_RETRY["Supervisora reescreve"]
 ```
 
 ### 4.1. Critérios Rígidos de Auditoria do Evaluator
 
-O System Prompt do Evaluator impõe 7 regras mandatárias:
+O System Prompt do Evaluator impõe 8 regras mandatárias:
 
 1. **Groundedness & Execução Factual Real:**
    - O auditor confronta o texto de `proposedResponse` contra o array `executedTools` e `executionLog`.
    - Se a resposta alegar: *"Agendei na sua agenda"*, *"Enviei o e-mail"*, *"Modifiquei a rotina"*, *"Adicionei a tarefa"*, mas a ferramenta correspondente (`create_event`, `send_email`, `update_routine`, `add_task`) **NÃO** constar em `executedTools`, a resposta é **sumariamente REPROVADA (`NEEDS_CORRECTION`)** com `suggestedAction = 'ROUTE_TO_SPECIALIST'`.
 2. **Ordens de Ação vs. Consulta Passiva:**
-   - Se o usuário ordenou explicitamente uma alteração, criação ou cancelamento de registro e a Supervisora apenas respondeu com texto ou consultou a memória passiva sem acionar o especialista operacional (`routineAgent`, `taskAgent`, `calendarAgent`, etc.), o Evaluator **reprova obrigatoriamente**, bloqueando o encerramento do turno com `FINISH`.
-3. **Resultados Negativos & Itens Inexistentes (Prevenção de Falso Positivo):**
+   - Se o usuário ordenou explicitamente uma alteração, criação ou cancelamento de registro e a Supervisora apenas respondeu com texto ou consultou a memória passiva sem acionar o especialista operacional (`routineAgent`, `taskAgent`, `calendarAgent`, etc.), o Evaluator **reprova obrigatoriamente** (`suggestedAction = 'ROUTE_TO_SPECIALIST'`), identificando `requiredCorrectionAgent` e preenchendo `inferredSpecialistTask`.
+3. **Marcadores Epistêmicos & Falsos Positivos (Leitura Passiva de Memória):**
+   - Se a Supervisora respondeu baseando-se no contexto de RAG/SQLite sem acionar ferramentas operacionais, ela reporta os identificadores em `passiveReferencesUsed` (ex: `[MemID: 42]`).
+   - Se a lista contiver IDs válidos da Memória de Trabalho injetada, o Evaluator reconhece a legitimidade da fonte e **APROVA imediatamente (`verdict = 'PASS'`)**, eliminando falsos positivos de groundedness.
+4. **Resultados Negativos & Itens Inexistentes (Prevenção de Falso Positivo):**
    - Se o especialista foi acionado (ex: `routineAgent` listou rotinas ou `taskAgent` buscou tarefas) e constatou nos dados brutos que o item **não existe**, a resposta da Supervisora comunicando honestamente a ausência do registro é **100% CORRETA e DEVE receber `verdict = 'PASS'`**. O auditor é expressamente proibido de forçar `ROUTE_TO_SPECIALIST` para deletar itens inexistentes.
-4. **Silêncio Intencional ou Condicional:**
+5. **Silêncio Intencional ou Condicional:**
    - Quando a instrução da rotina ou usuário previr silêncio sob determinada condição (ex: *"só me avise se chover"*), e os dados indicarem que a condição de aviso não ocorreu, a resposta `[SILENT]` é aprovada com `verdict = 'PASS'`. O auditor nunca exige que a assistente envie mensagens apenas para dizer que decidiu ficar em silêncio.
-5. **Confiança na Interpretação da Supervisora (Falsos Positivos de Silêncio):**
+6. **Confiança na Interpretação da Supervisora (Falsos Positivos de Silêncio):**
    - Se a regra admitir interpretação e a Supervisora decidiu enviar uma mensagem útil e fundamentada em dados, o Evaluator confia na decisão e não bloqueia a comunicação útil.
-6. **Flexibilidade Estilística no WhatsApp:**
+7. **Flexibilidade Estilística no WhatsApp:**
    - A omissão de jargões técnicos (ex: "consultei na conta personal" ou "busquei na minha memória") é uma escolha estilística natural do WhatsApp e não constitui falha.
-7. **Persona & Segurança:**
+8. **Persona & Segurança:**
    - Verifica se o tom é feminino, empático e acolhedor, se o criador não foi tratado como "Master" e se nenhum dado confidencial foi vazado para chats restritos.
 
 ### 4.2. O Loop de Auto-Recuperação & Circuit Breaker
 
-Quando o Evaluator reprova uma resposta, o sistema inicia um processo estruturado de autocorreção:
+Quando o Evaluator reprova uma resposta, o sistema adota o padrão **LLM-Modulo (The Ralph Loop)** para quebrar deadlocks cognitivos:
 
-1. **Injeção de Feedback Cirúrgico:**
-   - O Evaluator define `evaluationAttempts = currentAttempts + 1`, `evaluationFeedback` (ex: *"Você afirmou que a rotina foi criada, mas não executou a ferramenta create_routine no routineAgent"*) e `evaluationSuggestedAction = 'ROUTE_TO_SPECIALIST'`.
-   - O fluxo devolve o controle para a `supervisor`.
-2. **Bypass do Repetition Guard (`[EVALUATOR_RETRY]`):**
-   - A Supervisora possui uma proteção nativa contra loops que impede a chamada consecutiva do mesmo agente (`isRepeatingAgent`).
-   - Porém, quando `evaluationSuggestedAction === 'ROUTE_TO_SPECIALIST'`, essa proteção é **automaticamente isenta**. O log `[EVALUATOR_RETRY]` registra que a chamada repetida foi autorizada pela auditoria para viabilizar a ação corretiva.
+1. **Subversão de Controle via Command API (`ROUTE_TO_SPECIALIST`):**
+   - Em vez de devolver a falha para a Supervisora (que tenderia a reincidir no erro ao tentar se autocorrigir apenas com texto), o `evaluatorNode` infere `requiredCorrectionAgent` e a instrução cirúrgica `inferredSpecialistTask`.
+   - O nó retorna um objeto **`new Command({ goto: requiredCorrectionAgent, update: { specialistTask, ... } })`** da API nativa do LangGraph.
+   - Isso pula a Supervisora e transfere a execução imperativamente para o especialista faltante. Após a execução da ferramenta, o especialista transita normalmente para a Supervisora (via `routeFromSpecialist`), que agora encontra os dados reais consolidados e finaliza com `FINISH`.
+2. **Isenção do Repetition Guard (`[EVALUATOR_RETRY]`):**
+   - A proteção contra loops consecutivos da Supervisora (`isRepeatingAgent`) é desativada quando há direcionamento corretivo, permitindo reaproveitar o mesmo agente com tarefas distintas.
 3. **Orçamento Dinâmico de Execuções:**
    - O limite padrão de chamadas da Supervisora é expandido para **`5 + evaluationAttempts`**, garantindo que até 7 invocações possam ocorrer no turno para sanar as pendências sem travar o pipeline.
 4. **Limpeza Transacional de Feedback:**
-   - Assim que a Supervisora roteia para o especialista (`nextAgent !== 'FINISH'`), os campos `evaluationFeedback` e `evaluationSuggestedAction` são limpos do `contextData`, evitando que o bypass permaneça ativo indevidamente em turnos futuros.
+   - Assim que a Supervisora roteia para o especialista (`nextAgent !== 'FINISH'`), os campos `evaluationFeedback` e `evaluationSuggestedAction` são limpos do `contextData`, evitando resíduos em turnos subsequentes.
 5. **Circuit Breaker (Limite de 2 Ciclos):**
    - Se após `MAX_EVALUATION_CYCLES = 2` tentativas a resposta ainda falhar na auditoria, o Circuit Breaker é desarmado.
    - Em vez de travar o processo ou enviar uma alucinação, a função `generateDynamicErrorResponse` gera uma mensagem transparente e contextualizada, informando ao usuário que houve uma inconsistência na validação e sugerindo que o pedido seja reformulado, garantindo integridade ética e confiabilidade.
@@ -269,13 +273,11 @@ sequenceDiagram
     Sup->>Eval: Submete proposedResponse
     
     Note over Eval: Auditoria detecta:<br/>executedTools está VAZIO.<br/>Falsa afirmação de ação operacional!
-    Eval-->>Sup: verdict = 'NEEDS_CORRECTION'<br/>evaluationSuggestedAction = 'ROUTE_TO_SPECIALIST'<br/>feedback = "Você afirmou ter salvo a tarefa mas não executou add_task no taskAgent."
+    Note over Eval: Ralph Loop / LLM-Modulo:<br/>Subversão via Command API<br/>goto: taskAgent, specialistTask: "Adicionar tarefa 'comprar café' para amanhã"
+    Eval->>TaskAg: Command({ goto: 'taskAgent', update: { specialistTask, attempts: 1 } })
+    TaskAg-->>Sup: Retorna dados via <specialist_return>Tarefa ID 108 criada</specialist_return>
     
-    Note over Sup: Ciclo de Correção 1/2:<br/>Bypass do Repetition Guard ativo ([EVALUATOR_RETRY])<br/>nextAgent = 'taskAgent'<br/>specialistTask = "Adicionar tarefa 'comprar café' para amanhã"
-    Sup->>TaskAg: Invocação corretiva
-    TaskAg-->>Sup: <specialist_return>Tarefa ID 108 criada</specialist_return>
-    
-    Note over Sup: proposedResponse: "Prontinho! Adicionei 'comprar café' na sua lista de tarefas."
+    Note over Sup: Supervisora formula resposta com dados reais:<br/>proposedResponse: "Prontinho! Adicionei 'comprar café' na sua lista de tarefas."
     Sup->>Eval: Submete nova proposta corrigida
     Note over Eval: executedTools contém 'add_task'.<br/>Veredito: PASS!
     Eval-->>Gate: Aprovado -> Limpa histórico intermediário
