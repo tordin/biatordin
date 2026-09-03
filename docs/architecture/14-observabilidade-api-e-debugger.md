@@ -46,6 +46,17 @@ Aplicação web desenvolvida em **Next.js** localizada na pasta `bia-debugger/`:
 
 ---
 
+## 🔭 Tracing com LangSmith
+
+O runtime da Bia possui instrumentação nativa para **LangSmith Tracing** através das variáveis de ambiente:
+- `LANGSMITH_TRACING=true` ou `LANGCHAIN_TRACING_V2=true`
+- `LANGSMITH_PROJECT` ou `LANGCHAIN_PROJECT` (padrão: `'default'`)
+- `LANGSMITH_API_KEY`: Chave da plataforma LangSmith.
+
+Quando ativado, cada passo do grafo LangGraph, chamadas LLM e invocações de ferramentas são automaticamente transmitidas para a plataforma LangSmith para análise aprofundada de latência, consumo de tokens e debugging distribuído.
+
+---
+
 ## 🔗 Próximos Passos & Documentos Relacionados
 
 - Para consultar o guia prático de desenvolvimento e testes:  

@@ -68,7 +68,7 @@ describe('WhatsApp Message Filtering & Account Isolation', () => {
   });
 });
 
-describe('WhatsApp sendIntermediateMessage JID resolution', () => {
+describe('WhatsApp sendIntermediateMessage JID resolution & Suppression', () => {
   it('should safely extract JID from composite thread IDs with account prefix and topic UUID', async () => {
     const { sendIntermediateMessage } = await import('../../src/transport/whatsapp.js');
     // Calling with no initialized socket should log error and return undefined without crashing
@@ -77,6 +77,34 @@ describe('WhatsApp sendIntermediateMessage JID resolution', () => {
       'Mensagem intermediária de teste'
     );
     expect(res).toBeUndefined();
+  });
+
+  it('should suppress sending intermediate messages when active trigger is cron_routine or system_inject', async () => {
+    const { sendIntermediateMessage } = await import('../../src/transport/whatsapp.js');
+    const { setActiveTrigger, clearActiveTrigger } = await import('../../src/utils/logger.js');
+
+    const threadId = '5519997064504@s.whatsapp.net';
+    setActiveTrigger(threadId, {
+      triggerId: 'test-cron-suppress',
+      triggerType: 'cron_routine',
+      threadId: threadId,
+      chatJid: threadId,
+      accountName: 'main',
+      messageContent: 'Rotina de resumo',
+      metadata: {
+        isGroup: false,
+        mentionsBia: false,
+        isReplyToBot: false,
+        wasReceivedWhileProcessing: false
+      }
+    });
+
+    try {
+      const res = await sendIntermediateMessage(threadId, 'Buscando mensagens... 🔍');
+      expect(res).toBeUndefined();
+    } finally {
+      clearActiveTrigger(threadId);
+    }
   });
 });
 

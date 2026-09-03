@@ -29,7 +29,7 @@ O Luiz pode ensinar regras de filtragem diretamente pelo WhatsApp conversando co
 
 ### Tabelas SQLite do Sentinela:
 - `email_sentinel_rules`: Armazena regras de `ignore` e `priority` com padrões regex ou palavras-chave.
-- `email_sentinel_logs`: Histórico de todos os e-mails varridos, informando se foram alertados ou descartados e o motivo da decisão.
+- `email_sentinel_log`: Histórico de todos os e-mails varridos, informando se foram alertados ou descartados e o motivo da decisão.
 
 ---
 

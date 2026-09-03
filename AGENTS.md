@@ -9,7 +9,8 @@ Este documento estabelece as diretrizes arquiteturais, regras de projeto e padr�
 O repositório mantém uma pasta modular de documentação técnica e decisões arquiteturais em [`docs/architecture/`](docs/architecture/README.md).
 
 ### Diretrizes Obrigatórias para IAs e Desenvolvedores:
-1. **Consulta Prévia Obrigatória:** Antes de propor ou implementar alterações estruturais, refatorações, criação de nós no LangGraph, novos agentes especialistas, alterações em tabelas do SQLite ou regras de transporte/memória, a IA **DEVE** consultar o documento correspondente em `docs/architecture/`:
+1. **Consulta Prévia Obrigatória:** Antes de propor ou implementar alterações estruturais, refatorações, criação de nós no LangGraph, novos agentes especialistas, alterações em tabelas do SQLite ou regras de transporte/memória, a IA **DEVE** consultar o documento correspondente em `docs/architecture/` ou a [Visão Geral Consolidada](docs/architecture/ARQUITETURA_CONSOLIDADA.md):
+   - [Documento Único Consolidado](docs/architecture/ARQUITETURA_CONSOLIDADA.md)
    - [01. Visão Geral & Princípios](docs/architecture/01-visao-geral-e-principios.md)
    - [02. Fluxo LangGraph & Estado](docs/architecture/02-fluxo-langgraph-e-estado.md)
    - [03. Supervisora & Cenários](docs/architecture/03-supervisora-e-cenarios.md)
@@ -79,8 +80,9 @@ A memória da Bia é unificada 100% no SQLite (`database.sqlite`) e dividida ent
   - **Documentos Vivos de Contexto**: Tabela `context_documents` + `memoryAgent` (`get_context_document`, `append_context_document`, `overwrite_context_document`, `compact_context_document`).
   - **Missões Autônomas**: Tabela `missions` (com suporte a `topicId`) + `missionAgent`.
   - **CRM Pessoal & Entidades**: Tabelas `entities` e `entity_relationships` + `crmAgent`.
+  - **Inventários & Trackers Complexos**: Tabela `trackers` + `trackerAgent` (`create_tracker`, `list_trackers`, `get_tracker`, `update_tracker`, `delete_tracker`).
   - **Sentinela de E-mails**: Tabelas `email_sentinel_rules` e `email_sentinel_log` + `emailSentinelAgent`.
-  - **Monitoramento de Grupos & Segurança**: Tabelas `security` / `ignored_groups` / `topics` + `securityAgent` e `whatsappAgent`.
+  - **Monitoramento de Grupos & Segurança**: Tabelas `trusted_chats` / `daily_summary_groups` / `topics` + `securityAgent` e `whatsappAgent`.
 
 
 ---

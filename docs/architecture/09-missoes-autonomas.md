@@ -48,6 +48,12 @@ sequenceDiagram
    - Tarefas urgentes (ex: *"pedir almoço agora"*): `ttlHours: 4`.
    - Negociações normais: `ttlHours: 72` (padrão) a `168` (7 dias).
    - O método `expireOldMissions()` cancela missões expiradas automaticamente em segundo plano.
+5. **Resolução Transparente de LID (`jidResolver.ts`):**
+   - Quando contatos terceiros utilizam clientes modernos de WhatsApp com privacidade ativada, suas respostas chegam com identificadores `@lid` em vez do número telefônico.
+   - O pipeline utiliza `canonicalJid()` e `jidsMatch()` alimentados por `loadLidMappings()` no bootstrap para correlacionar imediatamente a mensagem recebida ao `targetJid` canônico registrado na tabela `missions`.
+6. **Vínculo com Documentos Vivos por Tópico (`topicId`):**
+   - Missões mais extensas ou estruturadas (ex: orçamentos de reformas, compras de itens de valor) associam um `topicId` correspondente na tabela `context_documents`.
+   - Isso permite injeção direta (*Zero-RAG*) do dossiê da negociação no contexto do modelo sem fragmentação vetorial.
 
 ---
 

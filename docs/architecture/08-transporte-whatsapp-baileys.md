@@ -22,6 +22,34 @@ flowchart LR
 
 ---
 
+## ⚡ Roteador de Comandos Imediatos (`src/commands/commandRouter.ts`)
+
+Antes de qualquer mensagem entrar na fila do LangGraph e consumir tokens dos modelos, o transporte inspeciona o texto via `isCommand(text)`:
+- **Gatilho:** Mensagens iniciando com `/` ou `!`.
+- **Bypass de Zero-Latência:** Executa operações administrativas, diagnósticos e manipulações diretas de memória de forma determinística e quase instantânea (<100ms), sem passar pela Supervisora.
+
+| Comando | Sinônimos | Finalidade & Ação Executada |
+|---|---|---|
+| `/novo` | `/limpar`, `/reset` | Arquiva o tópico conversacional ativo, limpa o histórico da sessão e cancela a fila pendente sem tocar na memória de longo prazo. |
+| `/status` | — | Relatório técnico com tópico ativo, nível de confiança (`isTrustedChat`), status de silêncio, modelo em uso e uptime. |
+| `/cancelar` | `/stop` | Interrompe imediatamente tarefas em execução e limpa as mensagens em espera na fila. |
+| `/hoje` | `/agenda` | Consulta consolidada de tarefas do dia e rotinas agendadas para hoje. |
+| `/tarefas` | `/pendencias` | Lista todas as tarefas pendentes na tabela `tasks` com IDs, urgência e prazos. |
+| `/lembretes` | `/rotinas` | Lista lembretes únicos e rotinas recorrentes ativas na tabela `routines`. |
+| `/guardar <texto>` | `/lembrar` | Insere diretamente um fato ou nota na base vetorial RAG (`addVectorMemory`). |
+| `/buscar <termo>` | — | Busca semântica direta no banco vetorial SQLite (`searchVectorMemory`) retornando os 5 melhores resultados. |
+| `/perfil` | `/memoria` | Retorna o snapshot atual da Memória de Trabalho Cognitiva da Bia. |
+| `/consolidar` | `/sono` | Força a execução imediata da consolidação bidirecional de sono (`consolidateWorkingMemorySnapshot`). |
+| `/silenciar` | `/ignorar` | Adiciona o chat atual à lista de grupos ignorados (`addIgnoredGroup`). |
+| `/ativar` | — | Remove o chat da lista de ignorados, reabilitando respostas da Bia (`removeIgnoredGroup`). |
+| `/segurança` | `/confiaveis` | Exibe o status administrativo do remetente e a lista de JIDs autorizados. |
+| `/modelo <opcao>` | — | Permite alternar o LLM ativo para o chat atual em runtime (`flash`, `pro`, `deepseek`). |
+| `/explicar` | — | Apresenta a auditoria de raciocínio e ferramentas executadas no turno imediatamente anterior. |
+| `/saldo` | — | Consulta em tempo real o saldo disponível e recargas na API oficial da DeepSeek. |
+| `/ajuda` | `/comandos`, `/help` | Menu interativo explicativo com todos os comandos disponíveis. |
+
+---
+
 ## ⏱️ Fila de Mensagens com Debouncing Adaptativo
 
 No WhatsApp, humanos costumam enviar várias mensagens curtas em sequência antes de concluir o pensamento (ex: *"Oi"*, *"Tudo bem?"*, *"Você pode ver o relatório pra mim?"*).
@@ -66,6 +94,15 @@ Para permitir consultas instantâneas e seguras de grupos e relatórios de resum
 Para garantir que a Bia nunca entre em loop infinito conversando consigo mesma ou reenviando mensagens duplicadas em caso de reconexão de socket:
 - **`botSentMessageIds`:** Conjunto em memória que registra todos os IDs de mensagens emitidas pela Bia, descartando ecos do socket.
 - **`recentOutboundMessages`:** Armazena o hash normalizado das últimas mensagens enviadas por chat com TTL de 60 segundos. Se o modelo tentar enviar um texto idêntico ao mesmo chat em menos de 1 minuto, o envio é bloqueado por `shouldBlockMessage()`.
+
+---
+
+## ⚡ Execuções Isoladas de Sistema & Rotinas Agendadas
+
+Tarefas em segundo plano (como resumos diários, checagens de e-mail e rotinas cron) são disparadas via `injectSystemMessage()` e `executeIsolatedSystemMessage()`:
+- **Fila Dedicada de Sistema (`systemExecutionQueues`):** Isola execuções de background por chat, evitando conflitos com a digitação de usuários humanos.
+- **Gatilhos (`triggerType`):** Identificados como `cron_routine` ou `system_inject`.
+- **Supressão de Mensagens Intermediárias:** Em execuções isoladas de sistema/cron, o método `sendIntermediateMessage()` descarta qualquer envio preliminar e a Supervisora não produz mensagens intermediárias, evitando notificações desnecessárias no WhatsApp e entregando diretamente a resposta final solicitada.
 
 ---
 

@@ -266,19 +266,19 @@ export function buildSlottedWorkingMemory(
 
   if (coreSelected.length > 0) {
     output += '## 👤 Perfil & Fatos Perenes\n';
-    coreSelected.forEach((f) => { output += `- ${f.content}\n`; });
+    coreSelected.forEach((f) => { output += `- ${f.content} [MemID: ${f.id}]\n`; });
     output += '\n';
   }
 
   if (sessionSelected.length > 0) {
     output += '## ⚡ Contexto da Sessão Atual\n';
-    sessionSelected.forEach((f) => { output += `- ${f.content}\n`; });
+    sessionSelected.forEach((f) => { output += `- ${f.content} [MemID: ${f.id}]\n`; });
     output += '\n';
   }
 
   if (relevanceSelected.length > 0) {
     output += '## 🧠 Memória de Longo Prazo\n';
-    relevanceSelected.forEach((f) => { output += `- ${f.content}\n`; });
+    relevanceSelected.forEach((f) => { output += `- ${f.content} [MemID: ${f.id}]\n`; });
     output += '\n';
   }
 
@@ -454,7 +454,7 @@ export async function getWorkingMemoryContext(
       if (memoriesToAdd.length > 0) {
         let combined = cachedSnapshot.trim() + "\n\n## 🔄 Contexto & Fatos Recentes\n";
         memoriesToAdd.forEach((f) => {
-          combined += `- ${f.content}\n`;
+          combined += `- ${f.content} [MemID: ${f.id}]\n`;
         });
         return combined.trim();
       }

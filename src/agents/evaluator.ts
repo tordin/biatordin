@@ -1,5 +1,6 @@
 import { SystemMessage, HumanMessage, AIMessage, RemoveMessage, ToolMessage, BaseMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
+import { Command } from "@langchain/langgraph";
 import { z } from "zod";
 import { AgentState } from "./state.js";
 import { modelEvaluator as model } from "../llm/model.js";
@@ -29,6 +30,17 @@ export const EvaluationSchema = z.object({
   suggestedAction: z.enum(["ROUTE_TO_SPECIALIST", "FIX_RESPONSE_TEXT", "PASS"]).nullable().default(null).describe(
     "Ação corretiva sugerida para a Supervisora"
   ),
+  requiredCorrectionAgent: z.enum([
+    "searchAgent", "calendarAgent", "gmailAgent", "emailSentinelAgent", "sheetsAgent",
+    "docsAgent", "driveAgent", "routineAgent", "memoryAgent", "taskAgent",
+    "trackerAgent", "securityAgent", "shoppingAgent", "whatsappAgent", "reasoningAgent",
+    "weatherAgent", "missionAgent", "followUpAgent", "crmAgent"
+  ]).nullable().default(null).describe(
+    "Se a ação sugerida for ROUTE_TO_SPECIALIST, informe o nome exato do agente especialista que DEVERIA ter sido executado para completar a tarefa do usuário."
+  ),
+  inferredSpecialistTask: z.string().nullable().default(null).describe(
+    "Se a ação sugerida for ROUTE_TO_SPECIALIST, forneça a instrução clara, cirúrgica e objetiva (`specialistTask`) que será enviada para o agente corretivo executar."
+  ),
 });
 
 export type EvaluationResult = z.infer<typeof EvaluationSchema>;
@@ -46,22 +58,29 @@ const EVALUATOR_SYSTEM_PROMPT =
   "2. QUANDO REPROVAR (verdict: 'NEEDS_CORRECTION'):\n" +
   "   - Reprove APENAS se:\n" +
   "     A) A resposta afirma ter feito algo (ex: 'agendei na agenda', 'enviei o email', 'criei/alterei a tarefa/rotina') mas o agente necessário (ex: calendarAgent, gmailAgent, taskAgent, routineAgent) NÃO CONSTA na lista [AGENTES ESPECIALISTAS EXECUTADOS NESTE TURNO].\n" +
-  "     B) O usuário solicitou uma AÇÃO de modificação, criação ou cancelamento (ex: 'modifique a rotina X', 'crie o evento Y') e a Supervisora apenas respondeu com texto ou consultou a memória passiva sem acionar o agente operacional correspondente. Defina `suggestedAction = 'ROUTE_TO_SPECIALIST'`.\n" +
+  "     B) O usuário solicitou uma AÇÃO de modificação, criação ou cancelamento (ex: 'modifique a rotina X', 'crie o evento Y') e a Supervisora apenas respondeu com texto ou consultou a memória passiva sem acionar o agente operacional correspondente. Defina `suggestedAction = 'ROUTE_TO_SPECIALIST'`, defina `requiredCorrectionAgent` e preencha `inferredSpecialistTask`.\n" +
   "     C) O usuário pediu múltiplas ações distintas (ex: consultar o tempo E criar uma tarefa) e uma das ações foi completamente ignorada sem que o especialista correspondente tenha sido executado.\n" +
   "     D) A resposta contradiz diretamente os dados recuperados em [DADOS COLETADOS NOS BASTIDORES].\n\n" +
-  "3. RESULTADOS NEGATIVOS & ITENS INEXISTENTES (MUITO IMPORTANTE):\n" +
+  "3. MARCADORES EPISTÊMICOS & FALSOS POSITIVOS (LEITURA PASSIVA):\n" +
+  "   - Se a resposta trouxer informações e afirmar ter consultado a memória ou o contexto, verifique a lista [REFERÊNCIAS PASSIVAS UTILIZADAS].\n" +
+  "   - Se a lista contiver identificadores válidos (ex: [MemID: A1X]) e não houver ferramentas executadas, ISSO É PERMITIDO. A Supervisora leu a Memória de Trabalho embutida no contexto (RAG/SQLite). APROVE imediatamente (`verdict: 'PASS'`).\n" +
+  "   - Nunca reprove por falta de 'memoryAgent' se [REFERÊNCIAS PASSIVAS UTILIZADAS] estiver preenchido com IDs válidos justificando a informação.\n\n" +
+  "4. RESULTADOS NEGATIVOS & ITENS INEXISTENTES (MUITO IMPORTANTE):\n" +
   "   - Se o usuário pediu para consultar, alterar ou excluir um item (ex: 'exclua a rotina do boiler', 'cancele a tarefa X', 'procure a mensagem Y') e o especialista correspondente foi executado (ex: `routineAgent`, `taskAgent`, `whatsappAgent`, `calendarAgent`), mas constatou nos dados coletados que o item NÃO existe ou não foi encontrado: a resposta da supervisora informando claramente que o registro não foi encontrado é 100% CORRETA e DEVE ser aprovada com `verdict: 'PASS'`.\n" +
   "   - NUNCA reprove nem exija `ROUTE_TO_SPECIALIST` para tentar deletar ou modificar um item inexistente quando a consulta já foi realizada pelo especialista.\n\n" +
-  "4. MULTI-CONTAS & FLEXIBILIDADE ESTILÍSTICA:\n" +
+  "5. MULTI-CONTAS & FLEXIBILIDADE ESTILÍSTICA:\n" +
   "   - A Bia pode buscar dados tanto na conta 'main' quanto na conta 'personal'.\n" +
   "   - Se a resposta menciona ou omite detalhes técnicos internos como 'encontrado na conta personal' ou 'buscado na memória', isso é estilístico e NÃO deve ser motivo de reprovação.\n" +
   "   - Respostas diretas, prestativas e amigáveis para WhatsApp devem ser prontamente aprovadas (`verdict: 'PASS'`). Não faça exigências pedantes sobre preâmbulos ou formatação se o conteúdo for verdadeiro e útil.\n\n" +
-  "5. PERSONA & FORMATO (isPersonaCompliant):\n" +
+  "6. PERSONA & FORMATO (isPersonaCompliant):\n" +
   "   - Tom conversacional, empático, feminino (Bia) e adequado para WhatsApp.\n" +
   "   - NUNCA chame o usuário de 'Master' ou 'Mestre'.\n\n" +
-  "6. SILÊNCIO INTENCIONAL OU CONDICIONAL:\n" +
+  "7. SILÊNCIO INTENCIONAL OU CONDICIONAL:\n" +
   "   - Se a solicitação do usuário ou instrução da rotina especificar para NÃO enviar mensagem / ficar em silêncio caso uma condição seja atendida ou se nada precisar ser feito/avisado, e a resposta proposta for '[SILENT]' ou vazia e fundamentada nos dados coletados: a decisão é 100% CORRETA e DEVE ser aprovada com verdict = 'PASS'.\n" +
   "   - NUNCA exija que a assistente envie uma mensagem apenas para 'avisar que decidiu ficar em silêncio' quando o pedido original pediu silêncio.\n\n" +
+  "8. CONFIANÇA NA INTERPRETAÇÃO DA SUPERVISORA (FALSOS POSITIVOS DE SILÊNCIO):\n" +
+  "   - Se a instrução original possui uma condição para silêncio (ex: 'fique em silêncio se X ocorrer, senão avise Y'), e a Supervisora decidiu enviar a mensagem justificando que a condição 'X' NÃO foi atendida (ex: a temperatura estava diferente do limite), CONFIE na interpretação da Supervisora.\n" +
+  "   - NUNCA reprove a resposta exigindo silêncio absoluto se a Supervisora forneceu uma resposta útil e fundamentada nos dados que justifica o não-silêncio.\n\n" +
   "DECISÃO:\n" +
   "- Se tudo estiver correto, factual e completo (ou se for silêncio legítimo solicitado ou busca negativa legítima): verdict = 'PASS'.\n" +
   "- Se houver falha real comprovada: verdict = 'NEEDS_CORRECTION', defina 'suggestedAction' ('ROUTE_TO_SPECIALIST' se faltou chamar um especialista, ou 'FIX_RESPONSE_TEXT' se for ajuste redacional) e forneça 'feedback' cirúrgico para a Supervisora.";
@@ -242,12 +261,15 @@ export async function evaluatorNode(
 
   const collectedData = extractCollectedData(state.messages);
 
+  const passiveReferencesUsed = currentContext.passiveReferencesUsed || [];
+
   const auditPrompt = new SystemMessage(
     EVALUATOR_SYSTEM_PROMPT + "\n\n" +
     "[DADOS DO TURNO ATUAL PARA AUDITORIA]:\n" +
     `- SOLICITAÇÃO ORIGINAL DO USUÁRIO:\n"${latestUserMessage}"\n\n` +
     `- FERRAMENTAS EXECUTADAS NESTE TURNO:\n${JSON.stringify(executedTools)}\n\n` +
     `- AGENTES ESPECIALISTAS EXECUTADOS NESTE TURNO:\n${JSON.stringify(executedAgents)}\n\n` +
+    `- REFERÊNCIAS PASSIVAS UTILIZADAS (MemIDs):\n${JSON.stringify(passiveReferencesUsed)}\n\n` +
     `- DADOS COLETADOS NOS BASTIDORES:\n${collectedData}\n\n` +
     `- RESPOSTA FINAL PROPOSTA PELA SUPERVISORA:\n"${proposedResponse}"\n\n` +
     `- CONTEXTO DA CONVERSA:\n` +
@@ -288,6 +310,25 @@ export async function evaluatorNode(
 
     // Caso de falha / NEEDS_CORRECTION:
     logger.warn(`[EVALUATOR] Resposta REPROVADA. Feedback para a supervisora: "${parsed.feedback}" (Ação sugerida: ${parsed.suggestedAction || 'N/A'})`);
+    
+    if (parsed.suggestedAction === "ROUTE_TO_SPECIALIST" && parsed.requiredCorrectionAgent) {
+      logger.warn(`[EVALUATOR] LLM-Modulo subversão: Roteando forçadamente para ${parsed.requiredCorrectionAgent} via Command API.`);
+      return new Command({
+        goto: parsed.requiredCorrectionAgent,
+        update: {
+          contextData: {
+            ...currentContext,
+            evaluationAttempts: currentAttempts + 1,
+            evaluationFeedback: parsed.feedback || parsed.reasoning,
+            evaluationSuggestedAction: parsed.suggestedAction,
+            specialistTask: parsed.inferredSpecialistTask,
+            proposedResponse: undefined,
+          },
+          nextAgent: parsed.requiredCorrectionAgent
+        }
+      });
+    }
+
     return {
       nextAgent: "supervisor",
       contextData: {

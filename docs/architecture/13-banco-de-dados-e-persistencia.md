@@ -29,6 +29,7 @@ Todas as conexões com o SQLite são obtidas exclusivamente através de [`src/me
 | `topics` | `src/memory/topics.ts` | Tópicos conversacionais ativos e arquivados por chat. |
 | `tasks` | `src/memory/tasks.ts` | Tarefas e afazeres pendentes/concluídos com prazos e categorias. |
 | `routines` | `src/memory/routines.ts` | Rotinas e lembretes agendados com expressões Cron. |
+| `trackers` | `src/memory/trackers.ts` | Inventários estruturados em JSON, despensas e planos de manutenção. |
 | `missions` | `src/memory/missions.ts` | Missões ativas com terceiros, anotações de negociação e expiração por TTL. |
 | `followups` | `src/memory/followUps.ts` | Cobranças de terceiros (`waiting_for_them`) e promessas assumidas (`promised_by_me`). |
 | `entities` | `src/memory/entities.ts` | Grafo de pessoas, empresas, projetos, apelidos e preferências declaradas. |
@@ -39,7 +40,7 @@ Todas as conexões com o SQLite são obtidas exclusivamente através de [`src/me
 | `working_memory_snapshot` | `src/memory/workingMemory.ts` | Snapshot sintetizado e cacheado da Memória de Trabalho consolidada. |
 | `context_documents` | `src/memory/contextDocuments.ts` | Documentos Vivos por Contexto (Scoped Living Documents) estruturados em Markdown. |
 | `email_sentinel_rules` | `src/memory/emailSentinel.ts` | Regras de descarte (`ignore`) e prioridade (`priority`) do Inbox Watcher. |
-| `email_sentinel_logs` | `src/memory/emailSentinel.ts` | Histórico de e-mails processados e classificados pelo sentinela. |
+| `email_sentinel_log` | `src/memory/emailSentinel.ts` | Histórico de e-mails processados e classificados pelo sentinela. |
 | `daily_summary_groups` | `src/memory/dailySummary.ts` | JIDs dos grupos selecionados para gerar o resumo diário automatizado. |
 | `pending_messages` | `src/memory/pendingQueue.ts` | Fila persistida de mensagens em trânsito para recuperação em caso de restart. |
 

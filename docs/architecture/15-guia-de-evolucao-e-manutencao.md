@@ -35,12 +35,12 @@ Cadastre a nova definição com `id`, `name`, `summary` (máximo 1 linha), `cate
 
 ---
 
-## 🛑 As 5 Regras de Ouro do Projeto
+## 🛑 As Regras de Ouro do Projeto
 
 1. **NUNCA Inche o Prompt da Supervisora:** Nunca adicione descrições detalhadas de ferramentas dentro do prompt da Supervisora. O catálogo resumido deve vir exclusivamente de `getSkillCatalogSummary()`.
-2. **NUNCA Salve Dados Operacionais no `bia_memory.md`:** Informações temporárias, tarefas, cotações e status devem residir no SQLite (`database.sqlite`), nunca no arquivo de perfil.
-3. **Respeite a Precedência Estrita de Cenários:** Não permita que contas de terceiros acessem informações pessoais ou executem comandos de segurança.
-4. **Mantenha os Tipos ESM Atualizados:** O projeto é ESM puro (`"type": "module"`). Todos os imports devem incluir a extensão `.js`.
+2. **Persistência Unificada no SQLite & Memória Cognitiva:** Toda a memória da Bia (RAG cognitivo, histórico, perfil, Documentos Vivos por Tópico e dados operacionais) reside 100% no SQLite (`database.sqlite`). Obtenha conexões exclusivamente via `getDb()` / `getDbPath()` em [`src/memory/db.ts`](../../src/memory/db.ts). NUNCA crie conexões diretas `new sqlite3.Database()` nem salve dados de memória em arquivos soltos no disco.
+3. **Respeite a Precedência Estrita de Cenários:** A avaliação em `buildSupervisorPrompt` segue prioridade fixa: Conta Pessoal (`personal`) → Criador (`isMaster`) → Contato Confiável (`isTrustedChat`) → Terceiros / Restrito. Nunca permita que terceiros ou chats não-confiáveis acessem o workspace ou funções de segurança.
+4. **Mantenha os Tipos ESM Atualizados:** O projeto é ESM puro (`"type": "module"`). Todos os imports em TypeScript devem incluir a extensão `.js`.
 5. **Schemas Zod Strict-Mode Compliant (OpenAI/DeepSeek):** Em TODOS os schemas usados com `withStructuredOutput` / `invokeStructuredWithFallback`:
    - ❌ **NUNCA** use `.optional()` isolado — gera campos fora do `required` do JSON Schema, rejeitado com HTTP 400.
    - ✅ Use `strictOptional(z.string())` de `src/utils/zodStrict.ts` para campos opcionais.
@@ -55,7 +55,7 @@ Cadastre a nova definição com `id`, `name`, `summary` (máximo 1 linha), `cate
      ```
    - ✅ **NUNCA** adicione `if (options.name === "AlgumSchema")` em `structuredOutput.ts` — toda normalização específica deve ser declarada como `fieldAliases` no call site.
    - O motor de resiliência (`src/utils/structuredOutput.ts`) aplica automaticamente 4 camadas: invocação nativa → recuperação de erro → fallback com schema signature → normalizador semântico.
-6. **Atualize a Documentação Arquitetural:** Toda vez que um módulo for alterado ou criado, atualize os documentos correspondentes em `docs/architecture/` e o [`AGENTS.md`](../../AGENTS.md).
+6. **Sincronização Contínua pós-Modificação:** Sempre que uma funcionalidade, regra de negócio, ferramenta, agente especialista ou estrutura de banco for criada, alterada ou removida, a IA **DEVE** atualizar o(s) documento(s) afetado(s) em `docs/architecture/` e manter o [`AGENTS.md`](../../AGENTS.md) e o [`docs/architecture/README.md`](README.md) perfeitamente sincronizados no mesmo commit/tarefa.
 
 ---
 

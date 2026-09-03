@@ -61,10 +61,11 @@ flowchart TD
 O WhatsApp moderno opera com **LIDs** (ex: `106880328278246@lid`) para privacidade nas mensagens recebidas, enquanto o sistema armazena números canônicos (ex: `5519999021962@s.whatsapp.net`).
 
 O utilitário `jidResolver.ts`:
-1. **Carrega Mapeamentos em Disco:** Lê os arquivos `lid-mapping-*.json` da pasta `auth_info_baileys/`.
-2. **Normalização Canônica:** Converte qualquer LID para número internacional através de `canonicalJid(jid)`.
-3. **Comparação de Equivalência:** `jidsMatch(jidA, jidB)` compara se dois identificadores apontam para a mesma pessoa física, garantindo que respostas de alvos de missões acionem o contexto correto.
-4. **Formatação Amigável:** A função `formatJidForUser()` converte JIDs crus em nomes legíveis (ex: `5519999021962@s.whatsapp.net` → *"Ricardo (Engenheiro da Reforma)"*).
+1. **Carregamento no Bootstrap (`loadLidMappings`):** Executado obrigatoriamente antes do início do processamento de mensagens no `src/index.ts`, lê todos os arquivos `lid-mapping-*.json` em `auth_info_baileys/` para alimentar a tabela de equivalências em memória.
+2. **Registro Dinâmico (`registerLidMapping`):** Quando novos eventos de chat ou mensagens chegam pelo socket, mapeamentos inéditos entre LID e número telefônico são registrados e persistidos imediatamente em disco.
+3. **Normalização Canônica:** Converte qualquer LID para número internacional canônico através de `canonicalJid(jid)`.
+4. **Comparação de Equivalência:** `jidsMatch(jidA, jidB)` compara se dois identificadores apontam para a mesma pessoa física, garantindo que respostas de alvos de missões acionem o contexto correto mesmo quando o terceiro responde mascarado via LID.
+5. **Formatação Amigável:** A função `formatJidForUser()` converte JIDs crus em nomes legíveis (ex: `5519999021962@s.whatsapp.net` → *"Ricardo (Engenheiro da Reforma)"*).
 
 ---
 

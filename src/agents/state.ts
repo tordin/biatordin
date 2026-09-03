@@ -33,6 +33,10 @@ export interface ContextData {
   proposedResponse?: string;
   isMaster?: boolean;
   silenceReason?: string;
+  triggerType?: string;
+  isScheduledRoutine?: boolean;
+  isSystemTrigger?: boolean;
+  routineId?: number;
   outputMessages?: { targetJid: string; message: string; accountName: string }[];
   [key: string]: any;
 }

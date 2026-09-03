@@ -46,28 +46,44 @@ flowchart TD
 
 ---
 
-## 👥 Detalhamento dos Principais Especialistas
+## 👥 Especificação Exaustiva dos 19 Especialistas
+
+O ecossistema da Bia conta com **19 Agentes Especialistas**, organizados em 6 categorias funcionais:
 
 ### 1. Workspace Suite (`src/agents/workspace/`)
-Conecta a Bia às APIs do Google Workspace através do protocolo **Model Context Protocol (MCP)** via `MultiServerMCPClient`:
-- **`calendarAgent`:** Consulta agendas, cria e edita compromissos com fuso horário `America/Sao_Paulo`.
-- **`gmailAgent`:** Busca e-mails na caixa de entrada, lê threads e envia mensagens.
-- **`driveAgent` / `docsAgent` / `sheetsAgent`:** Busca arquivos no Google Drive, lê documentos e planilhas (retornando CSV estruturado).
-- **Auto-recuperação de OAuth:** Se o `GOOGLE_REFRESH_TOKEN` for alterado no arquivo `.env`, o `initWorkspaceTools(force)` reinicializa as conexões MCP em quente sem reiniciar o servidor.
+Conecta a Bia às APIs oficiais do Google Workspace através do protocolo **Model Context Protocol (MCP)** via `MultiServerMCPClient`:
+- **`calendarAgent` ([`src/agents/workspace/calendar.ts`](../../src/agents/workspace/calendar.ts)):** Consulta calendários, localiza conflitos, agenda e edita compromissos com timezone fixado em `America/Sao_Paulo`.
+- **`gmailAgent` ([`src/agents/workspace/gmail.ts`](../../src/agents/workspace/gmail.ts)):** Busca mensagens na caixa de entrada por remetente/assunto, lê threads e rascunha ou envia e-mails (`requiresTrusted: true`).
+- **`driveAgent` ([`src/agents/workspace/drive.ts`](../../src/agents/workspace/drive.ts)):** Busca, lista, faz upload e lê arquivos no Google Drive, além de criar pastas e gerenciar permissões (`drive_list_files`, `drive_search_files`, `drive_read_file`, `drive_create_folder`, `drive_upload_file`, `drive_share_file`).
+- **`docsAgent` ([`src/agents/workspace/docs.ts`](../../src/agents/workspace/docs.ts)):** Cria e lê documentos Google Docs, anexando notas ou resumos estruturados.
+- **`sheetsAgent` ([`src/agents/workspace/sheets.ts`](../../src/agents/workspace/sheets.ts)):** Busca, lista e extrai dados tabulares de planilhas Google Sheets em formato CSV legível.
+- **Auto-recuperação de OAuth:** Se o `GOOGLE_REFRESH_TOKEN` for alterado ou renovado no `.env`, a função `initWorkspaceTools(force)` recarrega as conexões MCP em quente sem derrubar o processo.
 
-### 2. Agentes de Busca & Informação do Mundo Real
-- **`searchAgent` ([`src/agents/search.ts`](../../src/agents/search.ts)):** Busca no Google Custom Search API e leitura completa de páginas com `open_webpage` (Cheerio/HTTP).
-- **`shoppingAgent` ([`src/agents/shopping.ts`](../../src/agents/shopping.ts)):** Google Shopping com filtragem heurística para priorizar e-commerces nacionais confiáveis (Amazon, Mercado Livre, Magalu, KaBuM!) e descartar importações de risco.
-- **`weatherAgent` ([`src/agents/weatherAgent.ts`](../../src/agents/weatherAgent.ts)):** Consulta em tempo real à API aberta OpenMeteo com geolocalização e previsão para os próximos dias.
+### 2. Busca & Informação do Mundo Real
+- **`searchAgent` ([`src/agents/search.ts`](../../src/agents/search.ts)):** Busca no Google Custom Search API e leitura profunda de páginas com `open_webpage` (Cheerio/HTTP). Restrito a 3 buscas por execução para economia de cota.
+- **`shoppingAgent` ([`src/agents/shopping.ts`](../../src/agents/shopping.ts)):** Google Shopping com filtragem heurística para priorizar grandes varejistas nacionais (Amazon, Mercado Livre, Magalu, KaBuM!, Fast Shop) e descartar marketplaces de risco ou tributação internacional.
+- **`weatherAgent` ([`src/agents/weatherAgent.ts`](../../src/agents/weatherAgent.ts)):** Consulta em tempo real à API aberta OpenMeteo com geolocalização e previsão estendida para cidades brasileiras (ex: Campinas, São Paulo) com temperatura, chuva e vento.
 
-### 3. Agentes de Gestão, Memória e Operação
-- **`memoryAgent` ([`src/agents/memoryAgent.ts`](../../src/agents/memoryAgent.ts)):** Gerencia a memória cognitiva RAG no SQLite e os **Documentos Vivos de Contexto (Scoped Living Documents)** associados a tópicos. Permite registrar fatos (`storeSemanticMemory`), realizar buscas vetoriais com reforço (`searchSemanticMemory`), compilar dossiês (`searchEventSummary`), excluir memórias (`deleteSemanticMemory`) e manipular documentos vivos (`get_context_document`, `append_context_document`, `overwrite_context_document`, `compact_context_document`).
-- **`taskAgent` ([`src/agents/taskAgent.ts`](../../src/agents/taskAgent.ts)):** Gerencia afazeres na tabela `tasks` do SQLite. Identifica promessas ou cobranças automáticas no título e sincroniza com o `followUpAgent`.
-- **`routineAgent` ([`src/agents/routineAgent.ts`](../../src/agents/routineAgent.ts)):** Converte pedidos em linguagem natural para expressões Cron, cria, atualiza e agenda execuções recorrentes ou lembretes pontuais com suporte a JIDs equivalentes (LID / número).
-- **`trackerAgent` ([`src/agents/trackerAgent.ts`](../../src/agents/trackerAgent.ts)):** Gerencia documentos JSON estruturados para controle de estoques, manutenções veiculares ou inventários da casa.
+### 3. Gestão, Memória e Operação
+- **`memoryAgent` ([`src/agents/memoryAgent.ts`](../../src/agents/memoryAgent.ts)):** Gerencia a memória cognitiva RAG no SQLite e os **Documentos Vivos de Contexto (Scoped Living Documents)** associados a tópicos (`context_documents`).
+  - *Ferramentas RAG:* `storeSemanticMemory`, `searchSemanticMemory`, `searchEventSummary`, `readMemory`, `consolidateMemory`, `deleteSemanticMemory`.
+  - *Ferramentas Living Docs:* `get_context_document`, `append_context_document`, `overwrite_context_document`, `compact_context_document`.
+- **`taskAgent` ([`src/agents/taskAgent.ts`](../../src/agents/taskAgent.ts)):** Gerencia a tabela `tasks` no SQLite (`add_task`, `list_tasks`, `complete_task`, `delete_task`). Detecta compromissos bilaterais no título e sincroniza automaticamente com o `followUpAgent`.
+- **`routineAgent` ([`src/agents/routineAgent.ts`](../../src/agents/routineAgent.ts)):** Traduz pedidos em linguagem natural para expressões Cron e gerencia a tabela `routines` (`create_routine`, `update_routine`, `list_routines`, `delete_routine`). Suporta lembretes únicos com dia/mês explícitos e rotinas recorrentes.
+- **`trackerAgent` ([`src/agents/trackerAgent.ts`](../../src/agents/trackerAgent.ts)):** Gerencia inventários, manutenções veiculares e despensas complexas armazenadas como JSON estruturado na tabela `trackers` (`create_tracker`, `list_trackers`, `get_tracker`, `update_tracker`, `delete_tracker`).
+- **`crmAgent` ([`src/agents/crmAgent.ts`](../../src/agents/crmAgent.ts)):** Constrói e consulta o grafo de conhecimento relacional do Luiz (`entities` e `entity_relationships`) com `save_entity`, `add_relationship`, `get_entity_context` e `search_entities`.
 
-### 4. Raciocínio Profundo
-- **`reasoningAgent` ([`src/agents/reasoningAgent.ts`](../../src/agents/reasoningAgent.ts)):** Aciona o modelo **DeepSeek Pro Thinking Mode** (`modelPro` com orçamento de tokens de reflexão) para resolver problemas matemáticos, lógica complexa e decisões estratégicas.
+### 4. Comunicação & Mensageria WhatsApp
+- **`whatsappAgent` ([`src/agents/whatsappAgent.ts`](../../src/agents/whatsappAgent.ts)):** Especialista em histórico local de mensagens, busca de JIDs e resumos de grupos (`listRecentChats`, `getChatHistory`, `searchChatByName`, `searchGroups`, `generate_daily_summary`, `add_daily_summary_group`, `remove_daily_summary_group`, `list_daily_summary_groups`).
+- **`missionAgent` ([`src/agents/missionAgent.ts`](../../src/agents/missionAgent.ts)):** Conduz conversas autônomas com contatos de terceiros (fornecedores, prestadores de serviço) via WhatsApp (`start_mission`, `list_missions`, `complete_mission`, `update_mission_notes`, `send_message_to_target`, `notify_master`), com TTL e isolamento.
+- **`followUpAgent` ([`src/agents/followUpAgent.ts`](../../src/agents/followUpAgent.ts)):** Acompanha cobranças pendentes de terceiros (*Waiting for Them*) e promessas assumidas pelo Luiz (*Promised by Me*) com `add_follow_up`, `list_follow_ups`, `resolve_follow_up`, `cancel_follow_up` e `update_follow_up`.
+
+### 5. Raciocínio Analítico Profundo
+- **`reasoningAgent` ([`src/agents/reasoningAgent.ts`](../../src/agents/reasoningAgent.ts)):** Aciona o modelo **DeepSeek Pro Thinking Mode** (`modelPro`, `budget_tokens: 8192`) para resolver enigmas, matemática avançada, decisões lógicas complexas e ponderações estratégicas sem chamadas a ferramentas.
+
+### 6. Segurança, Governança & Sentinela
+- **`securityAgent` ([`src/agents/securityAgent.ts`](../../src/agents/securityAgent.ts)):** Exclusivo do Criador (`requiresCreator: true`). Gerencia chats autorizados, conexão da conta pessoal do WhatsApp e grupos silenciados (`add_trusted_chat`, `remove_trusted_chat`, `check_trust`, `list_trusted_chats`, `get_master_info`, `connect_personal_account`, `disconnect_personal_account`, `check_personal_account_status`, `ignore_group`, `unignore_group`, `list_ignored_groups`).
+- **`emailSentinelAgent` ([`src/agents/emailSentinelAgent.ts`](../../src/agents/emailSentinelAgent.ts)):** Exclusivo do Criador (`requiresCreator: true`). Gerencia regras heurísticas de descarte e prioridade do sentinela de e-mails do Gmail, inspeciona logs de varreduras e dispara checagens sob demanda (`add_sentinel_rule`, `list_sentinel_rules`, `delete_sentinel_rule`, `check_inbox_now`, `get_sentinel_logs`, `check_google_auth_status`).
 
 ---
 
@@ -77,5 +93,7 @@ Conecta a Bia às APIs do Google Workspace através do protocolo **Model Context
   👉 [06. Sistema de Memória & RAG Híbrido](06-sistema-de-memoria-e-rag.md)
 - Para entender o CRM e resolução de pessoas:  
   👉 [07. CRM Pessoal & Grafo de Entidades](07-crm-e-grafo-de-entidades.md)
+- Para entender a mensageria e missões autônomas com terceiros:  
+  👉 [08. Transporte WhatsApp & Mensageria](08-transporte-whatsapp-baileys.md) e [09. Missões Autônomas com Terceiros](09-missoes-autonomas.md)
 - Para entender a auditoria e qualidade das respostas geradas:  
   👉 [12. Avaliação de Qualidade & Segurança](12-avaliacao-qualidade-e-seguranca.md)

@@ -138,6 +138,10 @@ export const SKILL_DEFINITIONS: SkillDefinition[] = [
       "Sua função é criar, listar, atualizar/modificar e excluir rotinas agendadas usando expressões Cron.\n" +
       "O usuário pode pedir para ser lembrado de algo (daqui a alguns minutos, horas, dias), criar rotinas recorrentes (todos os dias, toda semana) ou pedir para ser COBRADO sobre tarefas no futuro.\n" +
       "Converta a solicitação de tempo para uma expressão CRON válida e chame a ferramenta `create_routine`.\n" +
+      "ATENÇÃO CRÍTICA SOBRE EXPRESSÕES CRON (ÚNICA VEZ vs. RECORRENTE):\n" +
+      "- Se a tarefa for um LEMBRETE ÚNICO (ex: 'daqui a 3 horas', 'hoje às 19h', 'amanhã às 10h'), você DEVE OBRIGATORIAMENTE incluir o dia (dia do mês) e o mês na expressão cron. Ex: se hoje é 01/09 e o lembrete é para as 14h de hoje, a cron DEVE ser '0 14 1 9 *' e NUNCA '0 14 * * *'. Se você usar asteriscos no dia e mês, o lembrete será ativado todos os dias para sempre!\n" +
+      "- Use a data atual fornecida no prompt do sistema para calcular corretamente o dia e o mês do lembrete único.\n" +
+      "- Se a tarefa for uma ROTINA RECORRENTE (ex: 'todos os dias às 9h', 'toda segunda-feira'), aí sim use asteriscos nos campos de data (ex: '0 9 * * *').\n" +
       "Se o objetivo for cobrar o usuário sobre uma tarefa, defina um `prompt` que instrua você mesma a agir quando o tempo chegar. Exemplo de prompt: 'Cobre o usuário amigavelmente para saber se ele já finalizou a tarefa de comprar o presente'.\n" +
       "Se o usuário pedir para modificar, alterar o valor de referência, teto ou instrução de uma rotina existente, chame `update_routine` com o ID e o novo prompt/cron.\n" +
       "Se o usuário pedir para listar os lembretes ou rotinas, chame `list_routines`.\n" +

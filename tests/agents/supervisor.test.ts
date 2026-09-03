@@ -442,5 +442,72 @@ describe("Supervisor — Precedência e Conteúdo dos Cenários (buildSupervisor
     expect(result.nextAgent).toBe("FINISH");
     expect(result.contextData?.proposedResponse).toBe("[SILENT]");
   });
+
+  test("Gatilho Agendado (Rotina/Cron): buildSupervisorPrompt deve injetar banner de silêncio intermediário", () => {
+    const prompt = buildSupervisorPrompt({
+      accountName: "main",
+      isMaster: true,
+      isTrustedChat: true,
+      isGroup: false,
+      triggerType: "cron_routine",
+      isScheduledRoutine: true
+    });
+    expect(prompt).toContain("MODO DE EXECUÇÃO AGENDADA (ROTINA / SISTEMA)");
+    expect(prompt).toContain("intermediateMessage");
+    expect(prompt).toContain("NULL");
+  });
+
+  test("Gatilho Agendado (Rotina/Cron): supervisorNode deve suprimir intermediateMessage mesmo se o LLM gerar", async () => {
+    mockSupervisorDecision({
+      ...DEFAULT_DECISION,
+      nextAgent: "whatsappAgent",
+      specialistTask: "Buscar mensagens recentes dos grupos para resumo",
+      intermediateMessage: "Buscando as mensagens dos grupos das últimas 72h... 🔍",
+      response: ""
+    });
+
+    const state: any = {
+      messages: [new HumanMessage("Buscar mensagens dos grupos das últimas 72h e gerar resumo")],
+      nextAgent: "",
+      contextData: {
+        chatJid: "5519997064504@s.whatsapp.net",
+        isTrustedChat: true,
+        accountName: "main",
+        triggerType: "cron_routine",
+        isScheduledRoutine: true,
+        isSystemTrigger: true
+      }
+    };
+
+    const result = await supervisorNode(state, { configurable: { thread_id: "test-routine-intermediate-suppression" } });
+    expect(result.nextAgent).toBe("whatsappAgent");
+    expect(result.contextData?.sentIntermediate).toBeFalsy();
+  });
+
+  test("Gatilho Agendado (Rotina/Cron): supervisorNode NÃO deve converter response em intermediateMessage durante roteamento", async () => {
+    mockSupervisorDecision({
+      ...DEFAULT_DECISION,
+      nextAgent: "whatsappAgent",
+      specialistTask: "Buscar mensagens recentes",
+      intermediateMessage: null,
+      response: "Aguarde enquanto busco as mensagens"
+    });
+
+    const state: any = {
+      messages: [new HumanMessage("Buscar mensagens")],
+      nextAgent: "",
+      contextData: {
+        chatJid: "5519997064504@s.whatsapp.net",
+        isTrustedChat: true,
+        accountName: "main",
+        triggerType: "cron_routine",
+        isScheduledRoutine: true
+      }
+    };
+
+    const result = await supervisorNode(state, { configurable: { thread_id: "test-routine-response-conversion-suppression" } });
+    expect(result.nextAgent).toBe("whatsappAgent");
+    expect(result.contextData?.sentIntermediate).toBeFalsy();
+  });
 });
 

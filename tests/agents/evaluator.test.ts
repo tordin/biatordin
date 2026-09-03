@@ -73,9 +73,9 @@ describe("Evaluator / Critic Node & Quality Control", () => {
       };
 
       const result = await evaluatorNode(state, { configurable: { thread_id: "test-fast-bypass-personal" } });
-      expect(result.nextAgent).toBe("outputGateway");
-      expect(result.contextData?.evaluationAttempts).toBe(0);
-      expect(result.contextData?.evaluationFeedback).toBeUndefined();
+      expect((result as any).nextAgent).toBe("outputGateway");
+      expect((result as any).contextData?.evaluationAttempts).toBe(0);
+      expect((result as any).contextData?.evaluationFeedback).toBeUndefined();
     });
 
     test("deve aprovar imediatamente (PASS) respostas [SILENT] em grupos não-confiáveis quando não chamada", async () => {
@@ -94,8 +94,8 @@ describe("Evaluator / Critic Node & Quality Control", () => {
       };
 
       const result = await evaluatorNode(state, { configurable: { thread_id: "test-fast-bypass-group" } });
-      expect(result.nextAgent).toBe("outputGateway");
-      expect(result.contextData?.evaluationAttempts).toBe(0);
+      expect((result as any).nextAgent).toBe("outputGateway");
+      expect((result as any).contextData?.evaluationAttempts).toBe(0);
     });
 
     test("deve ignorar auditoria em execuções triviais (ex: 'oi bom dia') onde nenhum especialista foi chamado", async () => {
@@ -113,9 +113,9 @@ describe("Evaluator / Critic Node & Quality Control", () => {
       };
 
       const result = await evaluatorNode(state, { configurable: { thread_id: "test-trivial-bypass" } });
-      expect(result.nextAgent).toBe("outputGateway");
-      expect(result.contextData?.evaluationAttempts).toBe(0);
-      expect(result.contextData?.evaluationFeedback).toBeUndefined();
+      expect((result as any).nextAgent).toBe("outputGateway");
+      expect((result as any).contextData?.evaluationAttempts).toBe(0);
+      expect((result as any).contextData?.evaluationFeedback).toBeUndefined();
     });
   });
 
@@ -135,11 +135,11 @@ describe("Evaluator / Critic Node & Quality Control", () => {
       };
 
       const result = await evaluatorNode(state, { configurable: { thread_id: "test-circuit-breaker" } });
-      expect(result.nextAgent).toBe("outputGateway");
-      expect(result.contextData?.evaluationAttempts).toBe(0);
-      expect(result.contextData?.evaluationFeedback).toBeUndefined();
+      expect((result as any).nextAgent).toBe("outputGateway");
+      expect((result as any).contextData?.evaluationAttempts).toBe(0);
+      expect((result as any).contextData?.evaluationFeedback).toBeUndefined();
       
-      const lastMsg = result.messages![result.messages!.length - 1] as AIMessage;
+      const lastMsg = (result as any).messages![(result as any).messages!.length - 1] as AIMessage;
       expect(lastMsg.content).toContain("Erro dinâmico gerado");
     });
   });
@@ -182,11 +182,11 @@ describe("Evaluator / Critic Node & Quality Control", () => {
 
       const result = await evaluatorNode(state, { configurable: { thread_id: "test-eval-pass" } });
 
-      expect(result.nextAgent).toBe("outputGateway");
-      expect(result.contextData?.evaluationAttempts).toBe(0);
-      expect(result.contextData?.evaluationFeedback).toBeUndefined();
-      expect(result.messages).toBeDefined();
-      expect(result.messages!.length).toBeGreaterThan(0);
+      expect((result as any).nextAgent).toBe("outputGateway");
+      expect((result as any).contextData?.evaluationAttempts).toBe(0);
+      expect((result as any).contextData?.evaluationFeedback).toBeUndefined();
+      expect((result as any).messages).toBeDefined();
+      expect((result as any).messages!.length).toBeGreaterThan(0);
     });
 
     test("deve reprovar (NEEDS_CORRECTION) e retornar feedback para a supervisora quando houver alucinação de ferramenta", async () => {
@@ -227,9 +227,9 @@ describe("Evaluator / Critic Node & Quality Control", () => {
 
       const result = await evaluatorNode(state, { configurable: { thread_id: "test-eval-fail" } });
 
-      expect(result.nextAgent).toBe("supervisor");
-      expect(result.contextData?.evaluationAttempts).toBe(1);
-      expect(result.contextData?.evaluationFeedback).toContain("Você não chamou o calendarAgent");
+      expect((result as any).nextAgent).toBe("supervisor");
+      expect((result as any).contextData?.evaluationAttempts).toBe(1);
+      expect((result as any).contextData?.evaluationFeedback).toContain("Você não chamou o calendarAgent");
     });
 
     test("deve aprovar (PASS) quando agente de ação/criação (ex: routineAgent) executa create_routine com sucesso", async () => {
@@ -269,11 +269,11 @@ describe("Evaluator / Critic Node & Quality Control", () => {
 
       const result = await evaluatorNode(state, { configurable: { thread_id: "test-eval-routine-pass" } });
 
-      expect(result.nextAgent).toBe("outputGateway");
-      expect(result.contextData?.evaluationAttempts).toBe(0);
-      expect(result.contextData?.evaluationFeedback).toBeUndefined();
-      expect(result.messages).toBeDefined();
-      expect(result.messages!.length).toBeGreaterThan(0);
+      expect((result as any).nextAgent).toBe("outputGateway");
+      expect((result as any).contextData?.evaluationAttempts).toBe(0);
+      expect((result as any).contextData?.evaluationFeedback).toBeUndefined();
+      expect((result as any).messages).toBeDefined();
+      expect((result as any).messages!.length).toBeGreaterThan(0);
     });
 
     test("deve lidar com falhas técnicas no LLM do avaliador sem quebrar a execução", async () => {
@@ -304,8 +304,8 @@ describe("Evaluator / Critic Node & Quality Control", () => {
       const result = await evaluatorNode(state, { configurable: { thread_id: "test-eval-error" } });
 
       // Em fallback de erro, não bloqueia o fluxo e roteia para outputGateway
-      expect(result.nextAgent).toBe("outputGateway");
-      expect(result.contextData?.evaluationAttempts).toBe(0);
+      expect((result as any).nextAgent).toBe("outputGateway");
+      expect((result as any).contextData?.evaluationAttempts).toBe(0);
     });
 
     test("deve processar com sucesso payload parcial do avaliador (apenas verdict PASS)", async () => {
@@ -336,9 +336,9 @@ describe("Evaluator / Critic Node & Quality Control", () => {
 
       const result = await evaluatorNode(state, { configurable: { thread_id: "test-eval-partial" } });
 
-      expect(result.nextAgent).toBe("outputGateway");
-      expect(result.contextData?.evaluationAttempts).toBe(0);
-      expect(result.messages).toBeDefined();
+      expect((result as any).nextAgent).toBe("outputGateway");
+      expect((result as any).contextData?.evaluationAttempts).toBe(0);
+      expect((result as any).messages).toBeDefined();
     });
 
     test("deve aprovar (PASS) resposta [SILENT] quando a instrução do usuário/rotina pede silêncio condicional", async () => {
@@ -378,9 +378,9 @@ describe("Evaluator / Critic Node & Quality Control", () => {
 
       const result = await evaluatorNode(state, { configurable: { thread_id: "test-eval-conditional-silence" } });
 
-      expect(result.nextAgent).toBe("outputGateway");
-      expect(result.contextData?.evaluationAttempts).toBe(0);
-      expect(result.contextData?.evaluationFeedback).toBeUndefined();
+      expect((result as any).nextAgent).toBe("outputGateway");
+      expect((result as any).contextData?.evaluationAttempts).toBe(0);
+      expect((result as any).contextData?.evaluationFeedback).toBeUndefined();
     });
 
     test("deve aprovar (PASS) quando o especialista é executado e constata que o item/rotina não existe", async () => {
@@ -420,9 +420,9 @@ describe("Evaluator / Critic Node & Quality Control", () => {
 
       const result = await evaluatorNode(state, { configurable: { thread_id: "test-eval-negative-search" } });
 
-      expect(result.nextAgent).toBe("outputGateway");
-      expect(result.contextData?.evaluationAttempts).toBe(0);
-      expect(result.contextData?.evaluationFeedback).toBeUndefined();
+      expect((result as any).nextAgent).toBe("outputGateway");
+      expect((result as any).contextData?.evaluationAttempts).toBe(0);
+      expect((result as any).contextData?.evaluationFeedback).toBeUndefined();
     });
   });
 });

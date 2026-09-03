@@ -43,9 +43,13 @@ flowchart TD
 
 ---
 
-## 🔁 Loop de Autocorreção & Circuit Breaker
+## 🔁 Loop de Autocorreção, Command API (LLM-Modulo) & Circuit Breaker
 
-- **`suggestedAction` (`ROUTE_TO_SPECIALIST`):** Quando o auditor identifica que faltou invocar um especialista, a Supervisora é terminantemente instruída a não encerrar com `FINISH` e sim direcionar `nextAgent` para o especialista com `specialistTask`.
+- **Subversão de Controle via Command API (`ROUTE_TO_SPECIALIST`):** Quando o auditor identifica que uma ação exigida pelo usuário não foi executada (ex: faltou acionar ferramenta operacional), o Evaluator infere `requiredCorrectionAgent` e `inferredSpecialistTask`. Em vez de devolver texto para a Supervisora (evitando deadlock cognitivo), o `evaluatorNode` utiliza a **Command API** do LangGraph (`new Command({ goto: requiredCorrectionAgent, update: { specialistTask, ... } })`) para rotear deterministicamente direto para o especialista. Após a execução do especialista, o fluxo retorna naturalmente para a Supervisora compor a resposta com os dados consolidados.
+- **Marcadores Epistêmicos & Bypass de Leitura Passiva (`passiveReferencesUsed`):** Fatos injetados da memória de trabalho recebem carimbos `[MemID: ...]`. Ao responder com base no RAG/SQLite sem acionar ferramentas operacionais, a Supervisora preenche `passiveReferencesUsed` no schema estruturado. O Evaluator valida esses marcadores e aprova com `verdict = 'PASS'`, eliminando falsos positivos de groundedness.
+- **Isenção do Repetition Guard:** O guard de repetição de agentes da Supervisora (`isRepeatingAgent`) **não dispara** quando o Evaluator emitiu `ROUTE_TO_SPECIALIST`. Isso permite que o mesmo agente seja re-chamado com uma `specialistTask` diferente (ex: `routineAgent` para listar e depois para deletar). O log `[EVALUATOR_RETRY]` sinaliza que a repetição foi autorizada pelo auditório. Sem esta isenção, o guard bloquearia a correção antes que ela pudesse acontecer.
+- **Budget Dinâmico de Execuções:** O limite `maxAgentCalls` da Supervisora é **`5 + evaluationAttempts`** — ou seja, cada ciclo de avaliação reprovado ganha +1 chamada extra de agente. Com `MAX_EVALUATION_CYCLES = 2`, o máximo possível é 7 chamadas de agentes por turno, garantindo orçamento para as correções sem criar risco de loop infinito.
+- **Limpeza de Feedback Após Consumo:** Quando a Supervisora roteia com sucesso para um especialista após receber feedback do Evaluator (`nextAgent !== "FINISH"`), `evaluationFeedback` e `evaluationSuggestedAction` são limpos do `contextData`. Isso garante que o bypass do repetition guard esteja ativo **apenas** durante o ciclo de correção correto, e não em execuções posteriores.
 - **Circuit Breaker:** Se após `MAX_EVALUATION_CYCLES` (2 tentativas) a resposta ainda apresentar inconsistências, o `validateResponseConsistency` substitui deterministicamente alegações não executadas por declarações honestas de impossibilidade técnica antes do envio, impedindo que falsas confirmações cheguem ao usuário.
 
 ---

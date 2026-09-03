@@ -789,6 +789,10 @@ async function executeIsolatedSystemMessage(
                     senderName: "SISTEMA",
                     masterNumber: MASTER_NUMBER,
                     accountName: accountName,
+                    triggerType: resolvedTriggerType,
+                    isScheduledRoutine: resolvedTriggerType === 'cron_routine',
+                    isSystemTrigger: true,
+                    routineId: options.routineId,
                     activeMissions: activeMissions,
                     recentMissions: recentMissions,
                     executionLog: [],
@@ -1044,6 +1048,13 @@ export async function sendIntermediateMessage(chatJidOrThreadId: string, text: s
     // Previne envio de mensagens intermediárias na conta pessoal
     if (accountName === 'personal') {
         logger.info(`[INTERMEDIATE MSG] Bloqueado envio de "${text}" no chat ${chatJid} (Conta pessoal é apenas leitura).`);
+        return;
+    }
+
+    // Previne envio de mensagens intermediárias durante execuções de rotinas agendadas / gatilhos de sistema em background
+    const activeTrigger = triggerStorage.getStore() || getActiveTrigger(chatJidOrThreadId) || getActiveTrigger(chatJid);
+    if (activeTrigger && (activeTrigger.triggerType === 'cron_routine' || activeTrigger.triggerType === 'system_inject')) {
+        logger.info(`[INTERMEDIATE MSG] Bloqueado envio de "${text}" no chat ${chatJid} (Execução em segundo plano / rotina agendada tipo: ${activeTrigger.triggerType}).`);
         return;
     }
 

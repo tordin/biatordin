@@ -37,8 +37,9 @@ const SHARED_ROUTING_BASE =
   "- AÇÕES OPERACIONAIS VS CONSULTA PASSIVA: Quando o usuário der uma ordem de AÇÃO (criar, modificar, atualizar, cancelar ou listar rotinas, tarefas, eventos de calendário, e-mails, planilhas, trackers), você DEVE rotear para o especialista correspondente (ex: `routineAgent`, `taskAgent`, `calendarAgent`, `gmailAgent`, `sheetsAgent`, `trackerAgent`). NUNCA use o `memoryAgent` como substituto para executar ou verificar alterações em bancos de dados operacionais.\n" +
   "- DELEGAÇÃO DE TAREFA (`specialistTask`): Quando definir `nextAgent` para qualquer especialista (diferente de 'FINISH'), você DEVE preencher o campo `specialistTask` com uma instrução clara, objetiva e cirúrgica do que o especialista deve fazer. Consolide nomes, termos de busca, datas, JIDs ou valores explicitados na conversa. Evite pronomes vagos como 'isso' ou 'aquele produto'.\n" +
   "- PLANEJAMENTO: Para tarefas de múltiplas etapas, defina a sequência no campo `plan` e siga a ordem.\n" +
+  "- LEITURA DE MEMÓRIA E MARCADORES EPISTÊMICOS: Se você compilar a resposta usando fatos do contexto que contêm marcadores como `[MemID: X]`, OBRIGATORIAMENTE preencha o array `passiveReferencesUsed` com esses IDs. Isso prova para a auditoria que você não alucinou a informação.\n" +
   "- ENCERRAMENTO (`FINISH`): Ao concluir o objetivo ou se um agente falhar, defina `nextAgent = 'FINISH'` e formule a resposta final no campo `response`. Se a instrução do usuário ou da rotina pedir para ficar em silêncio / não enviar mensagem quando certas condições forem atendidas ou se não houver nada a reportar, use `response = '[SILENT]'`. Nunca chame um agente que acabou de falhar.\n" +
-  "- MENSAGENS INTERMEDIÁRIAS VS RESPOSTA FINAL: O campo `response` deve ser preenchido SOMENTE quando `nextAgent` for 'FINISH'. Se for rotear para qualquer especialista (ex: memoryAgent, searchAgent), deixe `response` VAZIO e use APENAS `intermediateMessage` para avisar proativamente o usuário (ex: 'Consultando memória...'). Deixe `intermediateMessage` vazio nas passagens seguintes.\n\n";
+  "- MENSAGENS INTERMEDIÁRIAS VS RESPOSTA FINAL: O campo `response` deve ser preenchido SOMENTE quando `nextAgent` for 'FINISH'. Em conversas interativas ao vivo com o usuário, se for rotear para um especialista (ex: memoryAgent, searchAgent), deixe `response` VAZIO e use `intermediateMessage` para avisar proativamente o usuário (ex: 'Consultando memória...'). Em tarefas agendadas (rotinas/crons/automações de sistema), NUNCA envie mensagem intermediária: o campo `intermediateMessage` DEVE SER OBRIGATORIAMENTE NULL.\n\n";
 
 const SHARED_ROUTING_TRUSTED =
   SHARED_ROUTING_BASE +
@@ -128,28 +129,44 @@ function buildScenario3_Prompt(context: Record<string, any>): string {
 }
 
 export function buildSupervisorPrompt(context: Record<string, any>): string {
+  const isScheduledOrSystem = Boolean(
+    context.isScheduledRoutine ||
+    context.triggerType === 'cron_routine' ||
+    context.triggerType === 'system_inject' ||
+    context.isSystemTrigger
+  );
+
+  let prompt = "";
   // [Cenário 3] Conta pessoal passiva
   if (context.accountName === 'personal') {
-    return buildScenario3_Prompt(context);
+    prompt = buildScenario3_Prompt(context);
+  } else if (context.isMaster) {
+    // [Cenário 1A] Interação direta com o Criador
+    prompt = buildScenario1A_Prompt(context);
+  } else if (context.isTrustedChat && !context.isGroup) {
+    // [Cenário 1B] Interação 1-1 com Contato Confiável
+    prompt = buildScenario1B_Prompt(context);
+  } else if (context.isTrustedChat && context.isGroup) {
+    // [Cenário 1C] Interação em Grupo Confiável
+    prompt = buildScenario1C_Prompt(context);
+  } else if (context.isGroup) {
+    // [Cenário 2B] Interação em Grupos Não-Confiáveis
+    prompt = buildScenario2B_Prompt(context);
+  } else {
+    // [Cenário 2A] Interação 1-1 Não-Confiável (Terceiros / Missões - Fallback)
+    prompt = buildScenario2A_Prompt(context);
   }
-  // [Cenário 1A] Interação direta com o Criador
-  if (context.isMaster) {
-    return buildScenario1A_Prompt(context);
+
+  if (isScheduledOrSystem) {
+    const routineHeader =
+      "⚠️ MODO DE EXECUÇÃO AGENDADA (ROTINA / SISTEMA):\n" +
+      "- Esta execução foi disparada automaticamente por uma rotina agendada ou automação em segundo plano.\n" +
+      "- NÃO envie mensagens intermediárias: o campo 'intermediateMessage' DEVE SER OBRIGATORIAMENTE NULL.\n" +
+      "- Execute todos os especialistas necessários em silêncio e forneça apenas a resposta final no campo 'response' ao definir nextAgent = 'FINISH'.\n\n";
+    return routineHeader + prompt;
   }
-  // [Cenário 1B] Interação 1-1 com Contato Confiável
-  if (context.isTrustedChat && !context.isGroup) {
-    return buildScenario1B_Prompt(context);
-  }
-  // [Cenário 1C] Interação em Grupo Confiável
-  if (context.isTrustedChat && context.isGroup) {
-    return buildScenario1C_Prompt(context);
-  }
-  // [Cenário 2B] Interação em Grupos Não-Confiáveis
-  if (context.isGroup) {
-    return buildScenario2B_Prompt(context);
-  }
-  // [Cenário 2A] Interação 1-1 Não-Confiável (Terceiros / Missões - Fallback)
-  return buildScenario2A_Prompt(context);
+
+  return prompt;
 }
 export function cleanDsmlTags(text: string): string {
   if (!text) return "";
@@ -229,10 +246,17 @@ export async function supervisorNode(state: typeof AgentState.State, config?: Ru
       senderName: currentContext.senderName,
       masterNumber: currentContext.masterNumber,
       accountName: currentContext.accountName,
+      topicId: currentContext.topicId,
       active_topic_title: currentContext.active_topic_title,
       accountType: currentContext.accountType,
       userInsistsOnWhatsAppConnection: currentContext.userInsistsOnWhatsAppConnection,
       activeMissions: currentContext.activeMissions,
+      recentMissions: currentContext.recentMissions,
+      missionChatHistory: currentContext.missionChatHistory,
+      triggerType: currentContext.triggerType,
+      isScheduledRoutine: currentContext.isScheduledRoutine,
+      isSystemTrigger: currentContext.isSystemTrigger,
+      routineId: currentContext.routineId,
       executionLog: [],
       activePlan: [],
       turnStartTime: Date.now(),
@@ -441,6 +465,7 @@ INSTRUÇÃO:
       const trimmed = val.trim();
       return trimmed === "" || trimmed.toLowerCase() === "null" || trimmed.toLowerCase() === "undefined" ? null : trimmed;
     }).describe("Mensagem intermediária enviada ao usuário antes de chamar um especialista. Deixar vazio se nextAgent for 'FINISH'."),
+    passiveReferencesUsed: z.array(z.string()).nullable().default(null).describe("Se você usou informações do contexto/memória que contêm um [MemID: X], liste os IDs aqui."),
     contextDataUpdate: z.record(z.string(), z.any()).nullable().default(null)
   });
 
@@ -463,6 +488,7 @@ INSTRUÇÃO:
         isTrustedContext: !!currentContext.isMaster || !!currentContext.isTrustedChat
       }),
       intermediateMessage: null,
+      passiveReferencesUsed: null,
       contextDataUpdate: null
     };
   } else {
@@ -492,16 +518,25 @@ INSTRUÇÃO:
         reason: "Falha na decodificação de decisão da supervisora.",
         response: dynamicMsg,
         intermediateMessage: null,
+      passiveReferencesUsed: null,
         contextDataUpdate: null
       };
     }
   }
 
+  const isRoutineOrBackground = Boolean(
+    currentContext.isScheduledRoutine ||
+    currentContext.triggerType === 'cron_routine' ||
+    currentContext.triggerType === 'system_inject' ||
+    currentContext.isSystemTrigger ||
+    currentContext.senderName === 'SISTEMA'
+  );
+
   // Sanitiza campos de texto caso tenham sido preenchidos com "null" ou "undefined" como string
   if (parsed.specialistTask && (parsed.specialistTask.trim() === "" || parsed.specialistTask.trim().toLowerCase() === "null" || parsed.specialistTask.trim().toLowerCase() === "undefined")) {
     parsed.specialistTask = null;
   }
-  if (parsed.intermediateMessage && (parsed.intermediateMessage.trim() === "" || parsed.intermediateMessage.trim().toLowerCase() === "null" || parsed.intermediateMessage.trim().toLowerCase() === "undefined")) {
+  if (parsed.intermediateMessage && (parsed.intermediateMessage.trim() === "" || parsed.intermediateMessage.trim().toLowerCase() === "null" || parsed.intermediateMessage.trim().toLowerCase() === "undefined" || isRoutineOrBackground)) {
     parsed.intermediateMessage = null;
   }
 
@@ -561,6 +596,13 @@ INSTRUÇÃO:
       totalToolCalls,
       toolCallHashMap,
       executedTools,
+      ...(parsed.passiveReferencesUsed && parsed.passiveReferencesUsed.length > 0 ? { passiveReferencesUsed: parsed.passiveReferencesUsed } : { passiveReferencesUsed: undefined }),
+      // Limpa o feedback do Evaluator após ser consumido (roteamento para especialista bem-sucedido).
+      // Evita que o bypass do repetition guard permaneça ativo em ciclos subsequentes indevidamente.
+      ...(parsed.nextAgent !== "FINISH" && currentContext.evaluationFeedback ? {
+        evaluationFeedback: undefined,
+        evaluationSuggestedAction: undefined,
+      } : {}),
       ...(parsed.contextDataUpdate || {})
     }
   };
@@ -596,12 +638,13 @@ INSTRUÇÃO:
     }
   }
 
-  // Prevent intermediate message spam & block invalid strings ('null', 'undefined', or when finishing directly)
-  if (updates.nextAgent === "FINISH") {
+  // Prevent intermediate message spam & block invalid strings ('null', 'undefined', or when finishing directly, or during scheduled routines)
+  if (updates.nextAgent === "FINISH" || isRoutineOrBackground) {
     parsed.intermediateMessage = null;
   }
 
   const isValidIntermediate = Boolean(
+    !isRoutineOrBackground &&
     parsed.intermediateMessage &&
     parsed.intermediateMessage.trim() !== "" &&
     parsed.intermediateMessage.trim().toLowerCase() !== "null" &&
@@ -620,7 +663,8 @@ INSTRUÇÃO:
   }
 
   // Defensive mechanism: Prevent infinite loops and agent repetition
-  const maxAgentCalls = 5;
+  const evaluatorBonus = currentContext.evaluationAttempts || 0;
+  const maxAgentCalls = 5 + evaluatorBonus; // +1 por ciclo de correção do evaluator
   const executionLog = currentContext.executionLog || [];
   const currentExecutions = executionLog.length;
 
@@ -641,10 +685,13 @@ INSTRUÇÃO:
   
   // Previne loop infinito: se o agente acabou de rodar, não chame novamente em sequência imediata.
   // O missionAgent é um ReAct agent e resolve múltiplas ações internamente, não precisa de loop da supervisora.
-  const isRepeatingAgent = lastAgent && updates.nextAgent === lastAgent;
+  // EXCEÇÃO: se o Evaluator instruiu ROUTE_TO_SPECIALIST, chamar o mesmo agente com task diferente é legítimo.
+  const isEvaluatorDrivenRetry = !!currentContext.evaluationFeedback
+    && currentContext.evaluationSuggestedAction === "ROUTE_TO_SPECIALIST";
+  const isRepeatingAgent = lastAgent && updates.nextAgent === lastAgent && !isEvaluatorDrivenRetry;
 
   if (isRepeatingAgent) {
-    logger.warn(`Loop detectado: ${updates.nextAgent} chamado repetidamente. Forçando FINISH.`);
+    logger.warn(`Loop detectado: ${updates.nextAgent} chamado repetidamente (sem instrução do Evaluator). Forçando FINISH.`);
     updates.nextAgent = "FINISH";
     if (!parsed.response || parsed.response.trim() === "" || parsed.response.toUpperCase() === "[SILENT]") {
       if (currentContext.proposedResponse && currentContext.proposedResponse.toUpperCase() !== "[SILENT]") {
@@ -653,7 +700,11 @@ INSTRUÇÃO:
         parsed.response = "[SILENT]";
       }
     }
-  } else if (updates.nextAgent !== "FINISH" && currentExecutions >= maxAgentCalls) {
+  } else if (isEvaluatorDrivenRetry && lastAgent && updates.nextAgent === lastAgent) {
+    logger.info(`[EVALUATOR_RETRY] Repetição de ${updates.nextAgent} permitida: Evaluator instruiu ROUTE_TO_SPECIALIST. Feedback: "${currentContext.evaluationFeedback?.slice(0, 80)}..."`);
+  }
+
+  if (updates.nextAgent !== "FINISH" && currentExecutions >= maxAgentCalls) {
     logger.warn(`Max agent calls (${maxAgentCalls}) atingido. Forçando FINISH.`);
     updates.nextAgent = "FINISH";
     if (!parsed.response || parsed.response.trim() === "" || parsed.response.toUpperCase() === "[SILENT]") {
@@ -666,9 +717,14 @@ INSTRUÇÃO:
   }
   
   if (parsed.response && parsed.response.trim() !== "" && updates.nextAgent !== "FINISH") {
-    logger.warn(`[SUPERVISOR] Modelo gerou response ("${parsed.response.slice(0, 40)}...") enquanto roteava para ${updates.nextAgent}. Convertendo response para intermediateMessage e mantendo roteamento.`);
-    if (!parsed.intermediateMessage || parsed.intermediateMessage.trim() === "") {
-      parsed.intermediateMessage = parsed.response;
+    if (!isRoutineOrBackground) {
+      logger.warn(`[SUPERVISOR] Modelo gerou response ("${parsed.response.slice(0, 40)}...") enquanto roteava para ${updates.nextAgent}. Convertendo response para intermediateMessage e mantendo roteamento.`);
+      if (!parsed.intermediateMessage || parsed.intermediateMessage.trim() === "") {
+        parsed.intermediateMessage = parsed.response;
+      }
+    } else {
+      logger.info(`[SUPERVISOR] Modelo gerou response durante roteamento em rotina agendada. Suprimindo texto intermediário e mantendo roteamento silencioso.`);
+      parsed.intermediateMessage = null;
     }
     parsed.response = null;
   }
