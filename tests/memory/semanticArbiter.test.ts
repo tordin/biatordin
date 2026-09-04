@@ -9,7 +9,7 @@ import {
   VectorMemoryRecord 
 } from '../../src/memory/vectorMemory.js';
 import { setAIClient } from '../../src/memory/embeddings.js';
-import { modelFlashStructured as model } from '../../src/llm/model.js';
+import { modelSemanticArbiter as model } from '../../src/llm/model.js';
 
 describe("Semantic Arbiter & Memory Reconciliation", () => {
   const testChatJid = "test-arbiter@s.whatsapp.net";

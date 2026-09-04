@@ -2,7 +2,7 @@ import { SystemMessage, HumanMessage, RemoveMessage, AIMessage, ToolMessage } fr
 import { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { AgentState, PlanStep } from "./state.js";
-import { modelFlashStructured as model } from "../llm/model.js";
+import { modelSupervisorActive as model } from "../llm/model.js";
 import { sanitizeMessagesForModel } from "../utils/sanitize.js";
 import { sendIntermediateMessage } from "../transport/whatsapp.js";
 import { logger } from "../utils/logger.js";
@@ -493,16 +493,33 @@ INSTRUÇÃO:
     };
   } else {
     try {
-      // ── Pure Supervisor: Invoke Structured Output Directly ──
-      parsed = await invokeStructuredWithFallback(
-        model,
-        supervisorSchema,
-        messagesForModel,
-        {
-          name: "SupervisorDecision",
-          metadata: { agentName: "supervisor", threadId }
-        }
-      );
+      // ── Consumir plano ou invocar LLM ──
+      const hasPendingSteps = currentContext.activePlan && currentContext.activePlan.length > 0 && currentContext.activePlan.some((s: any) => typeof s === 'string' || s.status === 'pending' || s.status === 'in_progress');
+      if (hasPendingSteps) {
+        const nextStep = currentContext.activePlan.find((s: any) => typeof s === 'string' || s.status === 'pending' || s.status === 'in_progress') || currentContext.activePlan[0];
+        parsed = {
+          plan: null,
+          nextAgent: (typeof nextStep === 'string' ? nextStep : (nextStep as any).targetAgent) as any,
+          specialistTask: typeof nextStep === 'string' ? `Executar ${nextStep}` : (nextStep as any).description,
+          reason: "Executando passo do plano: " + (typeof nextStep === 'string' ? nextStep : (nextStep as any).description),
+          response: null,
+          intermediateMessage: null,
+          passiveReferencesUsed: null,
+          contextDataUpdate: null
+        };
+        // Remove step from array
+        // currentContext.activePlan.shift(); // Removed because plan states are managed by updatePlanProgress
+      } else {
+        parsed = await invokeStructuredWithFallback(
+          model,
+          supervisorSchema,
+          messagesForModel,
+          {
+            name: "SupervisorDecision",
+            metadata: { agentName: "supervisor", threadId }
+          }
+        );
+      }
       
 
     } catch (fallbackErr: any) {
@@ -551,14 +568,14 @@ INSTRUÇÃO:
   let activePlan = currentContext.activePlan;
   if (!activePlan || activePlan.length === 0) {
     if (parsed.plan && Array.isArray(parsed.plan) && parsed.plan.length > 0) {
-      const normalized = normalizePlan(parsed.plan);
-      if (parsed.nextAgent !== "FINISH") {
-        const firstIdx = normalized.findIndex(s => s.agent === parsed.nextAgent && s.status === "pending");
-        if (firstIdx !== -1) {
-          normalized[firstIdx].status = "in_progress";
-        }
-      }
-      activePlan = normalized;
+      activePlan = normalizePlan(parsed.plan);
+    }
+  }
+
+  if (activePlan && activePlan.length > 0 && parsed.nextAgent !== "FINISH") {
+    const firstIdx = activePlan.findIndex((s: any) => s.targetAgent === parsed.nextAgent && s.status === "pending");
+    if (firstIdx !== -1) {
+      activePlan[firstIdx].status = "in_progress";
     }
   }
 
@@ -572,13 +589,13 @@ INSTRUÇÃO:
 
   if (enforcement.shouldEnforce && enforcement.nextStep) {
     logger.info(`[PLAN_ENFORCEMENT] ${enforcement.reason}`);
-    parsed.nextAgent = enforcement.nextStep.agent as any;
-    parsed.specialistTask = enforcement.nextStep.task;
+    parsed.nextAgent = (enforcement.nextStep as any).targetAgent as any;
+    parsed.specialistTask = (enforcement.nextStep as any).description;
     parsed.response = null;
 
     // Atualiza status do próximo passo para 'in_progress'
     const normalizedPlan = normalizePlan(activePlan);
-    const targetIdx = normalizedPlan.findIndex(s => s.agent === enforcement.nextStep!.agent && s.status === "pending");
+    const targetIdx = normalizedPlan.findIndex(s => (s as any).targetAgent === (enforcement.nextStep! as any).targetAgent && s.status === "pending");
     if (targetIdx !== -1) {
       normalizedPlan[targetIdx].status = "in_progress";
     }

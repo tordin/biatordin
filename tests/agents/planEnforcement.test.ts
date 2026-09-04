@@ -2,7 +2,7 @@ import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { supervisorNode } from "../../src/agents/supervisor.js";
 import { PlanStep } from "../../src/agents/state.js";
-import { modelFlashStructured } from "../../src/llm/model.js";
+import { modelSupervisorActive } from "../../src/llm/model.js";
 
 describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
   const testChatJid = "5519997064504@s.whatsapp.net";
@@ -14,11 +14,11 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
   it("deve interceptar tentativa de FINISH prematuro quando houver etapas pendentes no plano", async () => {
     // Simula Turno 2: taskAgent já foi executado, mas o calendarAgent ainda está pendente.
     // O modelo LLM decide erroneamente FINISH.
-    jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
+    jest.spyOn(modelSupervisorActive, "withStructuredOutput").mockReturnValue({
       invoke: jest.fn<any>().mockResolvedValue({
         plan: [
-          { agent: "taskAgent", task: "Adicionar tarefa comprar leite" },
-          { agent: "calendarAgent", task: "Agendar reunião com Pedro amanhã às 15h" }
+          { targetAgent: "taskAgent", description: "Adicionar tarefa comprar leite" },
+          { targetAgent: "calendarAgent", description: "Agendar reunião com Pedro amanhã às 15h" }
         ],
         nextAgent: "FINISH", // Tentativa prematura de encerrar!
         specialistTask: null,
@@ -46,8 +46,8 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
         accountName: "main",
         executionLog: ["taskAgent"],
         activePlan: [
-          { agent: "taskAgent", task: "Adicionar tarefa comprar leite", status: "in_progress" },
-          { agent: "calendarAgent", task: "Agendar reunião com Pedro amanhã às 15h", status: "pending" }
+          { targetAgent: "taskAgent", description: "Adicionar tarefa comprar leite", status: "in_progress" },
+          { targetAgent: "calendarAgent", description: "Agendar reunião com Pedro amanhã às 15h", status: "pending" }
         ],
       }
     };
@@ -70,11 +70,11 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
 
   it("deve permitir FINISH normalmente quando todas as etapas do plano estiverem concluídas", async () => {
     // Simula Turno 3: taskAgent e calendarAgent já executaram com sucesso.
-    jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
+    jest.spyOn(modelSupervisorActive, "withStructuredOutput").mockReturnValue({
       invoke: jest.fn<any>().mockResolvedValue({
         plan: [
-          { agent: "taskAgent", task: "Adicionar tarefa comprar leite" },
-          { agent: "calendarAgent", task: "Agendar reunião com Pedro amanhã às 15h" }
+          { targetAgent: "taskAgent", description: "Adicionar tarefa comprar leite" },
+          { targetAgent: "calendarAgent", description: "Agendar reunião com Pedro amanhã às 15h" }
         ],
         nextAgent: "FINISH",
         specialistTask: null,
@@ -98,8 +98,8 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
         accountName: "main",
         executionLog: ["taskAgent", "calendarAgent"],
         activePlan: [
-          { agent: "taskAgent", task: "Adicionar tarefa comprar leite", status: "completed" },
-          { agent: "calendarAgent", task: "Agendar reunião com Pedro amanhã às 15h", status: "in_progress" }
+          { targetAgent: "taskAgent", description: "Adicionar tarefa comprar leite", status: "completed" },
+          { targetAgent: "calendarAgent", description: "Agendar reunião com Pedro amanhã às 15h", status: "in_progress" }
         ],
       }
     };
@@ -117,11 +117,11 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
 
   it("deve tratar falha em uma etapa e prosseguir para as etapas pendentes subsequentes", async () => {
     // taskAgent falhou, mas ainda temos weatherAgent pendente
-    jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
+    jest.spyOn(modelSupervisorActive, "withStructuredOutput").mockReturnValue({
       invoke: jest.fn<any>().mockResolvedValue({
         plan: [
-          { agent: "taskAgent", task: "Criar tarefa" },
-          { agent: "weatherAgent", task: "Consultar previsão do tempo" }
+          { targetAgent: "taskAgent", description: "Criar tarefa" },
+          { targetAgent: "weatherAgent", description: "Consultar previsão do tempo" }
         ],
         nextAgent: "FINISH", // LLM tenta desistir cedo devido ao erro
         specialistTask: null,
@@ -145,8 +145,8 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
         lastError: "taskAgent: Database locked",
         executionLog: ["taskAgent"],
         activePlan: [
-          { agent: "taskAgent", task: "Criar tarefa", status: "in_progress" },
-          { agent: "weatherAgent", task: "Consultar previsão do tempo", status: "pending" }
+          { targetAgent: "taskAgent", description: "Criar tarefa", status: "in_progress" },
+          { targetAgent: "weatherAgent", description: "Consultar previsão do tempo", status: "pending" }
         ],
       }
     };
@@ -162,12 +162,12 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
 
   it("deve respeitar limites de anti-loop e não entrar em loop infinito mesmo com etapas pendentes", async () => {
     // 5 execuções já realizadas no turno
-    jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
+    jest.spyOn(modelSupervisorActive, "withStructuredOutput").mockReturnValue({
       invoke: jest.fn<any>().mockResolvedValue({
         plan: [
-          { agent: "taskAgent", task: "Criar tarefa" },
-          { agent: "calendarAgent", task: "Agendar" },
-          { agent: "gmailAgent", task: "Enviar email" }
+          { targetAgent: "taskAgent", description: "Criar tarefa" },
+          { targetAgent: "calendarAgent", description: "Agendar" },
+          { targetAgent: "gmailAgent", description: "Enviar email" }
         ],
         nextAgent: "FINISH",
         specialistTask: null,
@@ -190,7 +190,7 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
         accountName: "main",
         executionLog: ["taskAgent", "calendarAgent", "searchAgent", "shoppingAgent", "routineAgent"], // 5 execuções
         activePlan: [
-          { agent: "gmailAgent", task: "Enviar email", status: "pending" }
+          { targetAgent: "gmailAgent", description: "Enviar email", status: "pending" }
         ],
       }
     };
@@ -202,7 +202,7 @@ describe("Plan Enforcement Engine & Multi-Step Execution Tests", () => {
   });
 
   it("deve funcionar com planos em formato legado (array de strings)", async () => {
-    jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
+    jest.spyOn(modelSupervisorActive, "withStructuredOutput").mockReturnValue({
       invoke: jest.fn<any>().mockResolvedValue({
         plan: ["taskAgent", "calendarAgent"],
         nextAgent: "FINISH",
