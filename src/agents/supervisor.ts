@@ -493,10 +493,10 @@ INSTRUÇÃO:
     };
   } else {
     try {
-      // ── Consumir plano ou invocar LLM ──
-      const hasPendingSteps = currentContext.activePlan && currentContext.activePlan.length > 0 && currentContext.activePlan.some((s: any) => typeof s === 'string' || s.status === 'pending' || s.status === 'in_progress');
-      if (hasPendingSteps) {
-        const nextStep = currentContext.activePlan.find((s: any) => typeof s === 'string' || s.status === 'pending' || s.status === 'in_progress') || currentContext.activePlan[0];
+      const plan = currentContext.activePlan;
+      const hasPendingSteps = plan && plan.length > 0 && plan.some((s: any) => typeof s === 'string' || s.status === 'pending' || s.status === 'in_progress');
+      if (hasPendingSteps && plan) {
+        const nextStep = plan.find((s: any) => typeof s === 'string' || s.status === 'pending' || s.status === 'in_progress') || plan[0];
         parsed = {
           plan: null,
           nextAgent: (typeof nextStep === 'string' ? nextStep : (nextStep as any).targetAgent) as any,
@@ -575,7 +575,7 @@ INSTRUÇÃO:
   if (activePlan && activePlan.length > 0 && parsed.nextAgent !== "FINISH") {
     const firstIdx = activePlan.findIndex((s: any) => s.targetAgent === parsed.nextAgent && s.status === "pending");
     if (firstIdx !== -1) {
-      activePlan[firstIdx].status = "in_progress";
+      (activePlan[firstIdx] as any).status = "in_progress";
     }
   }
 

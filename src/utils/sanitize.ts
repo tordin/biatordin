@@ -1,5 +1,22 @@
 import { BaseMessage, AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 
+/**
+ * Sanitiza o campo `name` de mensagens para conformidade com a API da Anthropic.
+ * A API exige o padrão: ^[^\s<|\\/>]+$  (sem espaços, <, |, \, /, >).
+ * Espaços são substituídos por "_" e os demais caracteres proibidos são removidos.
+ * Se o resultado ficar vazio, retorna undefined para omitir o campo.
+ */
+export function sanitizeMessageName(name: string | undefined): string | undefined {
+  if (!name) return undefined;
+  // OpenAI e Anthropic exigem formato estrito (sem espaços, sem caracteres especiais): ^[a-zA-Z0-9_-]{1,64}$
+  const sanitized = name
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // remove acentos
+    .replace(/[^a-zA-Z0-9_-]/g, '_')                  // substitui caracteres não-alfanuméricos por _
+    .replace(/^_+|_+$/g, '')                          // apara underscores no início/fim
+    .substring(0, 64);
+  return sanitized || undefined;
+}
+
 function extractLastDateFromContent(content: string): number | null {
   if (typeof content !== 'string') return null;
   const matches = [...content.matchAll(/\[(\d{2})\/(\d{2})\/(\d{4})[, ]+(\d{2}):(\d{2}):(\d{2})\]/g)];
@@ -69,7 +86,7 @@ export function sanitizeMessagesForModel(messages: BaseMessage[]): BaseMessage[]
       }
 
       if (!grouped) {
-        sanitized.push(new HumanMessage({ content: msg.content, name: msg.name }));
+        sanitized.push(new HumanMessage({ content: msg.content, name: sanitizeMessageName(msg.name) }));
       }
       lastContent = ""; // Reset deduplication on human message
       continue;

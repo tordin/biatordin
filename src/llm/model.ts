@@ -1,5 +1,7 @@
+import { GoogleGenAI } from "@google/genai";
 import { ChatDeepSeek } from "@langchain/deepseek";
 import { ChatOpenAI } from "@langchain/openai";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import dotenv from "dotenv";
 import { loggerCallbackHandler } from "../utils/logger.js";
 
@@ -15,19 +17,28 @@ if (!openaiApiKey) {
   console.warn("WARNING: OPENAI_API_KEY environment variable is not defined.");
 }
 
-// Supervisor Ativo: gpt-4o-mini com Strict Structured Outputs e fluidez conversacional
+export const googleGenAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+
+// Supervisor Ativo: gpt-5-nano com Strict Structured Outputs
+// NOTA: gpt-5-nano só suporta a temperatura default (1), valores customizados como 0.1 causam HTTP 400.
 export const modelSupervisorActive = new ChatOpenAI({
   apiKey: openaiApiKey,
-  model: "gpt-4o-mini",
-  temperature: 0.1,
+  model: "gpt-5-nano",
   callbacks: [loggerCallbackHandler],
 });
 
-// Evaluator / Critic: gpt-4o-mini com temperature 0.0 para modo estritamente analítico e determinístico
-export const modelEvaluator = new ChatOpenAI({
+// Semantic Arbiter: gpt-5-nano
+export const modelSemanticArbiter = new ChatOpenAI({
   apiKey: openaiApiKey,
-  model: "gpt-4o-mini",
-  temperature: 0.0,
+  model: "gpt-5-nano",
+  callbacks: [loggerCallbackHandler],
+});
+
+// Memory Consolidator: gemini-3.1-pro-preview
+export const modelMemoryConsolidator = new ChatGoogleGenerativeAI({
+  apiKey: process.env.GOOGLE_API_KEY,
+  model: "gemini-3.1-pro-preview",
+  temperature: 0.2,
   callbacks: [loggerCallbackHandler],
 });
 
