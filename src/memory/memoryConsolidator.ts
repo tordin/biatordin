@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { z } from 'zod';
 import { SystemMessage, HumanMessage } from '@langchain/core/messages';
-import { modelEvaluator as model } from '../llm/model.js';
+import { modelMemoryConsolidator as model } from '../llm/model.js';
 import { invokeStructuredWithFallback } from '../utils/structuredOutput.js';
 import { listVectorMemories, batchDeleteVectorMemories, batchUpdateImportance } from './vectorMemory.js';
 import { rankMemories, getCachedWorkingMemorySnapshot, saveWorkingMemorySnapshot } from './workingMemory.js';

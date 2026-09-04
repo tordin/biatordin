@@ -2,7 +2,7 @@ import { SystemMessage, HumanMessage, RemoveMessage, AIMessage, ToolMessage } fr
 import { RunnableConfig } from "@langchain/core/runnables";
 import { AgentState } from "./state.js";
 import { modelFlash as model } from "../llm/model.js";
-import { sanitizeMessagesForModel } from "../utils/sanitize.js";
+import { sanitizeMessagesForModel, sanitizeMessageName } from "../utils/sanitize.js";
 import { logger } from "../utils/logger.js";
 
 export async function summarizerNode(state: typeof AgentState.State, config?: RunnableConfig) {
@@ -45,8 +45,8 @@ export async function summarizerNode(state: typeof AgentState.State, config?: Ru
 
   // Re-create kept messages without IDs so they append neatly after the summary
   const newMessagesToKeep = messagesToKeep.map(msg => {
-    if (msg instanceof HumanMessage) return new HumanMessage({ content: msg.content, name: msg.name });
-    if (msg instanceof AIMessage) return new AIMessage({ content: msg.content, name: msg.name, tool_calls: msg.tool_calls });
+    if (msg instanceof HumanMessage) return new HumanMessage({ content: msg.content, name: sanitizeMessageName(msg.name) });
+    if (msg instanceof AIMessage) return new AIMessage({ content: msg.content, name: sanitizeMessageName(msg.name), tool_calls: msg.tool_calls });
     if (msg instanceof ToolMessage) return new ToolMessage({ content: msg.content, tool_call_id: msg.tool_call_id });
     return new SystemMessage({ content: msg.content });
   });
@@ -83,5 +83,5 @@ export function shouldSummarize(state: typeof AgentState.State) {
     return "summarizer";
   }
 
-  return "supervisor";
+  return state.contextData.routeTarget === "architect" ? "architect" : "supervisor";
 }

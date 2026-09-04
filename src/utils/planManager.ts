@@ -21,36 +21,39 @@ export function normalizePlan(rawPlan: (PlanStep | string | any)[] | null | unde
 
       // Suporta formato "agentName: task description" ou apenas "agentName"
       const colonIndex = trimmed.indexOf(":");
-      let agent = trimmed;
-      let task = "";
+      let targetAgent = trimmed;
+      let description = "";
 
       if (colonIndex !== -1) {
-        agent = trimmed.substring(0, colonIndex).trim();
-        task = trimmed.substring(colonIndex + 1).trim();
+        targetAgent = trimmed.substring(0, colonIndex).trim();
+        description = trimmed.substring(colonIndex + 1).trim();
       }
 
       // "FINISH", "END", "NONE" não são agentes especialistas e não devem ser tratados como etapas pendentes
-      if (agent.toUpperCase() === "FINISH" || agent.toUpperCase() === "END" || agent.toUpperCase() === "NONE") {
+      if (targetAgent.toUpperCase() === "FINISH" || targetAgent.toUpperCase() === "END" || targetAgent.toUpperCase() === "NONE") {
         continue;
       }
 
       normalized.push({
-        agent,
-        task: task || `Executar ${agent}`,
+        targetAgent,
+        description: description || `Executar ${targetAgent}`,
         status: "pending"
       });
     } else if (typeof item === "object") {
-      const agent = String(item.agent || item.name || "").trim();
-      if (!agent || agent.toUpperCase() === "FINISH" || agent.toUpperCase() === "END" || agent.toUpperCase() === "NONE") continue;
+      // Suporta múltiplas chaves que LLMs podem usar para identificar o agente:
+      // `targetAgent` (padrão), `name`, `step` (fallback gpt-5-nano), `agent`
+      const targetAgent = String(item.targetAgent || item.name || item.agent || item.step || "").trim();
+      if (!targetAgent || targetAgent.toUpperCase() === "FINISH" || targetAgent.toUpperCase() === "END" || targetAgent.toUpperCase() === "NONE") continue;
 
-      const task = String(item.task || item.description || item.instruction || `Executar ${agent}`).trim();
+      // Suporta múltiplas chaves de descrição: `description`, `instruction`, `title`, `task`
+      const description = String(item.description || item.instruction || item.title || item.task || `Executar ${targetAgent}`).trim();
       const status: PlanStepStatus = (["pending", "in_progress", "completed", "failed"].includes(item.status))
         ? item.status
         : "pending";
 
       normalized.push({
-        agent,
-        task,
+        targetAgent,
+        description,
         status
       });
     }
@@ -76,11 +79,11 @@ export function updatePlanProgress(
   const updated = [...plan];
   
   // Procura primeiro por uma etapa 'in_progress' do agente
-  let targetIndex = updated.findIndex(s => s.agent === lastExecutedAgent && s.status === "in_progress");
+  let targetIndex = updated.findIndex(s => s.targetAgent === lastExecutedAgent && s.status === "in_progress");
   
   // Se não houver in_progress, pega a primeira 'pending' desse agente
   if (targetIndex === -1) {
-    targetIndex = updated.findIndex(s => s.agent === lastExecutedAgent && s.status === "pending");
+    targetIndex = updated.findIndex(s => s.targetAgent === lastExecutedAgent && s.status === "pending");
   }
 
   if (targetIndex !== -1) {
@@ -89,7 +92,7 @@ export function updatePlanProgress(
       ...updated[targetIndex],
       status: isError ? "failed" : "completed"
     };
-    logger.info(`[PLAN_MANAGER] Etapa ${targetIndex + 1} (${updated[targetIndex].agent}) atualizada para: ${updated[targetIndex].status}`);
+    logger.info(`[PLAN_MANAGER] Etapa ${targetIndex + 1} (${updated[targetIndex].targetAgent}) atualizada para: ${updated[targetIndex].status}`);
   }
 
   return updated;
@@ -111,9 +114,9 @@ export function getNextPendingStep(
 
     if (step.status === "pending") {
       // Verifica se o agente já falhou ou se excedeu execuções
-      const agentCalls = executionLog.filter(a => a === step.agent).length;
+      const agentCalls = executionLog.filter(a => a === step.targetAgent).length;
       if (agentCalls >= 3) {
-        logger.warn(`[PLAN_MANAGER] Agente ${step.agent} já executou ${agentCalls} vezes. Marcando etapa como falha para evitar loop.`);
+        logger.warn(`[PLAN_MANAGER] Agente ${step.targetAgent} já executou ${agentCalls} vezes. Marcando etapa como falha para evitar loop.`);
         step.status = "failed";
         if (typeof raw === "object") {
           (raw as PlanStep).status = "failed";
@@ -150,7 +153,7 @@ export function formatPlanForPrompt(plan: (PlanStep | string)[] | null | undefin
       statusLabel = "EM ANDAMENTO";
     }
 
-    lines.push(`${icon} [${statusLabel}] Etapa ${index + 1}: ${step.agent} -> ${step.task}`);
+    lines.push(`${icon} [${statusLabel}] Etapa ${index + 1}: ${step.targetAgent} -> ${step.description}`);
   });
 
   const hasPending = normalized.some(s => s.status === "pending" || s.status === "in_progress");
@@ -159,7 +162,7 @@ export function formatPlanForPrompt(plan: (PlanStep | string)[] | null | undefin
   if (hasPending && nextPending) {
     lines.push("");
     lines.push(`⚠️ ATENÇÃO - PLAN ENFORCEMENT: Há etapas PENDENTES no plano!`);
-    lines.push(`Você NÃO DEVE finalizar (FINISH) agora. Roteie para a próxima etapa pendente ("${nextPending.agent}") e defina o specialistTask com clareza.`);
+    lines.push(`Você NÃO DEVE finalizar (FINISH) agora. Roteie para a próxima etapa pendente ("${nextPending.targetAgent}") e defina o specialistTask com clareza.`);
   } else {
     lines.push("");
     lines.push(`Todas as etapas planejadas foram finalizadas. Formule a resposta final consolidada para o usuário no campo 'response' e defina nextAgent = 'FINISH'.`);
@@ -202,7 +205,7 @@ export function shouldEnforcePlan(
   }
 
   // Se o agente da etapa pendente acabou de falhar gravemente
-  if (lastError && lastError.toLowerCase().includes(nextStep.agent.toLowerCase())) {
+  if (lastError && lastError.toLowerCase().includes(nextStep.targetAgent.toLowerCase())) {
     nextStep.status = "failed";
     // Tenta encontrar uma outra etapa pendente diferente
     const alternativeStep = getNextPendingStep(normalized, executionLog);
@@ -210,7 +213,7 @@ export function shouldEnforcePlan(
       return {
         shouldEnforce: true,
         nextStep: alternativeStep,
-        reason: `Interceptado FINISH prematuro após falha de ${nextStep.agent}. Roteando para próxima etapa viável: ${alternativeStep.agent}`
+        reason: `Interceptado FINISH prematuro após falha de ${nextStep.targetAgent}. Roteando para próxima etapa viável: ${alternativeStep.targetAgent}`
       };
     }
     return {
@@ -222,6 +225,6 @@ export function shouldEnforcePlan(
   return {
     shouldEnforce: true,
     nextStep,
-    reason: `Interceptado FINISH prematuro. Executando etapa pendente: ${nextStep.agent} (${nextStep.task})`
+    reason: `Interceptado FINISH prematuro. Executando etapa pendente: ${nextStep.targetAgent} (${nextStep.description})`
   };
 }

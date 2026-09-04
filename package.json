@@ -21,6 +21,7 @@
     "@google/genai": "^2.12.0",
     "@langchain/core": "^1.2.3",
     "@langchain/deepseek": "^1.1.5",
+    "@langchain/google-genai": "^2.3.0",
     "@langchain/langgraph": "^1.4.8",
     "@langchain/langgraph-checkpoint-sqlite": "^1.0.3",
     "@langchain/mcp-adapters": "^1.1.3",

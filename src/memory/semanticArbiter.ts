@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
-import { modelFlashStructured as model } from "../llm/model.js";
+import { modelSemanticArbiter as model } from "../llm/model.js";
 import { invokeStructuredWithFallback } from "../utils/structuredOutput.js";
 import { logger } from "../utils/logger.js";
 import { VectorMemoryRecord } from "./vectorMemory.js";

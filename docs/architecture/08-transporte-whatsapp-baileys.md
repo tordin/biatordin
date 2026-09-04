@@ -102,6 +102,7 @@ Para garantir que a Bia nunca entre em loop infinito conversando consigo mesma o
 Tarefas em segundo plano (como resumos diários, checagens de e-mail e rotinas cron) são disparadas via `injectSystemMessage()` e `executeIsolatedSystemMessage()`:
 - **Fila Dedicada de Sistema (`systemExecutionQueues`):** Isola execuções de background por chat, evitando conflitos com a digitação de usuários humanos.
 - **Gatilhos (`triggerType`):** Identificados como `cron_routine` ou `system_inject`.
+- **Isolamento de Estado (Fresh Threads):** Quando o gatilho é `cron_routine`, o `threadId` do LangGraph é gerado com um sufixo temporal (`_cron_<routineId>_<timestamp>`). Isso garante que rotinas agendadas (como resumos matinais ou verificações de boiler) não herdem o histórico conversacional de dias anteriores, prevenindo alucinações de contexto, colisões com tópicos humanos passados e inchamento desnecessário do prompt da LLM.
 - **Supressão de Mensagens Intermediárias:** Em execuções isoladas de sistema/cron, o método `sendIntermediateMessage()` descarta qualquer envio preliminar e a Supervisora não produz mensagens intermediárias, evitando notificações desnecessárias no WhatsApp e entregando diretamente a resposta final solicitada.
 
 ---

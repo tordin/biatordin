@@ -19,8 +19,8 @@ describe("Plan Manager Unit Tests", () => {
       const raw = ["taskAgent", "calendarAgent"];
       const result = normalizePlan(raw);
       expect(result).toHaveLength(2);
-      expect(result[0]).toEqual({ agent: "taskAgent", task: "Executar taskAgent", status: "pending" });
-      expect(result[1]).toEqual({ agent: "calendarAgent", task: "Executar calendarAgent", status: "pending" });
+      expect(result[0]).toEqual({ targetAgent: "taskAgent", description: "Executar taskAgent", status: "pending" });
+      expect(result[1]).toEqual({ targetAgent: "calendarAgent", description: "Executar calendarAgent", status: "pending" });
     });
 
     test("deve normalizar array de strings com separador 'agente: tarefa'", () => {
@@ -28,32 +28,32 @@ describe("Plan Manager Unit Tests", () => {
       const result = normalizePlan(raw);
       expect(result).toHaveLength(2);
       expect(result[0]).toEqual({
-        agent: "taskAgent",
-        task: "Adicionar tarefa de comprar café",
+        targetAgent: "taskAgent",
+        description: "Adicionar tarefa de comprar café",
         status: "pending"
       });
       expect(result[1]).toEqual({
-        agent: "calendarAgent",
-        task: "Agendar reunião amanhã",
+        targetAgent: "calendarAgent",
+        description: "Agendar reunião amanhã",
         status: "pending"
       });
     });
 
     test("deve normalizar array de objetos estruturados", () => {
       const raw = [
-        { agent: "taskAgent", task: "Adicionar tarefa de compras", status: "in_progress" },
-        { agent: "searchAgent", description: "Buscar receita de bolo", status: "pending" }
+        { targetAgent: "taskAgent", description: "Adicionar tarefa de compras", status: "in_progress" },
+        { targetAgent: "searchAgent", description: "Buscar receita de bolo", status: "pending" }
       ];
       const result = normalizePlan(raw);
       expect(result).toHaveLength(2);
       expect(result[0]).toEqual({
-        agent: "taskAgent",
-        task: "Adicionar tarefa de compras",
+        targetAgent: "taskAgent",
+        description: "Adicionar tarefa de compras",
         status: "in_progress"
       });
       expect(result[1]).toEqual({
-        agent: "searchAgent",
-        task: "Buscar receita de bolo",
+        targetAgent: "searchAgent",
+        description: "Buscar receita de bolo",
         status: "pending"
       });
     });
@@ -63,18 +63,18 @@ describe("Plan Manager Unit Tests", () => {
       const result = normalizePlan(raw);
       expect(result).toHaveLength(0);
 
-      const mixed = ["taskAgent", "FINISH", { agent: "END", status: "pending" }];
+      const mixed = ["taskAgent", "FINISH", { targetAgent: "END", status: "pending" }];
       const mixedResult = normalizePlan(mixed);
       expect(mixedResult).toHaveLength(1);
-      expect(mixedResult[0].agent).toBe("taskAgent");
+      expect(mixedResult[0].targetAgent).toBe("taskAgent");
     });
   });
 
   describe("updatePlanProgress", () => {
     test("deve atualizar etapa correspondente para completed quando execução foi bem sucedida", () => {
       const initialPlan: PlanStep[] = [
-        { agent: "taskAgent", task: "Criar tarefa", status: "in_progress" },
-        { agent: "calendarAgent", task: "Marcar compromisso", status: "pending" }
+        { targetAgent: "taskAgent", description: "Criar tarefa", status: "in_progress" },
+        { targetAgent: "calendarAgent", description: "Marcar compromisso", status: "pending" }
       ];
 
       const updated = updatePlanProgress(initialPlan, "taskAgent");
@@ -84,8 +84,8 @@ describe("Plan Manager Unit Tests", () => {
 
     test("deve atualizar etapa para failed quando houver lastError correspondente", () => {
       const initialPlan: PlanStep[] = [
-        { agent: "taskAgent", task: "Criar tarefa", status: "pending" },
-        { agent: "calendarAgent", task: "Marcar compromisso", status: "pending" }
+        { targetAgent: "taskAgent", description: "Criar tarefa", status: "pending" },
+        { targetAgent: "calendarAgent", description: "Marcar compromisso", status: "pending" }
       ];
 
       const updated = updatePlanProgress(initialPlan, "taskAgent", "taskAgent: Database connection timeout");
@@ -95,8 +95,8 @@ describe("Plan Manager Unit Tests", () => {
 
     test("deve atualizar sequencialmente etapas do mesmo agente se houver mais de uma", () => {
       const initialPlan: PlanStep[] = [
-        { agent: "taskAgent", task: "Criar tarefa 1", status: "completed" },
-        { agent: "taskAgent", task: "Criar tarefa 2", status: "pending" }
+        { targetAgent: "taskAgent", description: "Criar tarefa 1", status: "completed" },
+        { targetAgent: "taskAgent", description: "Criar tarefa 2", status: "pending" }
       ];
 
       const updated = updatePlanProgress(initialPlan, "taskAgent");
@@ -108,19 +108,19 @@ describe("Plan Manager Unit Tests", () => {
   describe("getNextPendingStep", () => {
     test("deve retornar o primeiro passo pendente", () => {
       const plan: PlanStep[] = [
-        { agent: "taskAgent", task: "Criar tarefa", status: "completed" },
-        { agent: "calendarAgent", task: "Marcar compromisso", status: "pending" }
+        { targetAgent: "taskAgent", description: "Criar tarefa", status: "completed" },
+        { targetAgent: "calendarAgent", description: "Marcar compromisso", status: "pending" }
       ];
 
       const next = getNextPendingStep(plan);
       expect(next).toBeDefined();
-      expect(next?.agent).toBe("calendarAgent");
+      expect(next?.targetAgent).toBe("calendarAgent");
     });
 
     test("deve retornar null se todas as etapas estiverem completas ou falhadas", () => {
       const plan: PlanStep[] = [
-        { agent: "taskAgent", task: "Criar tarefa", status: "completed" },
-        { agent: "calendarAgent", task: "Marcar compromisso", status: "failed" }
+        { targetAgent: "taskAgent", description: "Criar tarefa", status: "completed" },
+        { targetAgent: "calendarAgent", description: "Marcar compromisso", status: "failed" }
       ];
 
       expect(getNextPendingStep(plan)).toBeNull();
@@ -128,14 +128,14 @@ describe("Plan Manager Unit Tests", () => {
 
     test("deve marcar como falha e pular agente que excedeu limite de chamadas (anti-loop)", () => {
       const plan: PlanStep[] = [
-        { agent: "taskAgent", task: "Criar tarefa", status: "pending" },
-        { agent: "calendarAgent", task: "Marcar compromisso", status: "pending" }
+        { targetAgent: "taskAgent", description: "Criar tarefa", status: "pending" },
+        { targetAgent: "calendarAgent", description: "Marcar compromisso", status: "pending" }
       ];
 
       // taskAgent já executou 3 vezes no histórico do turno
       const next = getNextPendingStep(plan, ["taskAgent", "taskAgent", "taskAgent"]);
       expect(next).toBeDefined();
-      expect(next?.agent).toBe("calendarAgent");
+      expect(next?.targetAgent).toBe("calendarAgent");
       expect(plan[0].status).toBe("failed");
     });
   });
@@ -148,8 +148,8 @@ describe("Plan Manager Unit Tests", () => {
 
     test("deve formatar plano com etapas concluídas e pendentes e alertar sobre pendências", () => {
       const plan: PlanStep[] = [
-        { agent: "taskAgent", task: "Criar tarefa de compras", status: "completed" },
-        { agent: "calendarAgent", task: "Agendar reunião", status: "pending" }
+        { targetAgent: "taskAgent", description: "Criar tarefa de compras", status: "completed" },
+        { targetAgent: "calendarAgent", description: "Agendar reunião", status: "pending" }
       ];
 
       const output = formatPlanForPrompt(plan);
@@ -162,8 +162,8 @@ describe("Plan Manager Unit Tests", () => {
 
     test("deve informar que todas as etapas foram finalizadas quando não houver pendências", () => {
       const plan: PlanStep[] = [
-        { agent: "taskAgent", task: "Criar tarefa de compras", status: "completed" },
-        { agent: "calendarAgent", task: "Agendar reunião", status: "completed" }
+        { targetAgent: "taskAgent", description: "Criar tarefa de compras", status: "completed" },
+        { targetAgent: "calendarAgent", description: "Agendar reunião", status: "completed" }
       ];
 
       const output = formatPlanForPrompt(plan);
@@ -175,8 +175,8 @@ describe("Plan Manager Unit Tests", () => {
   describe("shouldEnforcePlan", () => {
     test("não deve interceptar se proposedNextAgent já for um especialista", () => {
       const plan: PlanStep[] = [
-        { agent: "taskAgent", task: "Criar tarefa", status: "completed" },
-        { agent: "calendarAgent", task: "Agendar", status: "pending" }
+        { targetAgent: "taskAgent", description: "Criar tarefa", status: "completed" },
+        { targetAgent: "calendarAgent", description: "Agendar", status: "pending" }
       ];
 
       const result = shouldEnforcePlan(plan, "calendarAgent");
@@ -195,20 +195,20 @@ describe("Plan Manager Unit Tests", () => {
 
     test("deve interceptar tentativa de FINISH quando houver etapa pendente", () => {
       const plan: PlanStep[] = [
-        { agent: "taskAgent", task: "Adicionar tarefa", status: "completed" },
-        { agent: "calendarAgent", task: "Agendar compromisso", status: "pending" }
+        { targetAgent: "taskAgent", description: "Adicionar tarefa", status: "completed" },
+        { targetAgent: "calendarAgent", description: "Agendar compromisso", status: "pending" }
       ];
 
       const result = shouldEnforcePlan(plan, "FINISH", ["taskAgent"]);
       expect(result.shouldEnforce).toBe(true);
-      expect(result.nextStep?.agent).toBe("calendarAgent");
-      expect(result.nextStep?.task).toBe("Agendar compromisso");
+      expect(result.nextStep?.targetAgent).toBe("calendarAgent");
+      expect(result.nextStep?.description).toBe("Agendar compromisso");
     });
 
     test("não deve interceptar se todas as etapas do plano já tiverem sido concluídas", () => {
       const plan: PlanStep[] = [
-        { agent: "taskAgent", task: "Adicionar tarefa", status: "completed" },
-        { agent: "calendarAgent", task: "Agendar compromisso", status: "completed" }
+        { targetAgent: "taskAgent", description: "Adicionar tarefa", status: "completed" },
+        { targetAgent: "calendarAgent", description: "Agendar compromisso", status: "completed" }
       ];
 
       const result = shouldEnforcePlan(plan, "FINISH", ["taskAgent", "calendarAgent"]);
@@ -217,7 +217,7 @@ describe("Plan Manager Unit Tests", () => {
 
     test("não deve interceptar se o limite global de execuções (5) for atingido (anti-loop)", () => {
       const plan: PlanStep[] = [
-        { agent: "calendarAgent", task: "Agendar compromisso", status: "pending" }
+        { targetAgent: "calendarAgent", description: "Agendar compromisso", status: "pending" }
       ];
 
       const result = shouldEnforcePlan(plan, "FINISH", ["a", "b", "c", "d", "e"]);

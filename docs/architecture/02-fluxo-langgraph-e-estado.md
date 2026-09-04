@@ -19,15 +19,14 @@ flowchart TD
 
     COND_SUP -->|Delegar Especialista (1 de 19)| SPECIALISTS["Agentes Especialistas<br/>(search, calendar, gmail, sentinel, sheets, docs, drive,<br/>routine, memory, task, tracker, security, shopping,<br/>whatsapp, reasoning, weather, mission, followUp, crm)"]
     COND_SUP -->|Modo Passivo / [SILENT] / Trivial| GATEWAY["outputGateway"]
-    COND_SUP -->|Resposta Proposta com Ações Prévias| EVALUATOR["evaluator"]
+    COND_SUP -->|Fluxo Complexo| ARCHITECT["architect"]
 
     SPECIALISTS --> COND_SPEC{"routeFromSpecialist"}
     COND_SPEC -->|Retornar Dados (<specialist_return>)| SUPERVISOR
     COND_SPEC -->|Finalizar Direto (FINISH)| GATEWAY
 
-    EVALUATOR --> COND_EVAL{"routeFromEvaluator"}
-    COND_EVAL -->|Reprovado (NEEDS_CORRECTION)| SUPERVISOR
-    COND_EVAL -->|Aprovado (PASS)| GATEWAY
+    ARCHITECT --> SUPERVISOR
+    
 
     GATEWAY --> END_NODE(["__end__"])
 ```
@@ -70,9 +69,9 @@ export const AgentState = Annotation.Root({
 | `executedTools` | `string[]` | Lista exata de nomes de ferramentas invocadas pelos especialistas durante o turno. |
 | `specialistTask` | `string` | Ordem cirúrgica formulada pela Supervisora para o especialista a seguir. |
 | `activePlan` | `PlanStep[]` | Plano multi-passos rastreado via [`src/utils/planManager.ts`](../../src/utils/planManager.ts). |
-| `proposedResponse` | `string` | Rascunho da resposta redigida pela Supervisora para submissão ao `evaluator`. |
-| `evaluationAttempts` | `number` | Contador de ciclos de correção (máximo de 2 tentativas antes do circuit breaker). |
-| `evaluationFeedback` | `string` | Orientação corretiva gerada pelo `evaluator` em caso de reprovação. |
+| `proposedResponse` | `string` | Rascunho da resposta redigida pela Supervisora para submissão ao `architect`. |
+| `routeTarget` | `number` | Target inicial definido pelo TopicBroker (máximo de 2 tentativas antes do circuit breaker). |
+| `evaluationFeedback` | `string` | Orientação corretiva gerada pelo `architect` em caso de reprovação. |
 | `evaluationSuggestedAction` | `ROUTE_TO_SPECIALIST \| FIX_RESPONSE_TEXT \| PASS` | Ação prescrita pelo auditor para guiar a Supervisora. |
 | `outputMessages` | `Array<{targetJid, message, accountName}>` | Fila de disparos out-of-band consumida pelo `outputGateway`. |
 | `triggerType` | `string` | Origem do gatilho (`'user_message'`, `'cron_routine'`, `'system_inject'`). |
@@ -90,7 +89,7 @@ Avalia a decisão da Supervisora e direciona:
   - For a conta pessoal passiva (`accountName === 'personal'`).
   - A resposta for intencionalmente silenciosa (`proposedResponse === '[SILENT]'`).
   - Nenhuma ferramenta ou agente foi executado (resposta puramente conversacional/trivial).
-- **Controle de Qualidade (`evaluator`):** Em todos os demais casos em que houve ferramentas ou agentes executados, direciona para o `evaluator`.
+- **Controle de Qualidade:** Em todos os demais casos em que houve ferramentas ou agentes executados, direciona para o `architect`.
 
 ### 2. `routeFromSpecialist(state)`
 - **Padrão:** Retorna para a `supervisor` carregando os dados extraídos encapsulados na tag `<specialist_return>`.
@@ -98,10 +97,10 @@ Avalia a decisão da Supervisora e direciona:
 
 ### 3. `routeFromEvaluator(state)` & Command API
 - **Aprovado (`PASS`):** Direciona para `outputGateway`.
-- **Subversão Direta via Command API (`ROUTE_TO_SPECIALIST`):** Se reprovado por omissão de especialista operacional, o `evaluatorNode` retorna um `Command({ goto: requiredCorrectionAgent, update: { specialistTask, ... } })`, subvertendo a aresta condicional e pulando diretamente para o especialista sem retornar para a Supervisora.
+- **Subversão Direta via Command API (`ROUTE_TO_SPECIALIST`):** Se reprovado por omissão de especialista operacional, o `architectNode` retorna um `Command({ goto: requiredCorrectionAgent, update: { specialistTask, ... } })`, subvertendo a aresta condicional e pulando diretamente para o especialista sem retornar para a Supervisora.
 - **Reprovado Textual (`FIX_RESPONSE_TEXT`):** Devolve para a `supervisor` acompanhado de `evaluationFeedback` e `evaluationSuggestedAction`.
   - **Bypass do Repetition Guard:** Se `evaluationSuggestedAction === 'ROUTE_TO_SPECIALIST'`, a trava de re-chamada de agentes idênticos na Supervisora é temporariamente desabilitada para permitir que o especialista correto seja invocado.
-  - **Orçamento Dinâmico:** O limite de chamadas da Supervisora expande dinamicamente para `5 + evaluationAttempts` (máximo de 7 chamadas).
+  - **Orçamento Dinâmico:** O limite de chamadas da Supervisora expande dinamicamente para `5 + routeTarget` (máximo de 7 chamadas).
   - **Circuit Breaker:** Se atingir 2 reprovações, o validador sanitiza deterministicamente as afirmações não executadas e encerra o pipeline via `outputGateway`.
 
 ---

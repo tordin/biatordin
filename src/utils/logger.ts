@@ -175,6 +175,31 @@ function writeDetailedLog(
 
 const runToThreadMap = new Map<string, string>();
 const runToAgentMap = new Map<string, string>();
+const runToModelMap = new Map<string, string>();
+
+function extractModelName(
+  llm?: Serialized,
+  extraParams?: Record<string, any>,
+  metadata?: Record<string, any>,
+  output?: LLMResult
+): string | undefined {
+  const candidate =
+    metadata?.ls_model_name ||
+    metadata?.model_name ||
+    metadata?.model ||
+    extraParams?.invocation_params?.model ||
+    extraParams?.invocation_params?.model_name ||
+    (llm as any)?.kwargs?.model ||
+    (llm as any)?.kwargs?.model_name ||
+    (llm as any)?.kwargs?.modelName ||
+    output?.llmOutput?.model_name ||
+    output?.llmOutput?.model;
+
+  if (typeof candidate === 'string' && candidate.trim()) {
+    return candidate.trim();
+  }
+  return undefined;
+}
 
 /* ============================================================
    LLM_START / LLM_END DEDUPLICATION BY RUN ID
@@ -232,9 +257,10 @@ function queueLlmStart(
     }
   }
 
-  // Mescla dados dos dois callbacks (messages do chat-model, prompts do LLM)
+  // Mescla dados dos dois callbacks (messages do chat-model, prompts do LLM, modelName)
   if (data.messages) entry.data.messages = data.messages;
   if (data.prompts) entry.data.prompts = data.prompts;
+  if (data.modelName && !entry.data.modelName) entry.data.modelName = data.modelName;
 }
 
 function isDuplicateLlmEnd(runId: string): boolean {
@@ -244,6 +270,10 @@ function isDuplicateLlmEnd(runId: string): boolean {
   if (writtenLlmEndRunIds.size > MAX_TRACKED_RUN_IDS) {
     const oldestRunId = writtenLlmEndRunIds.values().next().value;
     if (oldestRunId) writtenLlmEndRunIds.delete(oldestRunId);
+  }
+  if (runToModelMap.size > MAX_TRACKED_RUN_IDS) {
+    const oldestModelRunId = runToModelMap.keys().next().value;
+    if (oldestModelRunId) runToModelMap.delete(oldestModelRunId);
   }
   return false;
 }
@@ -312,6 +342,9 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
     const agentName = metadata?.agentName;
     if (agentName) runToAgentMap.set(runId, agentName);
 
+    const modelName = extractModelName(llm, extraParams, metadata);
+    if (modelName) runToModelMap.set(runId, modelName);
+
     let structuredMessages: any[] = [];
     if (messages && messages[0]) {
       structuredMessages = messages[0].map(msg => {
@@ -327,7 +360,7 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
 
     // Usa queueLlmStart para mesclar com handleLLMStart (mesmo runId)
     // e evitar eventos duplicados no JSONL/debugger.
-    queueLlmStart(runId, threadId, agentName, { messages: structuredMessages });
+    queueLlmStart(runId, threadId, agentName, { messages: structuredMessages, modelName });
   }
 
   handleLLMStart(
@@ -342,7 +375,11 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
     const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
     const agentName = metadata?.agentName;
     if (agentName) runToAgentMap.set(runId, agentName);
-    queueLlmStart(runId, threadId, agentName, { prompts });
+
+    const modelName = extractModelName(llm, extraParams, metadata);
+    if (modelName) runToModelMap.set(runId, modelName);
+
+    queueLlmStart(runId, threadId, agentName, { prompts, modelName });
   }
 
   handleLLMEnd(
@@ -354,6 +391,7 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
   ) {
     const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
     const agentName = metadata?.agentName || runToAgentMap.get(runId);
+    const modelName = extractModelName(undefined, undefined, metadata, output) || runToModelMap.get(runId);
 
     const generations = output.generations || [];
     const structuredGenerations = generations.map(genList =>
@@ -371,7 +409,30 @@ export class DetailedLoggingCallbackHandler extends BaseCallbackHandler {
     );
 
     if (isDuplicateLlmEnd(runId)) return;
-    writeDetailedLog("LLM_END", threadId, agentName, { generations: structuredGenerations, runId });
+    writeDetailedLog("LLM_END", threadId, agentName, { generations: structuredGenerations, modelName, runId });
+  }
+
+  handleLLMError(
+    err: any,
+    runId: string,
+    parentRunId?: string,
+    tags?: string[],
+    metadata?: Record<string, any>
+  ) {
+    const threadId = resolveThreadId(runId, parentRunId, tags, metadata);
+    const agentName = metadata?.agentName || runToAgentMap.get(runId);
+    const modelName = runToModelMap.get(runId);
+    const errorStr = typeof err === "string" ? err : (err?.message || JSON.stringify(err));
+
+    console.error(`[🕒 ${new Date().toLocaleTimeString()}] [${agentName || 'LLM'}] LLM call failed:`, errorStr);
+
+    if (isDuplicateLlmEnd(runId)) return;
+    writeDetailedLog("LLM_END", threadId, agentName, {
+      error: errorStr,
+      isError: true,
+      modelName,
+      runId
+    });
   }
 
   handleToolStart(

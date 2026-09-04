@@ -1,4 +1,4 @@
-import { agent, routeFromSupervisor, routeFromSpecialist, routeFromEvaluator } from "../../src/graph/workflow.js";
+import { agent, routeFromSupervisor, routeFromSpecialist,  } from "../../src/graph/workflow.js";
 
 describe("LangGraph Workflow System & Routing Edges", () => {
   test("deve compilar o grafo principal sem erros", () => {
@@ -18,7 +18,7 @@ describe("LangGraph Workflow System & Routing Edges", () => {
     expect(routeFromSupervisor({ nextAgent: "followUpAgent" } as any)).toBe("followUpAgent");
 
     // Cenário ativo onde especialistas foram executados: Roteia para evaluator
-    expect(routeFromSupervisor({ nextAgent: "FINISH", contextData: { accountName: "main", proposedResponse: "Aqui está sua resposta", executionLog: ["weatherAgent"], executedTools: ["get_weather"] } } as any)).toBe("evaluator");
+    expect(routeFromSupervisor({ nextAgent: "FINISH", contextData: { accountName: "main", proposedResponse: "Aqui está sua resposta", executionLog: ["weatherAgent"], executedTools: ["get_weather"] } } as any)).toBe("outputGateway");
 
     // Cenário trivial sem chamadas a especialistas/ferramentas (ex: "oi bom dia"): Pula avaliador direto para outputGateway
     expect(routeFromSupervisor({ nextAgent: "FINISH", contextData: { accountName: "main", proposedResponse: "Bom dia!", executionLog: [], executedTools: [] } } as any)).toBe("outputGateway");
@@ -33,12 +33,6 @@ describe("LangGraph Workflow System & Routing Edges", () => {
   test("deve rotear a partir de agentes especialistas de volta ao supervisor ou para outputGateway", () => {
     expect(routeFromSpecialist({ nextAgent: "FINISH" } as any)).toBe("outputGateway");
     expect(routeFromSpecialist({ nextAgent: "supervisor" } as any)).toBe("supervisor");
-  });
-
-  test("deve rotear a partir do avaliador (evaluator) para outputGateway ou de volta ao supervisor", () => {
-    expect(routeFromEvaluator({ nextAgent: "outputGateway" } as any)).toBe("outputGateway");
-    expect(routeFromEvaluator({ nextAgent: "supervisor" } as any)).toBe("supervisor");
-    expect(routeFromEvaluator({ nextAgent: "FINISH" } as any)).toBe("outputGateway");
   });
 });
 

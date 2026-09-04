@@ -11,7 +11,7 @@ import {
 } from '../../src/memory/vectorMemory.js';
 import { getCachedWorkingMemorySnapshot } from '../../src/memory/workingMemory.js';
 import { setAIClient } from '../../src/memory/embeddings.js';
-import { modelEvaluator as model } from '../../src/llm/model.js';
+import { modelMemoryConsolidator as model } from '../../src/llm/model.js';
 
 describe("Memory Consolidator (Bidirectional Sleep Consolidation & GC)", () => {
   const testChatJid = "test-consolidator@s.whatsapp.net";

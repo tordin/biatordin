@@ -19,3 +19,4 @@ recent_message*.jsonl
 thread_dump.jsonl
 logs/
 bia_test.log
+.obsidian/

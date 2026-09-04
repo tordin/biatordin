@@ -151,6 +151,7 @@ export type TraceNode = {
   subtitle?: string
   tint: 'green' | 'purple' | 'orange' | 'cyan' | 'blue' | 'red'
   agentName?: string
+  modelName?: string
   tools?: { name: string, input: string, rawOutput: string }[]
   toolDetails?: { name: string, input: string, rawOutput: string }
   isLlmStep?: boolean
@@ -174,7 +175,9 @@ export const mockTraces: Record<string, TraceNode[]> = {
       type: 'supervisor',
       title: 'Supervisora (Bia Core)',
       subtitle: 'Decisão de Roteamento -> gmailAgent',
-      tint: 'purple'
+      tint: 'purple',
+      modelName: 'gpt-5-nano',
+      isLlmStep: true
     },
     {
       id: 'n3',
@@ -182,6 +185,8 @@ export const mockTraces: Record<string, TraceNode[]> = {
       title: 'gmailAgent (Especialista Workspace)',
       subtitle: 'Executando buscas na API do Gmail...',
       tint: 'orange',
+      modelName: 'deepseek-v4-flash',
+      isLlmStep: true,
       tools: [
         {
           name: 'gmail_search_messages',
@@ -201,7 +206,9 @@ export const mockTraces: Record<string, TraceNode[]> = {
       title: 'Avaliador de Qualidade (Critic)',
       subtitle: 'Auditoria pós-execução: Veredito -> PASS (Aprovado)',
       agentName: 'evaluator',
-      tint: 'cyan'
+      tint: 'cyan',
+      modelName: 'deepseek-v4-flash',
+      isLlmStep: true
     },
     {
       id: 'n5',
@@ -329,8 +336,10 @@ export const mockInspectors: Record<string, {
   outboundText?: string
   recipient?: string
   accountName?: string
+  modelName?: string
 }> = {
   'n3': {
+    modelName: 'deepseek-v4-flash',
     context: `Você é a Bia, assistente virtual pessoal e inteligente de Luiz Tordin.
 Suas ferramentas disponíveis no especialista gmailAgent são:
 - gmail_search_messages (query, maxResults)
@@ -369,6 +378,7 @@ Suas ferramentas disponíveis no especialista gmailAgent são:
   },
   
   'n2': {
+    modelName: 'gpt-5-nano',
     context: `Você é a Supervisora do sistema Bia. Analise a entrada do usuário e decida qual especialista acionar a seguir.
 Resumo de Especialistas:
 - searchAgent: Pesquisas na Web

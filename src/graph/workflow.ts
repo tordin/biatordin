@@ -21,7 +21,7 @@ import { weatherAgentNode } from "../agents/weatherAgent.js";
 import { missionAgentNode } from "../agents/missionAgent.js";
 import { followUpAgentNode } from "../agents/followUpAgent.js";
 import { crmAgentNode } from "../agents/crmAgent.js";
-import { evaluatorNode } from "../agents/evaluator.js";
+import { architectNode } from "../agents/architect.js";
 import { outputGatewayNode } from "../agents/outputGateway.js";
 import { checkpointer } from "../memory/checkpointer.js";
 import { logger } from "../utils/logger.js";
@@ -29,7 +29,7 @@ import { logger } from "../utils/logger.js";
 // Routes from supervisor to specialist agents, evaluator or directly to outputGateway
 export function routeFromSupervisor(state: typeof AgentState.State) {
   const next = state.nextAgent;
-  let target = "evaluator";
+  let target = "outputGateway";
 
   if (next === "searchAgent") target = "searchAgent";
   else if (next === "calendarAgent") target = "calendarAgent";
@@ -60,7 +60,7 @@ export function routeFromSupervisor(state: typeof AgentState.State) {
     logger.info(`[ROUTING] Execução trivial detectada (nenhuma ferramenta/agente chamado). Pulando avaliador direto para outputGateway.`);
     target = "outputGateway";
   } else {
-    target = "evaluator";
+    target = "outputGateway";
   }
 
   logger.info(`[ROUTING] Supervisor decision "${next}" -> routed to: "${target}"`);
@@ -74,14 +74,6 @@ export function routeFromSpecialist(state: typeof AgentState.State) {
   if (next === "FINISH") return "outputGateway";
   if (next === "supervisor") return "supervisor";
   return "supervisor";
-}
-
-// Routes from evaluator: if approved, proceed to outputGateway; if correction needed, loop back to supervisor
-export function routeFromEvaluator(state: typeof AgentState.State) {
-  const next = state.nextAgent;
-  logger.info(`[ROUTING] Evaluator routes to: "${next}"`);
-  if (next === "supervisor") return "supervisor";
-  return "outputGateway";
 }
 
 
@@ -107,13 +99,14 @@ const workflow = new StateGraph(AgentState)
   .addNode("missionAgent", missionAgentNode)
   .addNode("followUpAgent", followUpAgentNode)
   .addNode("crmAgent", crmAgentNode)
-  .addNode("evaluator", evaluatorNode)
+  .addNode("architect", architectNode)
   .addNode("outputGateway", outputGatewayNode)
   .addConditionalEdges("__start__", shouldSummarize, {
     summarizer: "summarizer",
     supervisor: "supervisor",
+    architect: "architect",
   })
-  .addEdge("summarizer", "supervisor")
+  .addConditionalEdges("summarizer", (state) => state.contextData.routeTarget === "architect" ? "architect" : "supervisor", { supervisor: "supervisor", architect: "architect" })
   .addConditionalEdges("supervisor", routeFromSupervisor, {
     searchAgent: "searchAgent",
     calendarAgent: "calendarAgent",
@@ -134,7 +127,7 @@ const workflow = new StateGraph(AgentState)
     missionAgent: "missionAgent",
     followUpAgent: "followUpAgent",
     crmAgent: "crmAgent",
-    evaluator: "evaluator",
+    architect: "architect",
     outputGateway: "outputGateway",
   })
   .addConditionalEdges("searchAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
@@ -156,7 +149,8 @@ const workflow = new StateGraph(AgentState)
   .addConditionalEdges("missionAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
   .addConditionalEdges("followUpAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
   .addConditionalEdges("crmAgent", routeFromSpecialist, { supervisor: "supervisor", outputGateway: "outputGateway" })
-  .addConditionalEdges("evaluator", routeFromEvaluator, { supervisor: "supervisor", outputGateway: "outputGateway" })
+  
+  .addEdge("architect", "supervisor")
   .addEdge("outputGateway", "__end__");
 
 export const agent = workflow.compile({ checkpointer });

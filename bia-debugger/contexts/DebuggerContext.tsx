@@ -383,6 +383,16 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
           ? agentInfo.name
           : rawAgentName;
 
+        const fallbackModelName = isSupervisor 
+          ? 'gpt-5-nano' 
+          : rawAgentName === 'semanticArbiter'
+          ? 'gpt-5-nano'
+          : rawAgentName === 'memoryConsolidator'
+          ? 'gemini-3.1-pro-preview'
+          : 'deepseek-v4-flash';
+
+        const modelName = log.data?.modelName || fallbackModelName;
+
         const llmTitle = isSupervisor 
           ? 'Supervisora (Decisão)' 
           : isEvaluator
@@ -407,7 +417,10 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
           if (activeId) {
             const activeInspector = inspectorsRef.current[activeId];
             const isWaitingOutput = !activeInspector || !activeInspector.modelOutput || Object.keys(activeInspector.modelOutput).length === 0;
-            if (isWaitingOutput) {
+            const activeNode = (tracesRef.current[triggerId] || []).find(n => n.id === activeId);
+            const isNotFailed = !activeNode?.isErrorStep;
+            const isCompatibleModel = !activeNode?.modelName || activeNode.modelName === modelName;
+            if (isWaitingOutput && isNotFailed && isCompatibleModel) {
               targetLlmNodeId = activeId;
             }
           }
@@ -426,7 +439,8 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
               title: llmTitle,
               subtitle: current[idx].subtitle || llmSubtitle,
               agentName: isEvaluator ? 'evaluator' : agentDisplayName,
-              tint: nodeTint
+              tint: nodeTint,
+              modelName: modelName || current[idx].modelName
             };
             tracesRef.current = { ...tracesRef.current, [triggerId]: current };
             if (flush) setTraces({ ...tracesRef.current });
@@ -436,6 +450,7 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
           const updated: any = { ...existingInspector };
           if (log.data.messages && Array.isArray(log.data.messages)) updated.llmMessages = log.data.messages;
           if (log.data.prompts && Array.isArray(log.data.prompts) && !updated.context) updated.context = log.data.prompts.join('\n');
+          if (modelName) updated.modelName = modelName;
           inspectorsRef.current = { ...inspectorsRef.current, [targetLlmNodeId]: updated };
           if (flush) setInspectors({ ...inspectorsRef.current });
           return;
@@ -457,6 +472,7 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
             agentName: isEvaluator ? 'evaluator' : agentDisplayName,
             tint: nodeTint,
             isLlmStep: true,
+            modelName: modelName,
             timestamp: log.timestamp
           }]
         };
@@ -511,6 +527,7 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
             agentState: agentInfo.state,
             llmMessages: log.data.messages || [],
             modelOutput: {},
+            modelName: modelName,
             logs: `[INFO] LLM_START iniciado.`
           }
         };
@@ -526,13 +543,29 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
         if (!triggerId) return;
         const runId = log.data?.runId;
         const llmNodeId = runId ? llmNodeByRunId.get(runId) : activeLlmIds.get(triggerId);
+        const endModelName = log.data?.modelName;
+        const isError = log.data?.isError;
+        const errorMsg = log.data?.error;
+
         if (llmNodeId) {
           const current = [...(tracesRef.current[triggerId] || [])];
           const nodeIdx = current.findIndex(n => n.id === llmNodeId);
           if (nodeIdx >= 0) {
-            // Only update subtitle if not already customized by decision
-            if (!current[nodeIdx].subtitle || current[nodeIdx].subtitle.includes('Raciocínio') || current[nodeIdx].subtitle.includes('Decisão (LLM)')) {
-              current[nodeIdx] = { ...current[nodeIdx], subtitle: 'Resposta / Plano gerado' };
+            if (isError) {
+              current[nodeIdx] = {
+                ...current[nodeIdx],
+                subtitle: `Falha: ${errorMsg || 'Erro na chamada LLM'}`,
+                tint: 'red' as any,
+                isErrorStep: true
+              };
+            } else {
+              // Only update subtitle if not already customized by decision
+              if (!current[nodeIdx].subtitle || current[nodeIdx].subtitle.includes('Raciocínio') || current[nodeIdx].subtitle.includes('Decisão (LLM)')) {
+                current[nodeIdx] = { ...current[nodeIdx], subtitle: 'Resposta / Plano gerado' };
+              }
+            }
+            if (endModelName && !current[nodeIdx].modelName) {
+              current[nodeIdx] = { ...current[nodeIdx], modelName: endModelName };
             }
             tracesRef.current = { ...tracesRef.current, [triggerId]: current };
             if (flush) setTraces({ ...tracesRef.current });
@@ -544,10 +577,16 @@ export function DebuggerProvider({ children }: { children: React.ReactNode }) {
               ...inspectorsRef.current,
               [llmNodeId]: {
                 ...existingInspector,
-                modelOutput: log.data.generations || existingInspector.modelOutput,
+                modelOutput: isError ? { error: errorMsg } : (log.data.generations || existingInspector.modelOutput),
+                modelName: existingInspector.modelName || endModelName,
+                logs: (existingInspector.logs || '') + (isError ? `\n[ERROR] Falha na chamada LLM: ${errorMsg}` : '')
               }
             };
             if (flush) setInspectors({ ...inspectorsRef.current });
+          }
+
+          if (isError && activeLlmIds.get(triggerId) === llmNodeId) {
+            activeLlmIds.delete(triggerId);
           }
         }
       }

@@ -70,6 +70,7 @@ export function PanelTrace({ runId, onClose, onSelectNode, inspectorOpen }: { ru
               const isTool = node.isToolStep || node.type === 'tool';
               const isEvaluator = node.type === 'evaluator' || node.agentName === 'evaluator' || node.agentName === 'critic';
               const isLlm = node.isLlmStep || (!isTool && !isError && (node.type === 'supervisor' || node.type === 'agent' || node.type === 'evaluator'));
+              const nodeModel = node.modelName || (isLlm ? (node.type === 'supervisor' ? 'gpt-5-nano' : 'deepseek-v4-flash') : undefined);
 
               return (
                 <div 
@@ -111,6 +112,12 @@ export function PanelTrace({ runId, onClose, onSelectNode, inspectorOpen }: { ru
                           {node.agentName && node.agentName !== node.title && (
                             <span className="text-[10px] px-1.5 py-0.2 bg-muted rounded border border-border text-muted-foreground font-mono truncate">
                               {node.agentName}
+                            </span>
+                          )}
+                          {nodeModel && (
+                            <span className="text-[10px] px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded border border-purple-200 font-mono font-medium flex items-center gap-1 shrink-0" title={`Modelo LLM: ${nodeModel}`}>
+                              <Cpu className="w-2.5 h-2.5 shrink-0 text-purple-600" />
+                              <span>{nodeModel}</span>
                             </span>
                           )}
                         </div>

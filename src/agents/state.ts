@@ -4,8 +4,8 @@ import { BaseMessage } from "@langchain/core/messages";
 export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
 
 export interface PlanStep {
-  agent: string;
-  task: string;
+  description: string;
+  targetAgent: string;
   status: PlanStepStatus;
 }
 
@@ -38,6 +38,7 @@ export interface ContextData {
   isSystemTrigger?: boolean;
   routineId?: number;
   outputMessages?: { targetJid: string; message: string; accountName: string }[];
+  routeTarget?: string;
   [key: string]: any;
 }
 

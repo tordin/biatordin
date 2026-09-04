@@ -89,4 +89,28 @@ describe("Logger & Trigger Tracking System", () => {
       );
     }).not.toThrow();
   });
+
+  test("deve processar handleChatModelStart e handleLLMEnd extraindo e associando o modelName", () => {
+    const runId = "test-llm-run-model-123";
+    expect(() => {
+      loggerCallbackHandler.handleChatModelStart(
+        { lc: 1, type: "constructor", id: ["langchain", "chat_models", "deepseek", "ChatDeepSeek"], kwargs: { model: "deepseek-v4-flash" } } as any,
+        [[{ _getType: () => "human", content: "Olá Bia" } as any]],
+        runId,
+        undefined,
+        { invocation_params: { model: "deepseek-v4-flash" } },
+        undefined,
+        { agentName: "searchAgent", ls_model_name: "deepseek-v4-flash" }
+      );
+
+      loggerCallbackHandler.handleLLMEnd(
+        { generations: [[{ text: "Resposta de teste" }]] },
+        runId,
+        undefined,
+        undefined,
+        { agentName: "searchAgent" }
+      );
+    }).not.toThrow();
+  });
 });
+

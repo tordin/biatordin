@@ -445,8 +445,23 @@ INSTRUÇÃO:
   // Usar `.nullable().default(null)` para que todas as propriedades entrem no `required`
   // do JSON Schema (evitando 400 da DeepSeek) e o Zod preencha automaticamente `null`
   // quando o modelo omitir chaves em respostas enxutas (evitando ZodError em undefined).
+  //
+  // FIX 704B6620 — Dois problemas corrigidos:
+  // 1. `contextDataUpdate: z.record(z.string(), z.any())` gerava `propertyNames` no JSON Schema,
+  //    causando HTTP 400 no Strict Mode da OpenAI (gpt-5-nano). Substituído por z.object() com campos
+  //    explícitos conhecidos.
+  // 2. `plan: z.array(z.string())` falhava com ZodError quando o modelo retornava objetos no fallback
+  //    (ex: [{step: "create_task", title: "..."}]). Substituído por union string | PlanStep object.
+  //    O normalizePlan() em planManager.ts já trata ambos os formatos corretamente.
+  const supervisorPlanStepSchema = z.object({
+    targetAgent: z.string().nullable().default(null).describe("Nome do agente especialista alvo"),
+    description: z.string().nullable().default(null).describe("Instrução detalhada para o agente"),
+    step: z.string().nullable().default(null).describe("Nome alternativo da ação ou passo"),
+    title: z.string().nullable().default(null).describe("Título alternativo da etapa"),
+    status: z.string().nullable().default(null).describe("Status da etapa (pending, in_progress, completed, failed)")
+  });
   const supervisorSchema = z.object({
-    plan: z.array(z.string()).nullable().default(null).describe("Array com os agentes planejados para serem executados, em ordem"),
+    plan: z.array(z.union([z.string(), supervisorPlanStepSchema])).nullable().default(null).describe("Array com os agentes planejados para serem executados, em ordem. Cada item pode ser uma string com o nome do agente ou um objeto com targetAgent e description."),
     nextAgent: z.enum([
       "searchAgent", "calendarAgent", "gmailAgent", "emailSentinelAgent", "sheetsAgent",
       "docsAgent", "driveAgent", "routineAgent", "memoryAgent", "taskAgent",
@@ -466,7 +481,13 @@ INSTRUÇÃO:
       return trimmed === "" || trimmed.toLowerCase() === "null" || trimmed.toLowerCase() === "undefined" ? null : trimmed;
     }).describe("Mensagem intermediária enviada ao usuário antes de chamar um especialista. Deixar vazio se nextAgent for 'FINISH'."),
     passiveReferencesUsed: z.array(z.string()).nullable().default(null).describe("Se você usou informações do contexto/memória que contêm um [MemID: X], liste os IDs aqui."),
-    contextDataUpdate: z.record(z.string(), z.any()).nullable().default(null)
+    // FIX: z.record(z.string(), z.any()) gerava propertyNames no JSON Schema, causando HTTP 400 na OpenAI.
+    // Usando z.object() com campos explícitos conhecidos — totalmente compatível com OpenAI Strict Mode.
+    contextDataUpdate: z.object({
+      activeTopicTitle: z.string().nullable().default(null).describe("Título do assunto ou tópico identificado na conversa. Null para trivialidades."),
+      silenceReason: z.string().nullable().default(null).describe("Razão do silêncio ou ação tomada (obrigatório no Cenário 3)."),
+      newEpisodicMemories: z.array(z.string()).nullable().default(null).describe("Fatos importantes extraídos da conversa para salvar em memória episódica de longo prazo.")
+    }).nullable().default(null)
   });
 
   let parsed!: z.infer<typeof supervisorSchema>;

@@ -16,11 +16,11 @@ import { jest, describe, test, it, expect, beforeEach } from '@jest/globals';
 import { HumanMessage } from "@langchain/core/messages";
 
 import { supervisorNode, cleanDsmlTags, buildSupervisorPrompt } from "../../src/agents/supervisor.js";
-import { modelFlashStructured } from "../../src/llm/model.js";
+import { modelSupervisorActive } from "../../src/llm/model.js";
 
 // Helper: define a decisão que o supervisor "recebe" do LLM mockado
 function mockSupervisorDecision(decision: Record<string, any>) {
-  jest.spyOn(modelFlashStructured, "withStructuredOutput").mockReturnValue({
+  jest.spyOn(modelSupervisorActive, "withStructuredOutput").mockReturnValue({
     invoke: jest.fn<any>().mockResolvedValue(decision)
   } as any);
 }
@@ -56,7 +56,7 @@ describe("Supervisor Node Decision Engine (LLM mockado)", () => {
     expect(result).toBeDefined();
     expect(result.nextAgent).toBeDefined();
     expect(typeof result.nextAgent).toBe("string");
-    expect(modelFlashStructured.withStructuredOutput).toHaveBeenCalled();
+    expect(modelSupervisorActive.withStructuredOutput).toHaveBeenCalled();
   });
 
   test("deve manter silêncio em grupo se a Bia não for chamada", async () => {
@@ -129,7 +129,7 @@ describe("Supervisor Node Decision Engine (LLM mockado)", () => {
     expect(result.nextAgent).toBe("FINISH");
     // Garantia explícita: o supervisor com LLM mockado NÃO deve rotear para
     // missionAgent (que no passado criava follow-ups reais no banco de produção).
-    expect(modelFlashStructured.withStructuredOutput).toHaveBeenCalled();
+    expect(modelSupervisorActive.withStructuredOutput).toHaveBeenCalled();
   });
 });
 

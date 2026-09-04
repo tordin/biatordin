@@ -33,7 +33,7 @@ function SystemBlock({ content }: { content: string }) {
 }
 
 // ── LLM Input section: renders messages grouped by role ──────────────────────
-function LlmInputSection({ messages }: { messages: any[] }) {
+function LlmInputSection({ messages, modelName }: { messages: any[], modelName?: string }) {
   if (!messages || messages.length === 0) return null;
 
   // Normalise: LangChain can send arrays of message objects (role/content)
@@ -42,9 +42,17 @@ function LlmInputSection({ messages }: { messages: any[] }) {
 
   return (
     <div className="bg-white border border-border rounded-lg overflow-hidden shadow-sm min-w-0">
-      <div className="bg-muted px-3 py-2 border-b border-border text-xs font-semibold flex items-center gap-2">
-        <Box className="w-3.5 h-3.5 shrink-0" />
-        Input do Modelo
+      <div className="bg-muted px-3 py-2 border-b border-border text-xs font-semibold flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Box className="w-3.5 h-3.5 shrink-0" />
+          <span>Input do Modelo</span>
+        </div>
+        {modelName && (
+          <span className="text-[10px] font-mono text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200 font-medium flex items-center gap-1">
+            <Cpu className="w-2.5 h-2.5 shrink-0 text-purple-600" />
+            <span>{modelName}</span>
+          </span>
+        )}
       </div>
       <div className="p-3 space-y-2 min-w-0">
         {flat.map((msg: any, idx: number) => {
@@ -123,10 +131,12 @@ export function PanelInspector({ nodeId, onClose }: { nodeId: string, onClose: (
   let nodeTools: any[] = [];
   let fallbackOutboundText = "";
   let fallbackRecipient = "";
+  let matchedNode: any = null;
 
   for (const [runId, traceList] of Object.entries(traces)) {
     const node = traceList.find(n => n.id === nodeId);
     if (node) {
+      matchedNode = node;
       nodeTitle = node.title;
       isLlmStep = !!node.isLlmStep;
       isToolStep = !!node.isToolStep;
@@ -145,6 +155,11 @@ export function PanelInspector({ nodeId, onClose }: { nodeId: string, onClose: (
       }
     }
   }
+
+  const modelName =
+    inspectorData.modelName ||
+    matchedNode?.modelName ||
+    (isLlmStep ? (matchedNode?.type === 'supervisor' ? 'gpt-5-nano' : 'deepseek-v4-flash') : undefined);
 
   const outboundText = inspectorData.outboundText || inspectorData.agentState?.text || fallbackOutboundText;
   const recipient = inspectorData.recipient || inspectorData.chatId || fallbackRecipient;
@@ -166,12 +181,18 @@ export function PanelInspector({ nodeId, onClose }: { nodeId: string, onClose: (
         <div className="p-4 border-b border-border flex items-center gap-3 bg-muted/30 shrink-0">
           <button
             onClick={onClose}
-            className="p-1.5 hover:bg-muted rounded-md border border-border bg-white shadow-sm transition-colors"
+            className="p-1.5 hover:bg-muted rounded-md border border-border bg-white shadow-sm transition-colors shrink-0"
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 flex items-center justify-between gap-2">
             <h2 className="font-semibold text-sm truncate">Detalhes: {nodeTitle}</h2>
+            {modelName && (
+              <span className="text-[11px] px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded-md font-mono font-semibold flex items-center gap-1 shrink-0">
+                <Cpu className="w-3 h-3 text-purple-600" />
+                <span>{modelName}</span>
+              </span>
+            )}
           </div>
         </div>
 
@@ -181,14 +202,22 @@ export function PanelInspector({ nodeId, onClose }: { nodeId: string, onClose: (
           {isLlmStep && (
             <>
               {hasLlmMessages && (
-                <LlmInputSection messages={inspectorData.llmMessages} />
+                <LlmInputSection messages={inspectorData.llmMessages} modelName={modelName} />
               )}
 
               {hasModelOutput && (
                 <div className="bg-white border border-border rounded-lg overflow-hidden shadow-sm min-w-0">
-                  <div className="bg-muted px-3 py-2 border-b border-border text-xs font-semibold flex items-center gap-2">
-                    <Cpu className="w-3.5 h-3.5 shrink-0" />
-                    Resposta do Modelo
+                  <div className="bg-muted px-3 py-2 border-b border-border text-xs font-semibold flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Cpu className="w-3.5 h-3.5 shrink-0" />
+                      <span>Resposta do Modelo</span>
+                    </div>
+                    {modelName && (
+                      <span className="text-[10px] font-mono text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200 font-medium flex items-center gap-1">
+                        <Cpu className="w-2.5 h-2.5 shrink-0 text-purple-600" />
+                        <span>{modelName}</span>
+                      </span>
+                    )}
                   </div>
                   <div className="p-3 overflow-x-auto text-[11px] max-w-full">
                     <JsonView data={inspectorData.modelOutput} shouldExpandNode={() => true} style={defaultStyles} />

@@ -135,8 +135,16 @@ function generateSchemaSignature(schema: z.ZodType, indent = 0): string {
   }
 
   if (inner instanceof z.ZodArray) {
-    const itemType = generateSchemaSignature((inner as any)._def.type, indent);
-    return `${itemType}[]`;
+    // Zod v4 usa `element`, Zod v3 usava `type` — suportar ambos
+    const elementSchema = (inner as any).element ?? (inner as any)._def?.element ?? (inner as any)._def?.type;
+    const itemType = generateSchemaSignature(elementSchema, indent);
+    return `(${itemType})[]`;
+  }
+
+  // ZodUnion: gerar representação "A | B | C"
+  if ((inner as any)._def?.options) {
+    const options: z.ZodType[] = (inner as any)._def.options;
+    return options.map((opt) => generateSchemaSignature(opt, indent)).join(" | ");
   }
 
   if (inner instanceof z.ZodEnum) {

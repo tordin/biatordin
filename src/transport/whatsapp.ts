@@ -4,6 +4,7 @@ import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import path from 'path';
 import { HumanMessage, AIMessage } from '@langchain/core/messages';
+import { sanitizeMessageName } from '../utils/sanitize.js';
 import { agent } from '../graph/workflow.js';
 import { logger, generateTriggerId, setActiveTrigger, clearActiveTrigger, getActiveTrigger, runWithTriggerContext, loggerCallbackHandler, triggerStorage } from '../utils/logger.js';
 import { resolveTopicForMessage } from '../utils/topicBroker.js';
@@ -390,6 +391,7 @@ async function processChatQueue(queueKey: string, sock: any) {
 
         let topicId: string;
         let title: string;
+        let routeTarget = "supervisor";
         if (hasMissionActive) {
             // Missão ativa: usar tópico fixo para manter continuidade do state no LangGraph
             topicId = 'mission';
@@ -399,6 +401,7 @@ async function processChatQueue(queueKey: string, sock: any) {
             const resolved = await resolveTopicForMessage(chatJid, combinedText, accountName);
             topicId = resolved.topicId;
             title = resolved.title;
+            routeTarget = resolved.route || "supervisor";
         }
         const threadId = `${accountName}_${chatJid}_${topicId}`;
 
@@ -416,7 +419,7 @@ async function processChatQueue(queueKey: string, sock: any) {
                         addedWarning = true;
                     }
                 }
-                return new HumanMessage({ content: `[${dateStr}]\n${msgContent}`, name: m.displayName });
+                return new HumanMessage({ content: `[${dateStr}]\n${msgContent}`, name: sanitizeMessageName(m.displayName) });
             }
         );
 
@@ -514,6 +517,7 @@ async function processChatQueue(queueKey: string, sock: any) {
                     executionLog: [],
                     executedTools: [],
                     activePlan: [],
+                    routeTarget: "supervisor",
                     outputMessages: []
                 }
             }, config);
@@ -801,6 +805,7 @@ async function executeIsolatedSystemMessage(
                     executionLog: [],
                     executedTools: [],
                     activePlan: [],
+                    routeTarget: "supervisor",
                     outputMessages: []
                 }
             }, config);
@@ -1684,7 +1689,7 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                     for (let i = 0; i < attempts; i++) {
                         try {
                             response = await ai.models.generateContent({
-                                model: 'gemini-flash-lite-latest',
+                                model: 'gemini-3.5-flash-lite',
                                 contents: [
                                     {
                                         role: 'user',
@@ -1768,7 +1773,7 @@ async function processRawQueue(chatJid: string, sock: any, accountName: string) 
                                 const { GoogleGenAI } = await import('@google/genai');
                                 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY });
                                 const response = await ai.models.generateContent({
-                                    model: 'gemini-flash-lite-latest',
+                                    model: 'gemini-3.5-flash-lite',
                                     contents: [
                                         {
                                             role: 'user',

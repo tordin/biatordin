@@ -24,6 +24,7 @@ flowchart LR
 ## 📝 Logging Estruturado (`src/utils/logger.ts`)
 
 - **Contexto Assíncrono (`AsyncLocalStorage`):** Cada mensagem recebida gera um `triggerId` único. Todas as chamadas de logs subsequentes (Supervisora, especialistas, avaliador, ferramentas) herdam automaticamente esse `triggerId`, permitindo rastrear o fluxo ponta a ponta sem poluir os argumentos das funções.
+- **Rastreamento de Modelos LLM (`modelName`):** Todas as chamadas de modelos (`LLM_START` e `LLM_END`) capturam e registram automaticamente o identificador exato do modelo utilizado (ex: `gpt-5-nano`, `deepseek-v4-flash`, `gemini-3.1-pro-preview`), associando-o ao `runId` da execução.
 - **Formato JSONL:** Todos os eventos são gravados em `data/bia_detailed.jsonl` com timestamps ISO, payloads de entrada/saída, contagem de tokens e métricas de tempo de resposta.
 - **Política de Retenção (14 dias):** O módulo `src/utils/maintenance.ts` higieniza diariamente o arquivo `bia_detailed.jsonl`, mantendo apenas os últimos 14 dias para manter a leitura da API rápida e evitar consumo excessivo de disco e memória.
 
@@ -41,8 +42,8 @@ Iniciado automaticamente no bootstrap da aplicação na porta **3001**:
 
 Aplicação web desenvolvida em **Next.js** localizada na pasta `bia-debugger/`:
 - **Painel de Conversas:** Lista conversas ativas por chat/contato.
-- **Painel de Traces:** Visualização em linha do tempo dos nós executados pelo LangGraph.
-- **Painel Inspector:** Inspeção profunda dos payloads de entrada/saída das ferramentas, tokens consumidos e vereditos do `evaluator`.
+- **Painel de Traces (`PanelTrace`):** Visualização em linha do tempo dos nós executados pelo LangGraph, exibindo badges com o modelo utilizado (ex: `deepseek-v4-flash`) ao lado de cada nó LLM.
+- **Painel Inspector (`PanelInspector`):** Inspeção profunda dos payloads de entrada/saída das ferramentas, identificação destacada do modelo LLM utilizado tanto no cabeçalho quanto nos blocos de Input e Resposta, e vereditos do `evaluator`.
 
 ---
 
